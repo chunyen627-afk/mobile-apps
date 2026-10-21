@@ -87,8 +87,16 @@ final class AlbumUITests: XCTestCase {
         XCUIDevice.shared.orientation = .landscapeLeft
         centerTap()
         XCTAssertTrue(app.sliders["影片進度"].waitForExistence(timeout: 3))
+        app.buttons["暫停"].tap()
         app.sliders["影片進度"].adjust(toNormalizedSliderPosition: 0.3)
+        let seekReached = XCTNSPredicateExpectation(predicate: NSPredicate { [self] _, _ in
+            let parts = app.staticTexts["videoTime"].label.split(separator: ":").compactMap { Int($0) }
+            guard parts.count == 2 else { return false }
+            return (8...14).contains(parts[0] * 60 + parts[1])
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [seekReached], timeout: 8), .completed, "The 36-second fixture must actually seek near 30%, not return to zero")
         capture("video-fill-landscape-seek")
+        app.buttons["繼續"].tap()
         waitUntilGone(app.buttons["leavePlayer"], timeout: 8)
         assertVideoBands(dark: false)
         capture("video-fill-landscape-hidden")

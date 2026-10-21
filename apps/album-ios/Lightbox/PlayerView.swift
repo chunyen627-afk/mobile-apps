@@ -74,9 +74,8 @@ struct PlayerView: View {
                             Text(fillVideo ? "填滿螢幕 · 邊緣可能裁切" : "完整顯示 · 保留原始比例").font(.caption2)
                             if playback.videoDuration > 0 {
                                 HStack {
-                                    Text(timeLabel(seekingVideo ? videoSeekValue : playback.videoPosition)).monospacedDigit()
-                                    Slider(value: Binding(get: { seekingVideo ? videoSeekValue : min(playback.videoPosition, playback.videoDuration) }, set: { videoSeekValue = $0 }), in: 0...playback.videoDuration, onEditingChanged: { editing in
-                                        if editing { videoSeekValue = playback.videoPosition }
+                                    Text(timeLabel(seekingVideo ? videoSeekValue : playback.videoPosition)).monospacedDigit().accessibilityIdentifier("videoTime")
+                                    Slider(value: $videoSeekValue, in: 0...playback.videoDuration, onEditingChanged: { editing in
                                         seekingVideo = editing
                                         if !editing { playback.seekVideo(videoSeekValue) }
                                         playback.setInteracting(editing)
@@ -110,6 +109,9 @@ struct PlayerView: View {
         .onAppear { playback.start() }
         .onDisappear { playback.stop() }
         .onChange(of: scenePhase) { _, phase in if phase != .active { playback.suspend() } }
+        .onChange(of: playback.videoPosition) { _, position in
+            if !seekingVideo { videoSeekValue = min(position, playback.videoDuration) }
+        }
     }
 
     private func timeLabel(_ seconds: Double) -> String {

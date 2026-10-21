@@ -177,7 +177,7 @@ final class PlayerModel: ObservableObject {
 
     func seekVideo(_ seconds: Double) {
         guard seconds.isFinite, videoDuration > 0 else { return }
-        player?.seek(to: CMTime(seconds: min(max(0, seconds), videoDuration), preferredTimescale: 600))
+        player?.seek(to: CMTime(seconds: min(max(0, seconds), videoDuration), preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
     }
 
     func setInteracting(_ active: Bool) {
