@@ -1,0 +1,8 @@
+.DS_Store
+build/
+*.xcodeproj/
+*.xcworkspace/
+*.ipa
+*.xcarchive/
+.runtime/
+Lightbox/Assets.xcassets/AppIcon.appiconset/*.png
