@@ -44,4 +44,3 @@ jobs:
           path: apps/album-ios/build/Tests.xcresult
           if-no-files-found: ignore
           retention-days: 3
-
