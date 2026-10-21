@@ -32,10 +32,10 @@ final class SMBInputStream: InputStream, @unchecked Sendable {
         }
         read?.cancel()
     }
-    override func property(forKey key: Stream.PropertyKey) -> AnyObject? {
+    override func property(forKey key: Stream.PropertyKey) -> Any? {
         key == .fileCurrentOffsetKey ? locked { NSNumber(value: offset) } : nil
     }
-    override func setProperty(_ property: AnyObject?, forKey key: Stream.PropertyKey) -> Bool {
+    override func setProperty(_ property: Any?, forKey key: Stream.PropertyKey) -> Bool {
         guard key == .fileCurrentOffsetKey, let number = property as? NSNumber,
               number.int64Value >= 0, number.int64Value <= size else { return false }
         lock.lock()
@@ -108,9 +108,13 @@ private final class StreamRead: @unchecked Sendable {
         lock.unlock(); signal.signal()
     }
     func cancel() {
-        lock.lock(); let current = task; lock.unlock()
+        lock.lock()
+        guard result == nil else { lock.unlock(); return }
+        result = .failure(CancellationError())
+        let current = task; task = nil
+        lock.unlock()
         current?.cancel()
-        finish(.failure(CancellationError()))
+        signal.signal()
     }
     func wait(timeout: TimeInterval) -> Result<Data, Error> {
         if signal.wait(timeout: .now() + timeout) == .timedOut {

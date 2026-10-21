@@ -138,7 +138,7 @@ final class PlayerModel: ObservableObject {
             }
             statusObservation = playerItem.observe(\.status, options: [.initial, .new]) { [weak self] current, _ in
                 Task { @MainActor in
-                    guard let self, self.sessionID == ticket else { return }
+                    guard let self, self.sessionID == ticket, self.player === avPlayer else { return }
                     if current.status == .readyToPlay {
                         self.loading = false
                         if !self.paused { self.player?.play() }
@@ -152,7 +152,7 @@ final class PlayerModel: ObservableObject {
             }
             playbackObservation = avPlayer.observe(\.timeControlStatus, options: [.new]) { [weak self] current, _ in
                 Task { @MainActor in
-                    guard let self, self.sessionID == ticket, self.message == nil else { return }
+                    guard let self, self.sessionID == ticket, self.player === avPlayer, self.message == nil else { return }
                     self.loading = current.timeControlStatus == .waitingToPlayAtSpecifiedRate
                 }
             }
