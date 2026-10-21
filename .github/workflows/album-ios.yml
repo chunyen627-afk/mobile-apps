@@ -41,6 +41,15 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Lightbox-test-results
-          path: apps/album-ios/build/Tests.xcresult
+          path: |
+            apps/album-ios/build/Tests.xcresult
+            apps/album-ios/build/ui-attachments
           if-no-files-found: ignore
           retention-days: 3
+      - name: Save crash symbols
+        uses: actions/upload-artifact@v4
+        with:
+          name: Lightbox-crash-symbols
+          path: apps/album-ios/build/Lightbox.xcarchive/dSYMs
+          if-no-files-found: error
+          retention-days: 30
