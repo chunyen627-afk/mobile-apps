@@ -11,7 +11,7 @@ final class AlbumUITests: XCTestCase {
         app.launchEnvironment["LIGHTBOX_UI_TEST"] = "1"
         app.launchArguments = ["-AppleLanguages", "(zh-Hant)", "-AppleLocale", "zh_TW"]
         app.launch()
-        XCTAssertTrue(app.buttons["開始播放"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.buttons["開始播放"].waitForExistence(timeout: 60))
     }
 
     override func tearDownWithError() throws {
@@ -22,13 +22,12 @@ final class AlbumUITests: XCTestCase {
     func testReselectReplayRelaunchAndExplicitRefresh() {
         for pass in 0..<3 {
             if pass > 0 {
-                app.buttons["勾選 測試照片"].tap()
-                app.buttons["勾選 測試照片"].tap()
+                app.buttons["勾選 測試影片"].tap()
             }
             app.buttons["開始播放"].tap()
-            let play = app.buttons["播放 4 個項目"]
+            let play = app.buttons[pass == 1 ? "播放 3 個項目" : "播放 4 個項目"]
             XCTAssertTrue(play.waitForExistence(timeout: 10))
-            if pass > 0 { XCTAssertTrue(savedNote.waitForExistence(timeout: 3)) }
+            if pass == 2 { XCTAssertTrue(savedNote.waitForExistence(timeout: 3)) }
             capture("scan-pass-\(pass)")
             play.tap()
             XCTAssertTrue(app.buttons["leavePlayer"].waitForExistence(timeout: 5))

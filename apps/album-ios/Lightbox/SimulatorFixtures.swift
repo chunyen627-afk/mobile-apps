@@ -28,14 +28,23 @@ enum SimulatorFixtures {
     }
 
     static func prepareVideo() async throws {
-        if FileManager.default.fileExists(atPath: videoURL.path) { return }
-        let writer = try AVAssetWriter(outputURL: videoURL, fileType: .mov)
+        if FileManager.default.fileExists(atPath: videoURL.path) {
+            if (try? await AVURLAsset(url: videoURL).load(.isPlayable)) == true { return }
+            try FileManager.default.removeItem(at: videoURL)
+        }
+        let staging = videoURL.deletingLastPathComponent().appendingPathComponent("fixture-\(UUID().uuidString).mov")
+        let writer = try AVAssetWriter(outputURL: staging, fileType: .mov)
+        defer {
+            if writer.status == .writing { writer.cancelWriting() }
+            try? FileManager.default.removeItem(at: staging)
+        }
         let input = AVAssetWriterInput(mediaType: .video, outputSettings: [AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: 640, AVVideoHeightKey: 360])
         let adapter = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32ARGB, kCVPixelBufferWidthKey as String: 640, kCVPixelBufferHeightKey as String: 360])
         writer.add(input)
         guard writer.startWriting() else { throw writer.error ?? AlbumError.message("Cannot create fixture video") }
         writer.startSession(atSourceTime: .zero)
-        for frame in 0..<60 {
+        for frame in 0..<12 {
+            try Task.checkCancellation()
             while !input.isReadyForMoreMediaData {
                 try Task.checkCancellation()
                 guard writer.status == .writing else { throw writer.error ?? AlbumError.message("Fixture writer stopped") }
@@ -50,14 +59,17 @@ enum SimulatorFixtures {
                 context.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1)); context.setLineWidth(8)
                 context.strokeEllipse(in: CGRect(x: 230, y: 90, width: 180, height: 180))
                 context.setFillColor(CGColor(red: 1, green: 0.7, blue: 0, alpha: 1))
-                context.fill(CGRect(x: frame * 10, y: 20, width: 40, height: 30))
+                context.fill(CGRect(x: frame * 40, y: 20, width: 40, height: 30))
             }
             CVPixelBufferUnlockBaseAddress(pixel, [])
-            guard adapter.append(pixel, withPresentationTime: CMTime(value: Int64(frame), timescale: 2)) else { throw writer.error ?? AlbumError.message("Fixture frame failed") }
+            guard adapter.append(pixel, withPresentationTime: CMTime(value: Int64(frame * 3), timescale: 1)) else { throw writer.error ?? AlbumError.message("Fixture frame failed") }
         }
         input.markAsFinished()
         await writer.finishWriting()
+        try Task.checkCancellation()
         guard writer.status == .completed else { throw writer.error ?? AlbumError.message("Fixture encoding failed") }
+        guard try await AVURLAsset(url: staging).load(.isPlayable) else { throw AlbumError.message("Fixture video is not playable") }
+        try FileManager.default.moveItem(at: staging, to: videoURL)
     }
 }
 
