@@ -126,14 +126,20 @@ private struct VideoSurface: UIViewRepresentable {
 
     func makeUIView(context: Context) -> VideoLayerView { VideoLayerView() }
     func updateUIView(_ view: VideoLayerView, context: Context) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         view.videoLayer.videoGravity = fill ? .resizeAspectFill : .resizeAspect
+        CATransaction.commit()
         view.onReady = ready
         if view.videoLayer.player !== player {
             view.observation = nil
             view.videoLayer.player = player
             view.observation = view.videoLayer.observe(\.isReadyForDisplay, options: [.initial, .new]) { [weak view] layer, _ in
                 guard layer.isReadyForDisplay else { return }
-                DispatchQueue.main.async { view?.onReady?() }
+                DispatchQueue.main.async {
+                    guard let view, view.videoLayer.player === player, view.videoLayer.isReadyForDisplay else { return }
+                    view.onReady?()
+                }
             }
         }
     }
