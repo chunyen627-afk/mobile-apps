@@ -2,11 +2,13 @@
 
 SwiftUI + SMB2/3 的個人相簿。目標：iPhone 17、iOS 27、6.3 吋；最低 iOS 17。
 
-0.3.1 開發中（build 4，尚未安裝）：診斷畫面分別顯示操作紀錄筆數、前次未正常結束線索及 iOS 系統報告數，避免把「0 份系統報告」誤認為沒有紀錄。掃描新增載入索引、目錄讀取前後、排序、寫入索引等階段與數量紀錄；目錄讀取採最多每兩秒一次抽樣，不寫入路徑或檔名，既有總容量上限不變。這是補強取證，並非已修復閃退。
+0.3.1 已覆蓋安裝，USB 讀回確認 build 4：診斷畫面分別顯示操作紀錄筆數、前次未正常結束線索及 iOS 系統報告數，避免把「0 份系統報告」誤認為沒有紀錄。掃描新增載入索引、目錄讀取前後、排序、寫入索引等階段與數量紀錄；目錄讀取採最多每兩秒一次抽樣，不寫入路徑或檔名，既有總容量上限不變。這是補強取證，並非已修復閃退。
 
 依使用者明確需求，0.3.1 移除影片裁切按鈕及 AVPlayer／VLC 裁切分支，只保留等比例最大完整顯示；舊裁切偏好不再生效。直橫向皆按容器適配，不拉伸、不裁掉原始畫面，必要時保留黑邊。模擬器測試改為驗證原生與兩種 AVI 的直橫向完整顯示、可見邊界、播放／seek，並以舊裁切偏好開啟來驗證升級後仍完整顯示。
 
-第一輪診斷改進來源 `168d3b9` 的 34 項單元測試通過，但 5 項 UI 測試有 1 項 AVI 裁切檢查失敗（[Actions 39554465607](https://github.com/chunyen627-afk/mobile-apps/actions/runs/39554465607)），未封裝／安裝。移除裁切的 `abdcc3d` 同樣通過 34 項單元測試，5 項 UI 中有 1 項在第二種 AVI 等待進度列時失敗（[Actions 39556548719](https://github.com/chunyen627-afk/mobile-apps/actions/runs/39556548719)）；錄影確認影片仍等比例播放、控制列已自動隱藏，並非畫面比例斷言失敗。測試改為點擊顯示並暫停後檢查進度列，再恢復播放驗證自動隱藏；所有比例、跳轉、時鐘前進與重開檢查保留。此調整仍待新一輪完整測試，尚未有 0.3.1 封裝或安裝。
+來源 `1d2e42568f254b6a650ec7ee7c91aafdebe6ca47` 已通過 34 項單元、5 項模擬器 UI 測試及 Release 封裝（[Actions 39559469901](https://github.com/chunyen627-afk/mobile-apps/actions/runs/39559469901)）。已檢查原生影片、MPEG-4 AVI、MJPEG AVI 的完整顯示與診斷匯出截圖。先前兩輪失敗已保留 CI 證據：`168d3b9` 的舊裁切檢查失敗；`abdcc3d` 則因第二種 AVI 的控制列先自動隱藏，等不到進度列。最終測試先揭示控制列並暫停再檢查，保留比例、跳轉、時鐘前進、自動隱藏及重開檢查，39 項全部通過。
+
+2026-10-21 15:24（Asia/Taipei）USB installation proxy 讀回 0.3.1／build 4，沿用既有簽署身分覆蓋更新。IPA 為 47,721,760 bytes，SHA256 `66316b2a375be2ae42f42395b89dc6abfe610a94150d19e76b257ec570e837ae`；三份下載 artifact 雜湊均已核對，對應測試附件與 dSYM 已保存。實際 IPA 的 `UIDeviceFamily=[1, 2]`、最低 iOS 17。尚待新版實機操作與長時間穩定性驗證。
 
 優先支援 iPhone。版面以目前容器尺寸自動調整，不綁定 6.3 吋；照片、原生影片與 VLC 畫面會隨直橫向及可用寬高變化。現有模擬器證據涵蓋直橫向，不代表所有尺寸與未來機型皆已實測。雖然專案層設定 `TARGETED_DEVICE_FAMILY=1`，實際 0.3.0 IPA 的 `UIDeviceFamily` 為 `[1, 2]`，宣告 iPhone／iPad；產生專案的 target 設定可能覆蓋專案層設定，因此必須核對封裝產物。iPad／iPad mini 版面與實機均尚未驗證，不宣稱完整相容。通用環境與其他 AI 接手流程見 [Windows → iPhone 快速上手](../../docs/windows-iphone-quickstart.md)。
 
@@ -75,7 +77,7 @@ Windows 的 Z: 是電腦自己的對應代號，手機不能用它。假設分�
 | 原生影片 | MP4、MOV、M4V | AVPlayer 優先；0.3.0 加入失敗時嘗試 VLC |
 | VLC 擴充影片 | AVI、MKV、WebM、WMV、MPG、MPEG、TS、MTS、M2TS | 0.3.0 新增；已測兩種 AVI 編碼，不能由容器名稱保證所有內部編碼皆可播 |
 
-目前手機已更新至 0.3.0，包含 VLC；實機各種編碼仍待確認。上述影片副檔名原本便能列入掃描，但 0.2.0 全部使用 AVPlayer，因此 AVI 等可能無法解碼。
+目前手機已更新至 0.3.1，包含 VLC；實機各種編碼仍待確認。上述影片副檔名原本便能列入掃描，但 0.2.0 全部使用 AVPlayer，因此 AVI 等可能無法解碼。
 
 ### 0.2.0 操作變更
 
@@ -114,6 +116,10 @@ AVI 模擬器素材為 FFmpeg 產生的 30 秒色彩測試圖與 440 Hz 音訊�
 
 開發與雲端編譯不需連手機；IPA 更新可在無線配對正常時經 Wi-Fi 傳送。App 內「診斷紀錄」可在手機匯出分享，不必持續 USB 側錄；無線讀取系統崩潰報告／即時紀錄尚未驗證，必要時仍需 USB，不能把無線安裝能力當成所有除錯能力已可無線使用。
 
+同日 ZeroTier 測試：手機虛擬位址的 TCP 62078 可建立連線，但送出 Apple 配對服務查詢後立即中斷；普通 Wi-Fi 上相同查詢可回覆。尚未完成虛擬區網續簽，SMB 相簿可用不能替代這項驗證。iloader 提示憑證數量上限，已比對唯一現有憑證正被相簿使用，因此取消撤銷。之後沿用 Sideloadly 既有憑證成功安裝 SideStore 0.7.0，USB 讀回確認版本，並經 iloader 放置配對資料、確認手機端檔案存在。iloader 工作已完成並關閉；尚待手機 LocalDevVPN、SideStore 登入／首次續簽、相簿遷移及 ZeroTier 切換驗證，不能宣稱自動續簽已成功。
+
+SideStore 首次開啟另遇到啟動失敗。USB 取得的 ConsoleLogs 明確記錄 `The app extension is missing a valid provisioning profile.`，對應安裝包唯一的 WidgetKit 小工具。Sideloadly 排除此小工具後以相同帳號及 Bundle ID 覆蓋安裝，使用者確認可進主畫面；沒有撤銷憑證。這僅確認啟動問題排除，尚未驗證登入、續簽或自動化；此安裝暫時不含桌面小工具。
+
 Windows 請依 [Sideloadly 官方說明](https://sideloadly.io/) 安裝其指定的網頁版 iTunes、iCloud 與 Sideloadly。iTunes 在此提供 Apple 手機通訊元件，無需用來聽音樂；Apple Devices 的備份與同步功能不包含替未簽署 IPA 做開發簽署。安裝元件不代表要啟用 iCloud 照片同步。
 
 本流程不更新或還原 iOS。iTunes 提示系統更新時選取消／稍後，由使用者日後在手機上決定升級。手機安裝 App 仍需完成信任電腦、簽署帳號驗證及開發者模式；這些與升級 iOS 是不同操作。
@@ -129,7 +135,7 @@ bash scripts/build.sh
 
 ## 驗證界線
 
-先模擬器、後手機：`Tests/ScanIndexTests.swift` 驗證磁碟索引重用、強制重掃、失敗及取消保護；`Tests/PlaybackTests.swift` 驗證預載共用、快取釋放、慢讀保留畫面、快速切頁與控制列計時；`Tests/CancellableReadTests.swift` 驗證取消與完整讀取。`Tests/UI/AlbumUITests.swift` 在真正的 iOS 模擬器點擊重選／重播、重啟、切頁、影片填滿／完整顯示、旋轉與 seek，並保存畫面附件。模擬器測試素材僅存在於 Debug simulator，Release IPA 不含測試入口。
+先模擬器、後手機：`Tests/ScanIndexTests.swift` 驗證磁碟索引重用、強制重掃、失敗及取消保護；`Tests/PlaybackTests.swift` 驗證預載共用、快取釋放、慢讀保留畫面、快速切頁與控制列計時；`Tests/CancellableReadTests.swift` 驗證取消與完整讀取。`Tests/UI/AlbumUITests.swift` 在真正的 iOS 模擬器點擊重選／重播、重啟、切頁、影片等比例完整顯示、旋轉與 seek，並保存畫面附件。模擬器測試素材僅存在於 Debug simulator，Release IPA 不含測試入口。
 
 UI 測試使用人工產生媒體與模擬目錄，不能證明實際 SMB、iPhone 17 / iOS 27 的穩定性。每次編譯保存測試報告、UI 截圖及符號檔；通過測試才封裝。手機更新沿用簽署帳號與 Bundle ID 覆蓋安裝，通常不需移除舊 App。
 

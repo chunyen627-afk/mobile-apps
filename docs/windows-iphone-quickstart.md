@@ -112,6 +112,18 @@ CI 要設定執行逾時、舊執行取消與短期產物保留；測試失敗�
 
 ## 最容易卡住的地方
 
+### 外出續簽與虛擬區網
+
+虛擬區網能連到檔案伺服器，不代表電腦能反向連到手機的 Apple 安裝服務。ZeroTier 官方指出 iOS／Android 的 VPN 介面不支援其 multicast／broadcast，會影響區網自動探索；即使指定 IP 或 TCP 埠可建立連線，仍須驗證配對、安裝與續簽完整流程。[ZeroTier 說明](https://docs.zerotier.com/bridging/#why-is-an-app-on-my-phone-not-working-over-zerotier)。
+
+SideStore 是另一種手機端續簽方式，首次仍需電腦安裝與配對；不會取消免費帳號的 7 天期限，也會佔用一個側載 App 名額。官方流程使用 iloader 與手機的 LocalDevVPN。先完成一次手動續簽、確認 App 仍能開啟，再設定捷徑與自動化；不要把「已安裝工具」寫成「自動續簽已成功」。使用其他 VPN 時要驗證切換後的連線恢復，不能假設同時相容。[SideStore 安裝流程](https://docs.sidestore.io/docs/installation/install)、[限制](https://docs.sidestore.io/docs/faq)。
+
+版本選擇以當日官方公告為準：2026-10-21 查到 SideStore 0.6.4 及以前有登入故障，官方 latest 為 0.7.0-alpha 修正版；「Stable」按鈕名稱不代表下載內容沒有 alpha 標記。遇到登入 WebSocket 中斷先檢查登入輔助伺服器，不要直接判斷密碼錯誤。[版本公告](https://github.com/SideStore/SideStore/releases/tag/0.7.0-alpha)。
+
+切換簽署工具若提示憑證數量上限，不要直接撤銷現有憑證。它可能正是現有 App 使用的憑證；先比對，再準備同帳號、同 Bundle Identifier 的覆蓋重簽與資料保留方式。配對檔含敏感裝置信任資料，不上傳公開倉庫。
+
+SideStore 安裝成功不等於可啟動。若改用其他簽署工具後提示缺少 profile，先讀完整錯誤，區分主程式、擴充套件與裝置配對資料；不要一律當成密碼或 VPN 錯誤。官方啟動排錯優先要求使用 iloader。若確定只有非必要小工具缺少描述檔，可評估排除該小工具後覆蓋安裝，但須清楚記錄功能差異，重新驗證開啟、續簽及自動化。[SideStore 啟動排錯](https://docs.sidestore.io/docs/troubleshooting/common-issues#unable-to-launch-sidestore)。
+
 | 現象 | 優先檢查 |
 | --- | --- |
 | Windows 找不到 iOS 模擬器 | Apple 模擬器隨 Xcode 在 macOS 執行；本流程在 CI 跑測試與保存截圖，沒有本機互動模擬器 |
