@@ -127,7 +127,12 @@ final class AlbumUITests: XCTestCase {
             XCTAssertTrue(app.buttons["播放 1 個項目"].waitForExistence(timeout: 10))
             app.buttons["播放 1 個項目"].tap()
             XCTAssertTrue(app.otherElements["vlcVideoSurface"].waitForExistence(timeout: 10))
+            // A slow accessibility snapshot can outlast the controls' hide timer.
+            // Reveal and pause like a user before inspecting the seek controls.
+            centerTap()
+            app.buttons["暫停"].tap()
             XCTAssertTrue(app.sliders["影片進度"].waitForExistence(timeout: 15))
+            app.buttons["繼續"].tap()
             waitUntilGone(app.buttons["leavePlayer"], timeout: 8)
             assertVideoFits(aspect: pass == 0 ? 16.0 / 9.0 : 4.0 / 3.0)
             capture("avi-fit-playing-\(pass)")
