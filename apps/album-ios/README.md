@@ -98,6 +98,8 @@ AVI 模擬器素材為 FFmpeg 產生的 30 秒色彩測試圖與 440 Hz 音訊�
 
 未簽署 IPA 不能直接點開安裝。下載後用 Windows Sideloadly，以自己的免費 Apple 帳號簽署。登入、雙重驗證、信任電腦及 iPhone 開發者模式由使用者操作。免費簽署 7 天有效；Sideloadly 可在電腦運行、手機 USB/Wi-Fi 可達時嘗試自動續簽，不能保證每次成功。
 
+2026-10-21 續簽設定：已確認 0.3.0 登錄自動續簽、IPA 已快取，背景 daemon 執行中且存在 Windows 登入啟動項目；iTunes「透過 Wi-Fi 與此 iPhone 同步」已勾選並套用。仍待拔除 USB 後的無線連線與續簽驗證，不能把設定完成當成無線續簽已成功。免費使用仍需定期續簽，即使不再開發；電腦需運行、未睡眠且與手機可互相連線。手機單獨上網不能替代電腦端簽署。
+
 Windows 請依 [Sideloadly 官方說明](https://sideloadly.io/) 安裝其指定的網頁版 iTunes、iCloud 與 Sideloadly。iTunes 在此提供 Apple 手機通訊元件，無需用來聽音樂；Apple Devices 的備份與同步功能不包含替未簽署 IPA 做開發簽署。安裝元件不代表要啟用 iCloud 照片同步。
 
 本流程不更新或還原 iOS。iTunes 提示系統更新時選取消／稍後，由使用者日後在手機上決定升級。手機安裝 App 仍需完成信任電腦、簽署帳號驗證及開發者模式；這些與升級 iOS 是不同操作。
