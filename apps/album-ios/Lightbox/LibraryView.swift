@@ -29,6 +29,7 @@ struct LibraryView: View {
                             Button("播放設定", systemImage: "slider.horizontal.3") { showSettings = true }
                             Button("查看勾選（\(model.selections.count)）", systemImage: "checklist") { showSelections = true }
                             Button("重新整理", systemImage: "arrow.clockwise") { Task { await model.navigate(model.currentPath) } }
+                            Button("重新掃描已選範圍", systemImage: "arrow.triangle.2.circlepath") { model.scan(filter: filter, random: random, favoritesOnly: favoritesOnly, force: true) }.disabled(model.selections.isEmpty)
                             Button("更換連線", systemImage: "network") { model.disconnect() }
                         } label: { Image(systemName: "ellipsis.circle") }
                         .disabled(model.busy)
@@ -182,7 +183,8 @@ struct LibraryView: View {
             List {
                 Section {
                     if !model.scanFinished { ProgressView() }
-                    Text(model.scanFinished ? "播放清單已整理" : "正在掃描子目錄").font(.title2.bold())
+                    Text(model.scanFinished ? "播放清單已整理" : "準備播放清單").font(.title2.bold())
+                    Text(model.scanNote).font(.subheadline).foregroundStyle(.secondary)
                     Text("\(model.scanCount) 個媒體 · \(model.scanFolders) 個資料夾")
                     if !model.scanFinished { Text(model.scanPath).font(.caption).foregroundStyle(.secondary) }
                     if model.scanFinished && model.playlist.isEmpty { Text("沒有找到符合條件的照片或影片，請調整選取或播放設定。") }
@@ -194,6 +196,9 @@ struct LibraryView: View {
                 }
                 if model.scanFinished && !model.playlist.isEmpty {
                     Button("播放 \(model.playlist.count) 個項目") { model.beginPlayback() }.font(.headline)
+                }
+                if model.scanFinished {
+                    Button("重新掃描", systemImage: "arrow.clockwise") { model.scan(filter: filter, random: random, favoritesOnly: favoritesOnly, force: true) }
                 }
             }.navigationTitle("準備播放").toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button(model.scanFinished ? "返回" : "取消掃描") { model.cancelScan() } }

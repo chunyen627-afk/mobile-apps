@@ -17,15 +17,29 @@ final class LibraryModel: ObservableObject {
     @Published var scanCount = 0
     @Published var scanFolders = 0
     @Published var scanPath = ""
+    @Published var scanNote = ""
     @Published var warnings: [String] = []
     @Published var warningCount = 0
     @Published var playlist: [AlbumEntry] = []
     @Published var showPlayer = false
     private var navigationID = UUID()
     private var scanTask: Task<Void, Never>?
+    private var scanID = UUID()
+    private let scanIndex = ScanIndex()
     private var root = ""
 
     init() {
+        #if DEBUG && targetEnvironment(simulator)
+        if SimulatorFixtures.active {
+            settings = ConnectionSettings(server: "ui-test.invalid", share: "Fixtures")
+            service = try? SMBService(settings: settings, password: "")
+            entries = SimulatorFixtures.roots
+            selections = Dictionary(uniqueKeysWithValues: entries.map { ($0.path, $0) })
+            UserDefaults.standard.set(false, forKey: "randomPlayback")
+            UserDefaults.standard.set(2.0, forKey: "photoInterval")
+            return
+        }
+        #endif
         if let data = UserDefaults.standard.data(forKey: "connection"),
            let saved = try? JSONDecoder().decode(ConnectionSettings.self, from: data) {
             settings = saved
@@ -114,53 +128,53 @@ final class LibraryModel: ObservableObject {
         busy = false
     }
 
-    func cancelScan() { scanTask?.cancel(); scanTask = nil; showScan = false }
+    func cancelScan() { scanID = UUID(); scanTask?.cancel(); scanTask = nil; showScan = false }
 
-    func scan(filter: PlaybackFilter, random: Bool, favoritesOnly: Bool) {
+    func scan(filter: PlaybackFilter, random: Bool, favoritesOnly: Bool, force: Bool = false) {
         guard let service, !selections.isEmpty else { return }
         scanTask?.cancel()
+        let ticket = UUID()
+        scanID = ticket
         showScan = true
         scanFinished = false
         scanCount = 0
         scanFolders = 0
+        scanPath = ""
+        scanNote = force ? "正在重新掃描…" : "正在讀取已儲存清單；首次使用才會掃描。"
         warnings = []
         warningCount = 0
         playlist = []
         let chosen = SelectionRules.roots(Array(selections.values))
         let favoritePaths = favorites
         scanTask = Task {
-            var pending = chosen
-            var visited = Set<String>()
-            var found: [String: AlbumEntry] = [:]
             do {
-                while let entry = pending.popLast() {
-                    try Task.checkCancellation()
-                    if entry.kind == .folder {
-                        guard visited.insert(entry.path).inserted else { continue }
-                        scanFolders += 1
-                        scanPath = entry.path
-                        do { pending.append(contentsOf: try await service.list(entry.path)) }
-                        catch is CancellationError { throw CancellationError() }
-                        catch {
-                            warningCount += 1
-                            if warnings.count < 20 { warnings.append("\(entry.path)：\(error.localizedDescription)") }
-                        }
-                    } else if filter.accepts(entry), !favoritesOnly || favoritePaths.contains(entry.path) {
-                        found[entry.path] = entry
-                        scanCount = found.count
-                        if found.count >= 100000 {
-                            warningCount += 1
-                            warnings.append("已達第一版 100,000 個媒體項目的上限；其餘尚未掃描，請縮小勾選範圍。")
-                            break
-                        }
+                let key = try ScanIndex.key(settings: settings, chosen: chosen)
+                let result = try await scanIndex.prepare(key: key, chosen: chosen, force: force, list: { path in
+                    #if DEBUG && targetEnvironment(simulator)
+                    if SimulatorFixtures.active { return try await SimulatorFixtures.list(path) }
+                    #endif
+                    return try await service.list(path)
+                }, progress: { count, folders, path in
+                    await MainActor.run {
+                        guard self.scanID == ticket else { return }
+                        self.scanCount = count; self.scanFolders = folders; self.scanPath = path
+                        self.scanNote = "正在掃描；完成後會自動記住清單。"
                     }
-                }
+                })
                 try Task.checkCancellation()
-                let ordered = found.values.sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
+                guard scanID == ticket else { return }
+                let ordered = result.snapshot.entries.filter { filter.accepts($0) && (!favoritesOnly || favoritePaths.contains($0.path)) }
                 playlist = random ? ordered.shuffled() : ordered
+                scanCount = result.snapshot.entries.count
+                scanFolders = result.snapshot.folders
+                warnings = result.warnings
+                warningCount = result.warningCount
+                scanNote = result.saved
+                    ? "\(result.reused ? "使用已儲存清單" : "清單已儲存") · \(result.snapshot.date.formatted(date: .abbreviated, time: .shortened))\n電腦新增、移動或刪除檔案後，請按「重新掃描」。"
+                    : "掃描未完整完成或無法儲存；本次仍可播放已找到項目，原有完整清單保留。"
                 scanFinished = true
             } catch is CancellationError { }
-            catch { self.error = error.localizedDescription; showScan = false }
+            catch { if scanID == ticket { self.error = error.localizedDescription; showScan = false } }
         }
     }
 

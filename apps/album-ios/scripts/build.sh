@@ -4,6 +4,12 @@ cd "$(dirname "$0")/.."
 python3 scripts/make_icon.py
 xcodegen generate
 mkdir -p build
+export_test_images() {
+  if [[ -d build/Tests.xcresult ]]; then
+    xcrun xcresulttool export attachments --path build/Tests.xcresult --output-path build/ui-attachments || true
+  fi
+}
+trap export_test_images EXIT
 
 if [[ "${RUN_TESTS:-1}" == "1" ]]; then
   SIMULATOR_ID=$(xcrun simctl list devices available --json | python3 -c 'import json,sys; d=json.load(sys.stdin); matches=[x["udid"] for k,v in d["devices"].items() if "iOS" in k for x in v if x.get("isAvailable") and "iPhone" in x["name"]]; print(matches[0] if matches else "")')
@@ -12,6 +18,7 @@ if [[ "${RUN_TESTS:-1}" == "1" ]]; then
     exit 1
   fi
   xcodebuild test -project Lightbox.xcodeproj -scheme Lightbox \
+    -parallel-testing-enabled NO \
     -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
     -resultBundlePath build/Tests.xcresult CODE_SIGNING_ALLOWED=NO
 fi

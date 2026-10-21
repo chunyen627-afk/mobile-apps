@@ -12,8 +12,8 @@ settings:
     SWIFT_VERSION: "5.0"
     SWIFT_STRICT_CONCURRENCY: targeted
     TARGETED_DEVICE_FAMILY: "1"
-    MARKETING_VERSION: "0.1.0"
-    CURRENT_PROJECT_VERSION: "1"
+    MARKETING_VERSION: "0.2.0"
+    CURRENT_PROJECT_VERSION: "2"
 targets:
   Lightbox:
     type: application
@@ -32,14 +32,28 @@ targets:
     scheme:
       testTargets:
         - LightboxTests
+        - LightboxUITests
   LightboxTests:
     type: bundle.unit-test
     platform: iOS
     sources:
-      - Tests
+      - path: Tests
+        excludes: [UI]
     dependencies:
       - target: Lightbox
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
         PRODUCT_BUNDLE_IDENTIFIER: org.personal.lightbox.tests
+  LightboxUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - Tests/UI
+    dependencies:
+      - target: Lightbox
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: org.personal.lightbox.uitests
+        TEST_TARGET_NAME: Lightbox

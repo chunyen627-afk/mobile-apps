@@ -4,7 +4,7 @@
 
 | App | 平台 | 用途 | 驗證狀態 |
 | --- | --- | --- | --- |
-| [光盒相簿](apps/album-ios) | iPhone / iOS 17+ | 透過 SMB 瀏覽電腦相簿、勾選資料夾或影片、遞迴掃描與全螢幕播放 | 編譯、5 項單元測試及封裝檢查通過；使用者確認 iPhone 可啟動及連線，掃描與播放待驗 |
+| [光盒相簿](apps/album-ios) | iPhone / iOS 17+ | SMB 相簿、掃描清單記憶、照片預載與影片滿版播放 | 0.2.0 修正及模擬器 UI 測試已加入，尚待本次 CI 驗證；0.1.0 實機回報重掃、控制列、切頁及重新勾選播放閃退問題 |
 
 ## 目錄
 
@@ -18,6 +18,8 @@ apps/
 後續新 App 放在 `apps/<名稱>/`，各自建立 README 與必要的 workflow。STM32 板子相關內容留在 [stm32h7s78-project](https://github.com/chunyen627-afk/stm32h7s78-project)。
 
 ## 相簿下載與安裝
+
+先在 macOS CI 的 iPhone 模擬器執行單元測試與實際 UI 操作，保留截圖，通過後才產出供手機更新的 IPA。Windows 本機沒有 Apple iOS 模擬器。模擬器使用人工產生的媒體，不含私人相簿；實際 SMB、iPhone 效能與裝置限定問題仍需實機確認。
 
 前往 [已驗證的修正版編譯](https://github.com/chunyen627-afk/mobile-apps/actions/runs/39532413253)，在 Artifacts 下載 `Lightbox-unsigned-ipa`。Xcode 編譯、5 項單元測試與 SMB 動態程式庫封裝檢查均通過。產物到期時可從 [Build Album iOS](https://github.com/chunyen627-afk/mobile-apps/actions/workflows/album-ios.yml) 手動重建。首次執行的舊產物缺少程式庫，不應安裝。
 
