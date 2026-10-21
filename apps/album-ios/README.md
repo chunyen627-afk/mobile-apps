@@ -128,7 +128,9 @@ SideStore 首次開啟另遇到啟動失敗。USB 取得的 ConsoleLogs 明確�
 
 轉移後已停止 Windows Sideloadly Daemon，移除其登入自啟項目，並確認背景程序與自啟項目均不存在；工具與既有 IPA 快取仍保留，未修改安裝資料庫。之後若重新開啟 Sideloadly，先確認不會恢復對相同 App 的自動續簽，避免與 SideStore 簽署憑證互相影響。
 
-手機捷徑驗證中：連線 LocalDevVPN → 等待 5 秒 → SideStore「Refresh All Apps」→ 顯示完成通知。使用者手機的「設定 VPN」清單沒有 ZeroTier，因此目前需手動切回；不以開啟 ZeroTier App 取代背景連線。排程曾觸發但遇到上述登入問題，尚未完成修復後驗收。所用 SideStore 版本的捷徑動作在長時間執行時可能要求切到前景，不能假設鎖屏也一定無人值守完成；「7 DAYS」顯示有取整，應以實際續簽結果及描述檔時間驗證。
+手機捷徑目標流程：連線 LocalDevVPN → 等待 5 秒 → SideStore「Refresh All Apps」→ 顯示完成通知。使用者手機的「設定 VPN」清單沒有 ZeroTier，因此目前需手動切回；不以開啟 ZeroTier App 取代背景連線。
+
+修復後實測：使用者重新匯入相簿，USB 確認仍為 0.3.1 build 4、沿用原身分。2026-10-21 17:13 排程前，使用者回報已將 App 全部滑掉，後續補充當時螢幕關閉；17:13:08 啟動背景續簽，約 5 秒完成兩個 App 的描述檔安裝。USB 讀回確認相簿描述檔建立於 17:13:12、SideStore 於 17:13:13，到期均為 10/28 對應時刻（台灣時間）。這驗證本次關閉 App 並鎖屏後的排程續簽成功，沒有再要求登入；電腦僅讀取證據，沒有執行簽署或安裝。使用者未看到該次捷徑通知，手動執行時則會通知，因此鎖屏通知仍待排查。所用版本長時間執行時可能要求切到前景，不能將本次成功推論為任何條件下均可無人值守完成。「7 DAYS」顯示有取整，應核對實際紀錄及描述檔時間。
 
 Windows 請依 [Sideloadly 官方說明](https://sideloadly.io/) 安裝其指定的網頁版 iTunes、iCloud 與 Sideloadly。iTunes 在此提供 Apple 手機通訊元件，無需用來聽音樂；Apple Devices 的備份與同步功能不包含替未簽署 IPA 做開發簽署。安裝元件不代表要啟用 iCloud 照片同步。
 
