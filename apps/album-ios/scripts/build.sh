@@ -34,6 +34,7 @@ test -f "$APP/Lightbox"
 test -s "$APP/Frameworks/AMSMB2.framework/AMSMB2"
 test -s "$APP/Frameworks/MobileVLCKit.framework/MobileVLCKit"
 test ! -e "$APP/decoder-fixture.avi"
+test ! -e "$APP/decoder-mjpeg-fixture.avi"
 # The simulator can find package frameworks in DerivedData even when the
 # archive forgets to embed them. Validate the device bundle explicitly.
 otool -L "$APP/Lightbox" | grep -F '@rpath/AMSMB2.framework/AMSMB2'

@@ -49,7 +49,7 @@ targets:
         INFOPLIST_FILE: Lightbox/Info.plist
       configs:
         Release:
-          EXCLUDED_SOURCE_FILE_NAMES: decoder-fixture.avi
+          EXCLUDED_SOURCE_FILE_NAMES: "decoder-*.avi"
     scheme:
       testTargets:
         - LightboxTests

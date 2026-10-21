@@ -122,9 +122,16 @@ final class AlbumUITests: XCTestCase {
         XCTAssertTrue(app.buttons["開始播放"].waitForExistence(timeout: 30))
         app.buttons["勾選 測試照片"].tap()
         for pass in 0..<2 {
+            if pass == 1 {
+                app.terminate()
+                app.launchEnvironment["LIGHTBOX_UI_MJPEG"] = "1"
+                app.launch()
+                XCTAssertTrue(app.buttons["開始播放"].waitForExistence(timeout: 30))
+                app.buttons["勾選 測試照片"].tap()
+            }
             app.buttons["開始播放"].tap()
             XCTAssertTrue(app.buttons["播放 1 個項目"].waitForExistence(timeout: 10))
-            // The same simulator app may have an older MOV catalog from other tests.
+            // Also exercise explicitly refreshing the selected video folder.
             app.buttons["重新掃描"].tap()
             XCTAssertTrue(app.buttons["播放 1 個項目"].waitForExistence(timeout: 10))
             app.buttons["播放 1 個項目"].tap()

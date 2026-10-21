@@ -86,7 +86,7 @@ Windows 的 Z: 是電腦自己的對應代號，手機不能用它。假設分�
 
 GitHub workflow 僅允許公開 repository 執行，以使用標準 macOS runner 的免費政策；私人庫會跳過。流程：產生圖示 → 下載並核對官方 VLC XCFramework 的 SHA256 → XcodeGen → 模擬器單元及 UI 測試 → iPhone Release archive → Lightbox-unsigned.ipa。VLC 原始壓縮套件約 264 MB，加入後 App 會變大。測試報告與截圖保留 3 天，對應 dSYM 符號檔保留 30 天，下載後可留在本機供後續分析。
 
-AVI 模擬器素材為 FFmpeg 產生的 30 秒色彩測試圖與 440 Hz 音訊（AVI／MPEG-4 Part 2／MP3），經同一個非同步範圍讀取介面播放；不含使用者檔案，Release 排除該素材。這只能驗證指定編碼及串流介面，實際 SMB 延遲、其他編碼與 iPhone 17 效能仍須實機確認。
+AVI 模擬器素材為 FFmpeg 產生的 30 秒色彩測試圖與 440 Hz 音訊，包含 MPEG-4 Part 2／MP3（320×180）及 MJPEG／PCM u8（640×480），經同一個非同步範圍讀取介面播放。後者對應本機唯讀抽查到的相簿影片編碼；沒有複製或上傳私人影片，Release 排除兩份人工素材。這只能驗證指定編碼及串流介面，實際 SMB 延遲、其他編碼與 iPhone 17 效能仍須實機確認。
 
 在 [Build Album iOS](https://github.com/chunyen627-afk/mobile-apps/actions/workflows/album-ios.yml) 選最新成功執行，下載 `Lightbox-unsigned-ipa` artifact 並解壓縮。產物保留 3 天；過期可按 Run workflow 重建。手機版原始碼、測試、腳本或 workflow 更新會自動編譯，單改 README 不會觸發。
 

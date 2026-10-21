@@ -6,7 +6,8 @@ import SwiftUI
 enum SimulatorFixtures {
     static var active: Bool { ProcessInfo.processInfo.environment["LIGHTBOX_UI_TEST"] == "1" }
     static var aviMode: Bool { ProcessInfo.processInfo.environment["LIGHTBOX_UI_AVI"] == "1" }
-    static var aviURL: URL { Bundle.main.url(forResource: "decoder-fixture", withExtension: "avi")! }
+    static var mjpegMode: Bool { ProcessInfo.processInfo.environment["LIGHTBOX_UI_MJPEG"] == "1" }
+    static var aviURL: URL { Bundle.main.url(forResource: mjpegMode ? "decoder-mjpeg-fixture" : "decoder-fixture", withExtension: "avi")! }
     static let videoURL = FileManager.default.temporaryDirectory.appendingPathComponent("fixture-video.mov")
     static let roots = [AlbumEntry(path: "A-Photos", name: "測試照片", kind: .folder, size: 0),
                         AlbumEntry(path: "B-Video", name: "測試影片", kind: .folder, size: 0)]
