@@ -19,7 +19,8 @@ struct PlayerView: View {
         #if DEBUG && targetEnvironment(simulator)
         if SimulatorFixtures.active {
             _playback = StateObject(wrappedValue: PlayerModel(entries: entries, service: service, interval: interval,
-                photoLoad: { try await SimulatorFixtures.photo($0) }, videoAsset: { _ in AVURLAsset(url: SimulatorFixtures.videoURL) }))
+                photoLoad: { try await SimulatorFixtures.photo($0) }, videoAsset: { _ in AVURLAsset(url: SimulatorFixtures.videoURL) },
+                videoRead: { try await SimulatorFixtures.readVideo($0, range: $1) }))
             return
         }
         #endif
@@ -39,6 +40,11 @@ struct PlayerView: View {
                 VideoSurface(player: player, fill: fillVideo) { playback.videoBecameVisible(player) }
                     .ignoresSafeArea().opacity(playback.videoReady ? 1 : 0)
                     .accessibilityIdentifier("videoSurface")
+            }
+            if let vlc = playback.vlc {
+                VLCSurface(playback: vlc, fill: fillVideo)
+                    .ignoresSafeArea().opacity(playback.videoReady ? 1 : 0)
+                    .accessibilityIdentifier("vlcVideoSurface")
             }
             Group {
                 Color.clear.contentShape(Rectangle()).accessibilityIdentifier("playerCanvas")

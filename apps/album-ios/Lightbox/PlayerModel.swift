@@ -7,6 +7,7 @@ import UIKit
 final class PlayerModel: ObservableObject {
     @Published var image: UIImage?
     @Published var player: AVPlayer?
+    @Published var vlc: VLCPlayback?
     @Published var index = 0
     @Published var loading = false
     @Published var paused = false
@@ -25,6 +26,7 @@ final class PlayerModel: ObservableObject {
     private let photos: PhotoBuffer
     private let controlsDelay: Double
     private let videoAsset: ((AlbumEntry) -> AVAsset?)?
+    private let videoRead: (@Sendable (AlbumEntry, Range<Int64>) async throws -> Data)?
     private var interacting = false
     private var timeObserver: Any?
     private var memoryObserver: NSObjectProtocol?
@@ -38,12 +40,14 @@ final class PlayerModel: ObservableObject {
     var entry: AlbumEntry { entries[index] }
 
     init(entries: [AlbumEntry], service: SMBService, interval: Double, controlsDelay: Double = 4,
-         photoLoad: PhotoBuffer.Load? = nil, videoAsset: ((AlbumEntry) -> AVAsset?)? = nil) {
+         photoLoad: PhotoBuffer.Load? = nil, videoAsset: ((AlbumEntry) -> AVAsset?)? = nil,
+         videoRead: (@Sendable (AlbumEntry, Range<Int64>) async throws -> Data)? = nil) {
         self.entries = entries
         self.service = service
         self.interval = interval
         self.controlsDelay = controlsDelay
         self.videoAsset = videoAsset
+        self.videoRead = videoRead
         self.photos = PhotoBuffer(load: photoLoad ?? { entry in try await PhotoBuffer.decode(entry, service: service) })
     }
 
@@ -88,6 +92,7 @@ final class PlayerModel: ObservableObject {
         timeObserver = nil
         player?.pause(); player?.replaceCurrentItem(with: nil); player = nil
         loader?.stop(); loader = nil
+        vlc?.stop(); vlc = nil
         videoPosition = 0; videoDuration = 0; videoReady = false
     }
 
@@ -107,6 +112,11 @@ final class PlayerModel: ObservableObject {
         if userInitiated { revealControls() }
         if item.kind == .video {
             guard item.size > 0 else { fail("影片大小無效，請重新掃描。", ticket: ticket); return }
+            if VLCPlayback.prefersVLC(item.name) {
+                startVLC(item, ticket: ticket)
+                prefetch(upcoming)
+                return
+            }
             let asset: AVAsset
             if let supplied = videoAsset?(item) { asset = supplied }
             else {
@@ -134,7 +144,9 @@ final class PlayerModel: ObservableObject {
                         if !self.paused { self.player?.play() }
                     } else if current.status == .failed {
                         if let error = current.error { DiagnosticStore.shared.recordError(.videoFailed, error: error) }
-                        self.fail("此影片無法播放：可能是編碼不支援或網路中斷。請按下一個略過。", ticket: ticket)
+                        self.clearMedia()
+                        DiagnosticStore.shared.record(.nativeDecoderFallback)
+                        self.startVLC(item, ticket: ticket)
                     }
                 }
             }
@@ -176,6 +188,27 @@ final class PlayerModel: ObservableObject {
         prefetchTask = Task { [photos] in _ = try? await photos.image(for: item) }
     }
 
+    private func startVLC(_ item: AlbumEntry, ticket: UUID) {
+        loading = true
+        let read = videoRead
+        vlc = VLCPlayback(size: item.size, paused: paused, load: { [service] range in
+            if let read { return try await read(item, range) }
+            return try await service.read(item.path, range: range)
+        }, update: { [weak self] value in
+            guard let self, self.sessionID == ticket else { return }
+            self.videoPosition = value.position
+            self.videoDuration = value.duration
+            if value.visible { self.videoReady = true; self.image = nil }
+            self.loading = value.buffering && !self.videoReady
+            if value.failed {
+                DiagnosticStore.shared.record(.vlcFailed)
+                self.fail("此影片無法解碼或網路讀取失敗，請按下一個略過。", ticket: ticket)
+            } else if value.ended && !self.paused {
+                self.show(self.index + 1, userInitiated: false)
+            }
+        })
+    }
+
     func videoBecameVisible(_ current: AVPlayer) {
         guard player === current else { return }
         videoReady = true
@@ -186,6 +219,7 @@ final class PlayerModel: ObservableObject {
         guard seconds.isFinite, videoDuration > 0 else { return }
         DiagnosticStore.shared.record(.videoSeek, values: ["seconds": Int(min(max(0, seconds), videoDuration))])
         player?.seek(to: CMTime(seconds: min(max(0, seconds), videoDuration), preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+        vlc?.seek(min(max(0, seconds), videoDuration))
     }
 
     func setInteracting(_ active: Bool) {
@@ -201,6 +235,7 @@ final class PlayerModel: ObservableObject {
         loading = false; message = text; paused = true; controlsVisible = true
         controlsTask?.cancel()
         player?.pause()
+        vlc?.setPaused(true)
     }
 
     func next() { show(index + 1) }
@@ -212,6 +247,7 @@ final class PlayerModel: ObservableObject {
         if paused { slideTask?.cancel(); player?.pause() }
         else if entry.kind == .video { player?.play() }
         else { scheduleSlide() }
+        vlc?.setPaused(paused)
         revealControls()
     }
 
@@ -234,5 +270,5 @@ final class PlayerModel: ObservableObject {
         }
     }
 
-    func suspend() { paused = true; slideTask?.cancel(); player?.pause(); revealControls() }
+    func suspend() { paused = true; slideTask?.cancel(); player?.pause(); vlc?.setPaused(true); revealControls() }
 }

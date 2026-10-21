@@ -115,6 +115,48 @@ final class AlbumUITests: XCTestCase {
         capture("diagnostics-export-ready")
     }
 
+    func testAVIPlaybackSeekPauseAndReopen() {
+        app.terminate()
+        app.launchEnvironment["LIGHTBOX_UI_AVI"] = "1"
+        app.launch()
+        XCTAssertTrue(app.buttons["開始播放"].waitForExistence(timeout: 30))
+        app.buttons["勾選 測試照片"].tap()
+        for pass in 0..<2 {
+            app.buttons["開始播放"].tap()
+            XCTAssertTrue(app.buttons["播放 1 個項目"].waitForExistence(timeout: 10))
+            // The same simulator app may have an older MOV catalog from other tests.
+            app.buttons["重新掃描"].tap()
+            XCTAssertTrue(app.buttons["播放 1 個項目"].waitForExistence(timeout: 10))
+            app.buttons["播放 1 個項目"].tap()
+            XCTAssertTrue(app.otherElements["vlcVideoSurface"].waitForExistence(timeout: 10))
+            XCTAssertTrue(app.sliders["影片進度"].waitForExistence(timeout: 15))
+            waitUntilGone(app.buttons["leavePlayer"], timeout: 8)
+            assertVideoBands(dark: true)
+            capture("avi-fit-playing-\(pass)")
+            centerTap()
+            app.buttons["暫停"].tap()
+            app.sliders["影片進度"].adjust(toNormalizedSliderPosition: 0.5)
+            let reached = XCTNSPredicateExpectation(predicate: NSPredicate { [self] _, _ in
+                let parts = app.staticTexts["videoTime"].label.split(separator: ":").compactMap { Int($0) }
+                return parts.count == 2 && (12...18).contains(parts[0] * 60 + parts[1])
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [reached], timeout: 10), .completed)
+            capture("avi-paused-seek-\(pass)")
+            app.buttons["繼續"].tap()
+            XCUIDevice.shared.orientation = .landscapeLeft
+            centerTap()
+            app.buttons["填滿螢幕（會裁切邊緣）"].tap()
+            waitUntilGone(app.buttons["leavePlayer"], timeout: 8)
+            assertVideoBands(dark: false)
+            capture("avi-landscape-fill-\(pass)")
+            centerTap()
+            app.buttons["完整顯示影片"].tap()
+            app.buttons["leavePlayer"].tap()
+            XCTAssertTrue(app.buttons["開始播放"].waitForExistence(timeout: 5))
+            XCUIDevice.shared.orientation = .portrait
+        }
+    }
+
     private var savedNote: XCUIElement { app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "使用已儲存清單")).firstMatch }
     private func centerTap() { app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
     private func waitUntilGone(_ element: XCUIElement, timeout: TimeInterval) {

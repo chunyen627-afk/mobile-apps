@@ -9,5 +9,11 @@ Exact submodule revision: https://github.com/amosavian/AMSMB2/tree/4.0.3
 License: GNU Lesser General Public License, version 2.1.
 
 The LGPL text accompanies this file as LGPL-2.1.txt.
+MobileVLCKit 3.7.3 / libVLC — VideoLAN and contributors
+Source: https://github.com/videolan/vlckit/tree/319ed2c0
+libVLC source: https://code.videolan.org/videolan/vlc/-/tree/79128878
+License: GNU Lesser General Public License, version 2.1 or later.
+Unmodified official MobileVLCKit binary; app sources permit rebuilding/relinking.
+
 Application source and rebuild instructions:
 https://github.com/chunyen627-afk/mobile-apps/tree/main/apps/album-ios

@@ -9,7 +9,7 @@ enum DiagnosticAction: String {
     case connectStarted, connectSucceeded, connectFailed, disconnected, navigationFailed
     case selectionChanged, scanStarted, scanFinished, scanCancelled, scanFailed
     case playbackStarted, playbackStopped, photoSelected, videoSelected, playbackFailed, videoFailed, photoFailed, videoSeek
-    case userMarkedProblem, mediaReadFailed
+    case userMarkedProblem, mediaReadFailed, vlcStarted, vlcFailed, nativeDecoderFallback
 }
 
 private struct DiagnosticEvent: Codable {

@@ -31,7 +31,7 @@ final class LibraryModel: ObservableObject {
     init() {
         #if DEBUG && targetEnvironment(simulator)
         if SimulatorFixtures.active {
-            settings = ConnectionSettings(server: "ui-test.invalid", share: "Fixtures")
+            settings = ConnectionSettings(server: "ui-test.invalid", share: SimulatorFixtures.aviMode ? "AVIFixtures" : "Fixtures")
             service = try? SMBService(settings: settings, password: "")
             entries = SimulatorFixtures.roots
             selections = Dictionary(uniqueKeysWithValues: entries.map { ($0.path, $0) })

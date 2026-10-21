@@ -23,12 +23,33 @@ targets:
     dependencies:
       - package: AMSMB2
         embed: true
+      - framework: Vendor/MobileVLCKit.xcframework
+        embed: true
+      - sdk: QuartzCore.framework
+      - sdk: CoreText.framework
+      - sdk: AVFoundation.framework
+      - sdk: Security.framework
+      - sdk: CFNetwork.framework
+      - sdk: AudioToolbox.framework
+      - sdk: OpenGLES.framework
+      - sdk: CoreGraphics.framework
+      - sdk: VideoToolbox.framework
+      - sdk: CoreMedia.framework
+      - sdk: libc++.tbd
+      - sdk: libxml2.tbd
+      - sdk: libz.tbd
+      - sdk: libbz2.tbd
+      - sdk: libiconv.tbd
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: org.personal.lightbox.album
+        OTHER_LDFLAGS: ["$(inherited)", "-ObjC"]
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: NO
         INFOPLIST_FILE: Lightbox/Info.plist
+      configs:
+        Release:
+          EXCLUDED_SOURCE_FILE_NAMES: decoder-fixture.avi
     scheme:
       testTargets:
         - LightboxTests

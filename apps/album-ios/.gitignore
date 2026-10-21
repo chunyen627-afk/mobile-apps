@@ -5,4 +5,5 @@ build/
 *.ipa
 *.xcarchive/
 .runtime/
+Vendor/
 Lightbox/Assets.xcassets/AppIcon.appiconset/*.png

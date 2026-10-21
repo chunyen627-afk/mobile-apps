@@ -5,14 +5,30 @@ import SwiftUI
 /// Synthetic media, compiled out of every device Release build. No SMB credentials or photos.
 enum SimulatorFixtures {
     static var active: Bool { ProcessInfo.processInfo.environment["LIGHTBOX_UI_TEST"] == "1" }
+    static var aviMode: Bool { ProcessInfo.processInfo.environment["LIGHTBOX_UI_AVI"] == "1" }
+    static var aviURL: URL { Bundle.main.url(forResource: "decoder-fixture", withExtension: "avi")! }
     static let videoURL = FileManager.default.temporaryDirectory.appendingPathComponent("fixture-video.mov")
     static let roots = [AlbumEntry(path: "A-Photos", name: "測試照片", kind: .folder, size: 0),
                         AlbumEntry(path: "B-Video", name: "測試影片", kind: .folder, size: 0)]
 
     static func list(_ path: String) async throws -> [AlbumEntry] {
         try await Task.sleep(for: .milliseconds(150))
-        if path == "B-Video" { return [AlbumEntry(path: "B-Video/sample.mov", name: "測試影片.mov", kind: .video, size: 1000)] }
+        if path == "B-Video" {
+            if aviMode {
+                let size = try aviURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+                return [AlbumEntry(path: "B-Video/sample.avi", name: "測試影片.avi", kind: .video, size: Int64(size))]
+            }
+            return [AlbumEntry(path: "B-Video/sample.mov", name: "測試影片.mov", kind: .video, size: 1000)]
+        }
         return (1...3).map { AlbumEntry(path: "A-Photos/\($0).jpg", name: "測試照片 \($0)", kind: .photo, size: 1000) }
+    }
+
+    static func readVideo(_ entry: AlbumEntry, range: Range<Int64>) async throws -> Data {
+        try await Task.sleep(for: .milliseconds(20)) // Exercise the asynchronous range bridge.
+        let handle = try FileHandle(forReadingFrom: aviMode ? aviURL : videoURL)
+        defer { try? handle.close() }
+        try handle.seek(toOffset: UInt64(range.lowerBound))
+        return try handle.read(upToCount: Int(range.count)) ?? Data()
     }
 
     @MainActor static func photo(_ entry: AlbumEntry) async throws -> UIImage {

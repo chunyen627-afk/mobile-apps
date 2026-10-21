@@ -2,13 +2,13 @@
 
 SwiftUI + SMB2/3 的個人相簿。目標：iPhone 17、iOS 27、6.3 吋；最低 iOS 17。
 
-**0.3.0 開發中，尚待編譯與模擬器驗證，未安裝到手機。**
+**0.3.0 開發中，未安裝到手機。前三項功能已通過 28 項單元及 4 項 UI 測試（[來源 002cf1d](https://github.com/chunyen627-afk/mobile-apps/actions/runs/39544964275)）；以下新加入的 VLC 整合仍待編譯及測試。**
 
 - 索引改為按連線與資料夾保存。取消、重選、換組合、縮小到子資料夾都重用；選到未知資料夾才補掃，選更上層時也跳過已知子樹。空資料夾同樣記住；不自動到期。手動「重新掃描」只更新選定子樹，失敗或取消不覆蓋原有完整索引。可遷移目前勾選組合對應的 0.2.0 完整索引；無法對應的舊索引需首次補掃。
 - 自動在手機保存有容量上限的操作事件、數值錯誤代碼、記憶體警告與 MetricKit 系統報告；不自動上傳。操作紀錄不含 SMB 位址、帳密、媒體檔名或內容。事件輪替最多 3 × 256 KiB，系統報告最多 5 份、每份上限 2 MiB，另保留一份可替換的匯出檔。
 - 連線前後皆可從主畫面「診斷紀錄」→「準備診斷檔」→「分享診斷檔」，儲存 JSON 或交給協助除錯的人。也可標記問題時間。未正常結束只是線索，強制關閉／重開機等也會造成；iOS 不保證每次終止皆交付完整診斷。MetricKit 真實回報仍須實機確認，參考 [Apple 說明](https://developer.apple.com/documentation/metrickit/mxmetricmanager)。
 - 影片預設完整等比例顯示，長或寬貼齊可用螢幕、不裁切；比例不同會留黑邊。升級時重設舊版預設的裁切選項，仍可手動切換裁切填滿。
-- AVI 常含原生 AVPlayer 不支援的編碼，正在查核 VLC 解碼引擎與 SMB 串流整合；目前尚未完成，不保證任意格式可播。
+- 加入 VideoLAN MobileVLCKit 3.7.3：AVI、MKV、WebM、WMV、MPEG、TS 等交給 VLC；MP4／MOV／M4V 優先 AVPlayer，解碼失敗自動嘗試 VLC。共用目前的 SMB 連線，按最多 512 KiB 分段讀取，不先下載整部影片；支援暫停、跳轉及完整顯示／裁切切換。實作待驗證，並非保證所有編碼、損壞檔、DRM 影片都能播放。
 
 **0.2.0（build 2）已通過編譯、20 項單元測試、3 項模擬器 UI 測試、13 張截圖檢查及 Release 封裝。已覆蓋安裝到手機並讀回確認版本；實機偶發閃退仍待紀錄分析，不能視為已解決。**
 
@@ -64,8 +64,8 @@ Windows 的 Z: 是電腦自己的對應代號，手機不能用它。假設分�
 - 密碼存 Keychain；選取、連線設定與收藏留在本機。
 - 遞迴掃描可取消、父子選取去重、不跟隨符號連結；上限 100,000 個媒體項目，達上限或不可讀會提示。
 - 照片輪播／影片播完接下一個、順序／隨機、最愛過濾、播放清單位置拉桿。
-- 影片以 AVAssetResourceLoader 按 512 KiB 範圍讀取 SMB，支援 seek，不先下載整部。
-- 影片用 iOS AVPlayer 解碼；MKV/AVI 等可列出，但不保證容器／編碼可播放，沒有轉碼。不相容時停下提示，可手動略過。
+- AVPlayer 以 AVAssetResourceLoader、VLC 以可跳轉的 InputStream 讀取 SMB，單次最多 512 KiB，不先下載整部。關閉播放器會取消等待中的讀取；網路逾時會提示失敗。
+- VLC 補充更多容器／編碼，沒有伺服器轉碼；不相容時停下提示，可手動略過。不能由副檔名保證解碼成功。
 - ImageIO 照片縮小解碼，單張上限 80 MiB；GIF 第一版只顯示靜態首幀。
 - 播放期間暫停自動鎖屏，退出恢復；進背景會暫停。
 - 來源主機必須開機且網路可達，不需要 Windows 網頁轉接服務。
@@ -74,7 +74,9 @@ Windows 的 Z: 是電腦自己的對應代號，手機不能用它。假設分�
 
 此 App 位於 [mobile-apps](https://github.com/chunyen627-afk/mobile-apps) 的 `apps/album-ios`，後續以此處為唯一開發來源。不要上傳個人照片、連線設定、Apple 憑證或密碼。
 
-GitHub workflow 僅允許公開 repository 執行，以使用標準 macOS runner 的免費政策；私人庫會跳過。流程：產生圖示 → XcodeGen → 模擬器單元及 UI 測試 → iPhone Release archive → Lightbox-unsigned.ipa。測試報告與截圖保留 3 天，對應 dSYM 符號檔保留 30 天，下載後可留在本機供後續分析。
+GitHub workflow 僅允許公開 repository 執行，以使用標準 macOS runner 的免費政策；私人庫會跳過。流程：產生圖示 → 下載並核對官方 VLC XCFramework 的 SHA256 → XcodeGen → 模擬器單元及 UI 測試 → iPhone Release archive → Lightbox-unsigned.ipa。VLC 原始壓縮套件約 264 MB，加入後 App 會變大。測試報告與截圖保留 3 天，對應 dSYM 符號檔保留 30 天，下載後可留在本機供後續分析。
+
+AVI 模擬器素材為 FFmpeg 產生的 30 秒色彩測試圖與 440 Hz 音訊（AVI／MPEG-4 Part 2／MP3），經同一個非同步範圍讀取介面播放；不含使用者檔案，Release 排除該素材。這只能驗證指定編碼及串流介面，實際 SMB 延遲、其他編碼與 iPhone 17 效能仍須實機確認。
 
 在 [Build Album iOS](https://github.com/chunyen627-afk/mobile-apps/actions/workflows/album-ios.yml) 選最新成功執行，下載 `Lightbox-unsigned-ipa` artifact 並解壓縮。產物保留 3 天；過期可按 Run workflow 重建。手機版原始碼、測試、腳本或 workflow 更新會自動編譯，單改 README 不會觸發。
 
