@@ -116,11 +116,13 @@ AVI 模擬器素材為 FFmpeg 產生的 30 秒色彩測試圖與 440 Hz 音訊�
 
 開發與雲端編譯不需連手機；IPA 更新可在無線配對正常時經 Wi-Fi 傳送。App 內「診斷紀錄」可在手機匯出分享，不必持續 USB 側錄；無線讀取系統崩潰報告／即時紀錄尚未驗證，必要時仍需 USB，不能把無線安裝能力當成所有除錯能力已可無線使用。
 
-同日 ZeroTier 測試：手機虛擬位址的 TCP 62078 可建立連線，但送出 Apple 配對服務查詢後立即中斷；普通 Wi-Fi 上相同查詢可回覆。尚未完成虛擬區網續簽，SMB 相簿可用不能替代這項驗證。iloader 提示憑證數量上限，已比對唯一現有憑證正被相簿使用，因此取消撤銷。之後沿用 Sideloadly 既有憑證成功安裝 SideStore 0.7.0，USB 讀回確認版本，並經 iloader 放置配對資料、確認手機端檔案存在。iloader 工作已完成並關閉；尚待手機 LocalDevVPN、SideStore 登入／首次續簽、相簿遷移及 ZeroTier 切換驗證，不能宣稱自動續簽已成功。
+同日 ZeroTier 測試：手機虛擬位址的 TCP 62078 可建立連線，但送出 Apple 配對服務查詢後立即中斷；普通 Wi-Fi 上相同查詢可回覆。尚未完成虛擬區網續簽，SMB 相簿可用不能替代這項驗證。iloader 提示憑證數量上限，已比對唯一現有憑證正被相簿使用，因此當時取消撤銷。之後沿用 Sideloadly 既有憑證成功安裝 SideStore 0.7.0，USB 讀回確認版本，並經 iloader 放置配對資料、確認手機端檔案存在。iloader 工作已完成並關閉；後續轉移結果見下方，不能宣稱自動續簽已成功。
 
-SideStore 首次開啟另遇到啟動失敗。USB 取得的 ConsoleLogs 明確記錄 `The app extension is missing a valid provisioning profile.`，對應安裝包唯一的 WidgetKit 小工具。Sideloadly 排除此小工具後以相同帳號及 Bundle ID 覆蓋安裝，使用者確認可進主畫面；沒有撤銷憑證。這僅確認啟動問題排除，尚未驗證登入、續簽或自動化；此安裝暫時不含桌面小工具。
+SideStore 首次開啟另遇到啟動失敗。USB 取得的 ConsoleLogs 明確記錄 `The app extension is missing a valid provisioning profile.`，對應安裝包唯一的 WidgetKit 小工具。Sideloadly 排除此小工具後以相同帳號及 Bundle ID 覆蓋安裝，使用者確認可進主畫面；當時沒有撤銷憑證。此步只確認啟動問題排除，此次電腦安裝不含桌面小工具。
 
-後續登入實測回覆 `-80045`，USB 紀錄確認來自 Apple 驗證端。正在依 [SideStore 問題回報](https://github.com/SideStore/SideStore/issues/1665) 檢查 Anisette 模式及伺服器，登入及手機端續簽尚未完成。相簿掃描索引、偏好與診斷已額外保存於本機，未上傳私人資料；0.3.1 IPA 已放入手機供後續匯入，這不代表已遷移至 SideStore。
+後續登入實測回覆 `-80045`，USB 紀錄確認來自 Apple 驗證端。依 [SideStore 問題回報](https://github.com/SideStore/SideStore/issues/1665)，使用者停用 On-Device Anisette、改選 Jkcoxson Mac 後回報登入成功。LocalDevVPN 1.3.0 已經 USB 確認安裝，使用者確認連線。相簿掃描索引、偏好與診斷已額外保存於本機，0.3.1 IPA 放入手機後讀回核對雜湊；未上傳私人資料。
+
+備份與後續安裝包準備完成後，使用者在 SideStore 依序完成 Revoke／Re-sign，回報 SideStore 可重新開啟；接著匯入相簿 IPA，回報安裝完成並顯示有效天數。但再次 Refresh All 顯示未登入，已請重新檢查登入狀態。重複續簽、登入狀態保留、相簿設定保留及切回 ZeroTier 播放尚未完成驗收；不能宣稱免操作或自動續簽可用。目前手機已離開 USB，新憑證及遷移後版本尚未由電腦讀回。
 
 Windows 請依 [Sideloadly 官方說明](https://sideloadly.io/) 安裝其指定的網頁版 iTunes、iCloud 與 Sideloadly。iTunes 在此提供 Apple 手機通訊元件，無需用來聽音樂；Apple Devices 的備份與同步功能不包含替未簽署 IPA 做開發簽署。安裝元件不代表要啟用 iCloud 照片同步。
 
