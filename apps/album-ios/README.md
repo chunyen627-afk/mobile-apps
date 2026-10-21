@@ -2,25 +2,19 @@
 
 SwiftUI + SMB2/3 的個人相簿。目標：iPhone 17、iOS 27、6.3 吋；最低 iOS 17。
 
-**0.2.0 狀態：已加入掃描索引、照片預載、播放控制列自動隱藏、影片滿版切換及模擬器 UI 回歸測試，等待本次 Xcode 編譯與測試。尚未安裝此版到手機。**
+**0.2.0（build 2）已通過編譯、20 項單元測試、3 項模擬器 UI 測試、13 張截圖檢查及 Release 封裝。尚未安裝此版到手機；舊版重新勾選後播放的實機閃退仍待紀錄分析。**
 
-第一輪驗證：[Actions 39536599046](https://github.com/chunyen627-afk/mobile-apps/actions/runs/39536599046)，來源 `de0bc17`，Xcode 16.4、iPhone 16 Pro / iOS 18.5，18 項單元測試與 3 項 UI 測試全過，封裝成功。人工檢查 13 張截圖時發現旋轉／縮放過程的取樣時機需改善，已追加穩定畫面取樣與黑邊像素檢查並等待重新驗證；尚不以第一輪宣稱全部視覺驗收完成。
+驗證證據：[Actions 39541264158](https://github.com/chunyen627-afk/mobile-apps/actions/runs/39541264158)，來源 `1a899d7c5ff0afce92a89ea49fe828d2b6ec74d0`，Xcode 16.4、iPhone 16 Pro / iOS 18.5。UI 測試包含重新勾選 4 → 3 → 4 個項目、重播及重啟後使用索引、照片預載、控制列隱藏、影片填滿／完整顯示、旋轉，以及拖曳後實際播放時間落在目標附近。截圖確認影片跳至約 10 秒。這不是 iPhone 17 / iOS 27 的實機測試。
 
-第二輪 [Actions 39538218486](https://github.com/chunyen627-afk/mobile-apps/actions/runs/39538218486) 的 18 項單元測試通過，UI 測試 1 過、2 失敗：首次人工影片生成超過 20 秒等待，中止後的半成品被下一測試誤用。已改為產生較少影格、驗證可播放後才保存並延長素材準備等待；另將重選測試改成 4 → 3 → 4 個項目，以覆蓋不同勾選範圍。等待第三輪結果。
+此版 IPA：500,597 bytes；SHA256：`fdcebfeb3d9482e5a6d685cec20606986cf78c3dd2657b5173cfb85f3cc249a3`。下載後已確認 artifact 雜湊、IPA ZIP 完整性、版本、內含 `Frameworks/AMSMB2.framework/AMSMB2`，且 Release 不含模擬器測試入口。後續重建的雜湊可能不同。
 
 額外取消處理：確認 AMSMB2 4.0.3 的 async continuation 不會自動中止底層讀取，已將 Task 取消連接到讀取 progress 回呼；退出／快速跳轉後，在下一個讀取區塊邊界停止工作，取消後的部分資料不會顯示。正在等待網路回應的單次操作仍受連線逾時限制。新增 2 項取消／完整讀取測試；這項修正尚不能證明是實機閃退的原因。
 
-[Actions 39539711097](https://github.com/chunyen627-afk/mobile-apps/actions/runs/39539711097) 已通過 20 項單元測試、3 項 UI 測試及封裝。13 張截圖確認旋轉、控制列與影片填滿／完整顯示正常；但進度拖曳截圖的時間回到 0 秒，因此追加精確 seek、移除拖曳開始時覆寫新位置的操作，並要求 UI 測試確認實際播放時間落在目標附近。這項最後修正等待重新驗證，尚未更新手機。
-
 0.1.0 已側載並能開啟、連線與播放；使用者回報每次播放重掃、按鈕不隱藏、切照片出現黑色讀取畫面、影片留白，以及「重新勾選後按播放」兩次閃退。閃退原因尚未取得系統紀錄確認，不視為已修復。
 
-2026-10-21 安裝證據：Sideloadly 0.71.1 顯示 `Done.`、`100%`，USB 裝置顯示 iOS 27.0；使用者完成手機端授權後回報 App 可以開啟，正在設定連線欄位。沒有更新或還原 iOS，也沒有將簽署帳號、裝置識別碼或密碼存入倉庫。
+2026-10-21 舊版安裝證據：Sideloadly 0.71.1 顯示 `Done.`、`100%`，USB 裝置顯示 iOS 27.0；使用者完成手機端授權後回報 App 可以開啟，之後確認連線並試播。沒有更新或還原 iOS，也沒有將簽署帳號、裝置識別碼或密碼存入倉庫。
 
 2026-10-21 連線結果：使用者先回報連線失敗，之後回報連線成功。尚未確認首次失敗原因，也未完成反覆連線穩定性驗證；不據此推定所有網路或帳號都可用。主機欄可直接填 IP／名稱，也接受 `smb://` 前綴；分享與資料夾仍填在各自欄位。
-
-測試證據：[修正版 GitHub Actions](https://github.com/chunyen627-afk/mobile-apps/actions/runs/39532413253)，來源 `342dc73e6bffc6e17aca47c47babb55c7f37c1b4`，Xcode 16.4、iPhone 16 Pro / iOS 18.5 模擬器，5 項單元測試、0 失敗。這不是 iPhone 17 / iOS 27 實機或 UI 操作測試。首次產物缺少動態程式庫，不應安裝；修正版已確認包含 `Frameworks/AMSMB2.framework/AMSMB2`。
-
-修正版 IPA：462,276 bytes；SHA256：`123c49e6c13fc6fa64081b9b6ba07274d8b4fc6d57d93b50da3e6974ca43a59c`。下載後已驗證 artifact 雜湊、IPA ZIP 完整性、Bundle ID 與程式庫存在。後續重建的雜湊可能不同。
 
 ## 使用方式
 
@@ -68,7 +62,7 @@ Windows 的 Z: 是電腦自己的對應代號，手機不能用它。假設分�
 
 此 App 位於 [mobile-apps](https://github.com/chunyen627-afk/mobile-apps) 的 `apps/album-ios`，後續以此處為唯一開發來源。不要上傳個人照片、連線設定、Apple 憑證或密碼。
 
-GitHub workflow 僅允許公開 repository 執行，以使用標準 macOS runner 的免費政策；私人庫會跳過。流程：產生圖示 → XcodeGen → 模擬器單元測試 → iPhone Release archive → Lightbox-unsigned.ipa。
+GitHub workflow 僅允許公開 repository 執行，以使用標準 macOS runner 的免費政策；私人庫會跳過。流程：產生圖示 → XcodeGen → 模擬器單元及 UI 測試 → iPhone Release archive → Lightbox-unsigned.ipa。測試報告與截圖保留 3 天，對應 dSYM 符號檔保留 30 天，下載後可留在本機供後續分析。
 
 在 [Build Album iOS](https://github.com/chunyen627-afk/mobile-apps/actions/workflows/album-ios.yml) 選最新成功執行，下載 `Lightbox-unsigned-ipa` artifact 並解壓縮。產物保留 3 天；過期可按 Run workflow 重建。手機版原始碼、測試、腳本或 workflow 更新會自動編譯，單改 README 不會觸發。
 
@@ -89,7 +83,7 @@ bash scripts/build.sh
 
 ## 驗證界線
 
-先模擬器、後手機：`Tests/ScanIndexTests.swift` 驗證磁碟索引重用、強制重掃、失敗及取消保護；`Tests/PlaybackTests.swift` 驗證預載共用、快取釋放、慢讀保留畫面、快速切頁與控制列計時。`Tests/UI/AlbumUITests.swift` 在真正的 iOS 模擬器點擊重選／重播、重啟、切頁、影片填滿／完整顯示、旋轉與 seek，並保存畫面附件。模擬器測試素材僅存在於 Debug simulator，Release IPA 不含測試入口。
+先模擬器、後手機：`Tests/ScanIndexTests.swift` 驗證磁碟索引重用、強制重掃、失敗及取消保護；`Tests/PlaybackTests.swift` 驗證預載共用、快取釋放、慢讀保留畫面、快速切頁與控制列計時；`Tests/CancellableReadTests.swift` 驗證取消與完整讀取。`Tests/UI/AlbumUITests.swift` 在真正的 iOS 模擬器點擊重選／重播、重啟、切頁、影片填滿／完整顯示、旋轉與 seek，並保存畫面附件。模擬器測試素材僅存在於 Debug simulator，Release IPA 不含測試入口。
 
 UI 測試使用人工產生媒體與模擬目錄，不能證明實際 SMB、iPhone 17 / iOS 27 的穩定性。每次編譯保存測試報告、UI 截圖及符號檔；通過測試才封裝。手機更新沿用簽署帳號與 Bundle ID 覆蓋安裝，通常不需移除舊 App。
 
@@ -97,12 +91,12 @@ UI 測試使用人工產生媒體與模擬目錄，不能證明實際 SMB、iPho
 
 Tests/SelectionTests.swift 驗證選取去重、根目錄包含規則、路徑邊界與媒體過濾。只有實際執行通過才能稱通過。
 
-實機已由使用者確認：App 啟動與一次 SMB 連線成功。待驗：連線穩定性、中文子路徑、多層掃描、照片輪播、影片 seek/音訊、網路中斷、取消、旋轉、退出後鎖屏恢復。Windows 可讀或 TCP 445 可達不能代替手機完整 SMB 登入測試。
+實機已由使用者確認：0.1.0 啟動、SMB 連線及進入播放，並回報上述缺陷。0.2.0 全部實機回歸仍待驗，包括連線穩定性、中文子路徑、多層掃描、照片輪播、影片 seek/音訊、網路中斷、取消、旋轉、退出後鎖屏恢復及重選播放閃退。尚未取得實機閃退報告，不能把模擬器通過視為閃退已解決。Windows 可讀或 TCP 445 可達不能代替手機完整 SMB 登入測試。
 
 第三方來源與授權見 THIRD_PARTY.md。
 
 ## 更新紀錄
 
-- 2026-10-21（0.2.0，待驗證）：加入持久掃描索引、下一張照片預載、控制列計時修正、影片滿版／完整顯示，以及模擬器操作截圖測試；記錄重新勾選播放閃退待查。
+- 2026-10-21（0.2.0）：加入持久掃描索引、下一張照片預載、讀取取消傳遞、控制列計時修正、影片滿版／完整顯示及精確跳轉。20 項單元測試、3 項模擬器 UI 測試、13 張截圖檢查及封裝通過；新版實機驗證與舊版重新勾選播放閃退紀錄仍待確認。
 
-- 2026-10-21：原生相簿原型移入 `mobile-apps/apps/album-ios`，加入獨立 GitHub Actions 編譯流程；修正 IPA 缺少 SMB 動態程式庫的封裝設定，修正版編譯、5 項單元測試與封裝檢查通過；已完成側載，手機開發者授權與功能待驗。
+- 2026-10-21（0.1.0）：原生相簿原型移入 `mobile-apps/apps/album-ios`，加入獨立 GitHub Actions 編譯流程；修正 IPA 缺少 SMB 動態程式庫的封裝設定，修正版編譯、5 項單元測試與封裝檢查通過；已完成側載與手機開發者授權，使用者確認連線並試播。

@@ -4,7 +4,7 @@
 
 | App | 平台 | 用途 | 驗證狀態 |
 | --- | --- | --- | --- |
-| [光盒相簿](apps/album-ios) | iPhone / iOS 17+ | SMB 相簿、掃描清單記憶、照片預載與影片滿版播放 | 0.2.0 修正及模擬器 UI 測試已加入，尚待本次 CI 驗證；0.1.0 實機回報重掃、控制列、切頁及重新勾選播放閃退問題 |
+| [光盒相簿](apps/album-ios) | iPhone / iOS 17+ | SMB 相簿、掃描清單記憶、照片預載與影片滿版播放 | 0.2.0 編譯、20 項單元測試、3 項模擬器 UI 測試及 13 張截圖檢查通過；新版尚未實機驗證，舊版重選播放閃退待查 |
 
 ## 目錄
 
@@ -21,7 +21,7 @@ apps/
 
 先在 macOS CI 的 iPhone 模擬器執行單元測試與實際 UI 操作，保留截圖，通過後才產出供手機更新的 IPA。Windows 本機沒有 Apple iOS 模擬器。模擬器使用人工產生的媒體，不含私人相簿；實際 SMB、iPhone 效能與裝置限定問題仍需實機確認。
 
-前往 [已驗證的修正版編譯](https://github.com/chunyen627-afk/mobile-apps/actions/runs/39532413253)，在 Artifacts 下載 `Lightbox-unsigned-ipa`。Xcode 編譯、5 項單元測試與 SMB 動態程式庫封裝檢查均通過。產物到期時可從 [Build Album iOS](https://github.com/chunyen627-afk/mobile-apps/actions/workflows/album-ios.yml) 手動重建。首次執行的舊產物缺少程式庫，不應安裝。
+前往 [0.2.0 已驗證編譯](https://github.com/chunyen627-afk/mobile-apps/actions/runs/39541264158)，在 Artifacts 下載 `Lightbox-unsigned-ipa`。來源 `1a899d7`，Xcode 16.4、iPhone 16 Pro / iOS 18.5 模擬器，23 項測試與 SMB 動態程式庫封裝檢查均通過，另保留截圖及閃退分析符號檔。產物到期時可從 [Build Album iOS](https://github.com/chunyen627-afk/mobile-apps/actions/workflows/album-ios.yml) 手動重建。
 
 產物為**未簽署 IPA**，需用自己的 Apple 帳號簽署後才能裝到 iPhone。Windows 可使用 Sideloadly；免費帳號簽署需每 7 天續簽。編譯成功不代表手機上的 SMB 連線與播放已經通過實測。完整功能、設定與限制請看 [相簿 README](apps/album-ios/README.md)。
 
