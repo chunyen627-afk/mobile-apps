@@ -122,10 +122,11 @@ private final class StreamRead: @unchecked Sendable {
         result = value; task = nil
         lock.unlock(); signal.signal()
     }
-    func cancel() {
+    func cancel() { abort(CancellationError()) }
+    private func abort(_ error: Error) {
         lock.lock()
         guard result == nil else { lock.unlock(); return }
-        result = .failure(CancellationError())
+        result = .failure(error)
         let current = task; task = nil
         lock.unlock()
         current?.cancel()
@@ -133,9 +134,9 @@ private final class StreamRead: @unchecked Sendable {
     }
     func wait(timeout: TimeInterval) -> Result<Data, Error> {
         if signal.wait(timeout: .now() + timeout) == .timedOut {
-            lock.lock(); let current = task; lock.unlock()
-            current?.cancel()
-            finish(.failure(NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut)))
+            // Publish timeout before cancellation wakes the provider, so its
+            // CancellationError cannot overwrite the actual failure reason.
+            abort(NSError(domain: NSURLErrorDomain, code: NSURLErrorTimedOut))
         }
         lock.lock(); defer { lock.unlock() }
         return result ?? .failure(CancellationError())
