@@ -1,6 +1,7 @@
 # Repository instructions
 
 - 新接手先讀 [Windows／iPhone 開發快速上手與 AI 交接](docs/windows-iphone-quickstart.md)，再讀根目錄與目標 App 的 README。通用教學不得加入特定 App 名稱、私人 IP、帳號或路徑；此倉庫版本為原稿，桌面僅為同步副本。
+- 實機安裝前若存在 `.runtime/install-handoff.md`，讀取本機版本與固定安裝副本資訊；該目錄已忽略，不得把其中的私人路徑與裝置資訊提交公開倉庫。
 - 當前產品優先支援 iPhone；畫面使用動態容器尺寸，不綁定機型或吋數。實際 0.3.0 IPA 的 UIDeviceFamily 為 [1, 2]，但 iPad 尚未驗證；以封裝產物為準，不可只憑專案層設定或可安裝就宣稱平板適配完成。
 
 - 使用繁體中文撰寫使用者文件。
