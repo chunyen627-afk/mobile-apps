@@ -2,6 +2,28 @@ import XCTest
 @testable import Lightbox
 
 final class SMBInputStreamTests: XCTestCase {
+    func testSmallDecoderReadsAndNearbySeekReuseOneNetworkChunk() async {
+        let reads = StreamReadCount()
+        let stream = SMBInputStream(size: 800_000) { range in
+            await reads.increment()
+            return Data((range.lowerBound..<range.upperBound).map { UInt8($0 % 251) })
+        }
+        await Task.detached {
+            stream.open()
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            for index in 0..<100 {
+                XCTAssertEqual(stream.read(&buffer, maxLength: 4096), 4096)
+                XCTAssertEqual(buffer[0], UInt8((index * 4096) % 251))
+            }
+            XCTAssertTrue(stream.setProperty(100 as NSNumber, forKey: .fileCurrentOffsetKey))
+            XCTAssertEqual(stream.read(&buffer, maxLength: 4096), 4096)
+            XCTAssertEqual(buffer[0], 100)
+            stream.close()
+        }.value
+        let count = await reads.count
+        XCTAssertEqual(count, 1)
+    }
+
     func testChunkLimitSeekEOFAndShortReads() async {
         let stream = SMBInputStream(size: 900_000) { range in
             XCTAssertLessThanOrEqual(range.count, 512 * 1024)
@@ -62,4 +84,9 @@ final class SMBInputStreamTests: XCTestCase {
             XCTAssertEqual(empty.streamStatus, .error)
         }.value
     }
+}
+
+private actor StreamReadCount {
+    var count = 0
+    func increment() { count += 1 }
 }

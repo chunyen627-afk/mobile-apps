@@ -11,6 +11,8 @@ final class SMBInputStream: InputStream, @unchecked Sendable {
     private var state: Stream.Status = .notOpen
     private var failure: Error?
     private var offset: Int64 = 0
+    private var bufferStart: Int64 = 0
+    private var buffered = Data()
     private var pending: StreamRead?
 
     init(size: Int64, timeout: TimeInterval = 30, load: @escaping Load) {
@@ -27,6 +29,7 @@ final class SMBInputStream: InputStream, @unchecked Sendable {
     override func close() {
         let read = locked { () -> StreamRead? in
             state = .closed
+            buffered.removeAll()
             defer { pending = nil }
             return pending
         }
@@ -58,8 +61,18 @@ final class SMBInputStream: InputStream, @unchecked Sendable {
         guard state == .open || state == .atEnd else { lock.unlock(); return -1 }
         guard offset < size else { state = .atEnd; lock.unlock(); return 0 }
         guard pending == nil else { lock.unlock(); return -1 }
+        if offset >= bufferStart && offset < bufferStart + Int64(buffered.count) {
+            let consumed = Int(offset - bufferStart)
+            let count = min(len, buffered.count - consumed)
+            buffered.copyBytes(to: buffer, from: consumed..<(consumed + count))
+            offset += Int64(count)
+            lock.unlock()
+            return count
+        }
         let start = offset
-        let count = Int(min(Int64(min(len, 512 * 1024)), size - start))
+        // VLC may ask for a few KiB at a time. Coalesce those reads into one SMB
+        // request instead of paying a network round trip for every decoder read.
+        let count = Int(min(Int64(512 * 1024), size - start))
         let operation = StreamRead()
         pending = operation
         lock.unlock()
@@ -75,9 +88,11 @@ final class SMBInputStream: InputStream, @unchecked Sendable {
                 failure = NSError(domain: NSPOSIXErrorDomain, code: Int(EIO)); state = .error
                 return -1
             }
-            data.copyBytes(to: buffer, count: data.count)
-            offset += Int64(data.count)
-            return data.count
+            buffered = data; bufferStart = start
+            let delivered = min(len, data.count)
+            data.copyBytes(to: buffer, count: delivered)
+            offset += Int64(delivered)
+            return delivered
         case .failure(let error):
             failure = error; state = .error
             if !(error is CancellationError) { DiagnosticStore.shared.recordError(.mediaReadFailed, error: error) }
