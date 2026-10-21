@@ -27,6 +27,8 @@ apps/
 
 產物為**未簽署 IPA**，需用自己的 Apple 帳號簽署後才能裝到 iPhone。Windows 可使用 Sideloadly；免費帳號簽署需每 7 天續簽。編譯成功不代表手機上的 SMB 連線與播放已經通過實測。完整功能、設定與限制請看 [相簿 README](apps/album-ios/README.md)。
 
+2026-10-21 手機續簽進度：使用者已透過 SideStore 匯入相簿、完成一次 Refresh All，切回 ZeroTier 後確認設定保留且可播放。Windows 舊背景續簽已停用；手機捷徑與自動排程尚未驗證，不能視為永久免維護。
+
 本公開倉庫使用 GitHub 標準 macOS runner，workflow 會在私人倉庫跳過。不要將照片、真實連線設定、密碼或 Apple 憑證提交到倉庫。
 
 ## 文件維護

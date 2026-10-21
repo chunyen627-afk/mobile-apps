@@ -122,7 +122,11 @@ SideStore 首次開啟另遇到啟動失敗。USB 取得的 ConsoleLogs 明確�
 
 後續登入實測回覆 `-80045`，USB 紀錄確認來自 Apple 驗證端。依 [SideStore 問題回報](https://github.com/SideStore/SideStore/issues/1665)，使用者停用 On-Device Anisette、改選 Jkcoxson Mac 後回報登入成功。LocalDevVPN 1.3.0 已經 USB 確認安裝，使用者確認連線。相簿掃描索引、偏好與診斷已額外保存於本機，0.3.1 IPA 放入手機後讀回核對雜湊；未上傳私人資料。
 
-備份與後續安裝包準備完成後，使用者在 SideStore 依序完成 Revoke／Re-sign，回報 SideStore 可重新開啟；接著匯入相簿 IPA，回報安裝完成並顯示有效天數。但再次 Refresh All 顯示未登入，已請重新檢查登入狀態。重複續簽、登入狀態保留、相簿設定保留及切回 ZeroTier 播放尚未完成驗收；不能宣稱免操作或自動續簽可用。目前手機已離開 USB，新憑證及遷移後版本尚未由電腦讀回。
+備份與後續安裝包準備完成後，使用者在 SideStore 依序完成 Revoke／Re-sign，回報 SideStore 可重新開啟；接著匯入相簿 IPA，回報安裝完成並顯示有效天數。首次再次 Refresh All 顯示未登入，重新登入後使用者確認 Refresh All 成功；切回 ZeroTier 後確認原設定保留、能正常播放。這確認本次手機手動續簽與切換後播放；長期登入狀態、背景／鎖屏續簽及捷徑排程尚未驗證，不能宣稱免操作或自動續簽可用。手機已離開 USB，新憑證及遷移後版本尚未由電腦讀回。
+
+轉移後已停止 Windows Sideloadly Daemon，移除其登入自啟項目，並確認背景程序與自啟項目均不存在；工具與既有 IPA 快取仍保留，未修改安裝資料庫。之後若重新開啟 Sideloadly，先確認不會恢復對相同 App 的自動續簽，避免與 SideStore 簽署憑證互相影響。
+
+手機捷徑驗證中：連線 LocalDevVPN → 等待 5 秒 → SideStore「Refresh All Apps」→ 連回 ZeroTier。先手動執行整段，再設定充電或固定時間觸發。此捷徑尚未確認建立／執行成功；中途錯誤可能使後面的 VPN 復原動作不執行，需檢查錯誤與恢復連線。所用 SideStore 版本的捷徑動作在長時間執行時可能要求切到前景，不能假設鎖屏也一定無人值守完成。
 
 Windows 請依 [Sideloadly 官方說明](https://sideloadly.io/) 安裝其指定的網頁版 iTunes、iCloud 與 Sideloadly。iTunes 在此提供 Apple 手機通訊元件，無需用來聽音樂；Apple Devices 的備份與同步功能不包含替未簽署 IPA 做開發簽署。安裝元件不代表要啟用 iCloud 照片同步。
 
