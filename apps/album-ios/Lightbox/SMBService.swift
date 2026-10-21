@@ -43,9 +43,31 @@ final class SMBService: @unchecked Sendable {
     }
 
     func read(_ path: String, range: Range<Int64>) async throws -> Data {
-        try Task.checkCancellation()
-        let data: Data = try await manager.contents(atPath: path, range: range, progress: nil)
-        try Task.checkCancellation()
-        return data
+        try await CancellableRead.perform { [manager] shouldContinue in
+            try await manager.contents(atPath: path, range: range, progress: { _, _ in shouldContinue() })
+        }
     }
+}
+
+/// AMSMB2's continuation does not forward Task cancellation. Stop its read loop at
+/// the next progress callback and never return partial data as a complete image.
+enum CancellableRead {
+    static func perform(_ read: @Sendable (@escaping @Sendable () -> Bool) async throws -> Data) async throws -> Data {
+        try Task.checkCancellation()
+        let cancellation = ReadCancellation()
+        return try await withTaskCancellationHandler {
+            let data = try await read { cancellation.shouldContinue }
+            try Task.checkCancellation()
+            return data
+        } onCancel: {
+            cancellation.cancel()
+        }
+    }
+}
+
+private final class ReadCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+    var shouldContinue: Bool { lock.lock(); defer { lock.unlock() }; return !cancelled }
+    func cancel() { lock.lock(); defer { lock.unlock() }; cancelled = true }
 }
