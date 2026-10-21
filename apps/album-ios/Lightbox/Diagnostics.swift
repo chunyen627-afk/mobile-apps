@@ -8,6 +8,7 @@ enum DiagnosticAction: String {
     case launch, previousSessionEndedInForeground, foreground, background, termination, memoryWarning
     case connectStarted, connectSucceeded, connectFailed, disconnected, navigationFailed
     case selectionChanged, scanStarted, scanFinished, scanCancelled, scanFailed
+    case scanIndexLoading, scanIndexLoaded, scanDirectoryReading, scanDirectoryRead, scanSorting, scanIndexSaving, scanIndexSaved
     case playbackStarted, playbackStopped, photoSelected, videoSelected, playbackFailed, videoFailed, photoFailed, videoSeek
     case userMarkedProblem, mediaReadFailed, vlcStarted, vlcFailed, nativeDecoderFallback
 }
@@ -92,20 +93,29 @@ final class DiagnosticStore: @unchecked Sendable {
         queue.sync {
             if storageFailed { return "部分紀錄無法寫入；請檢查手機可用空間。" }
             let count = (try? systemReports().count) ?? 0
-            return "近期操作已保存在手機；已收到 \(count) 份 iOS 診斷／統計報告。"
+            let events = storedEvents()
+            let interrupted = events.filter { $0["action"] as? String == DiagnosticAction.previousSessionEndedInForeground.rawValue }.count
+            return "已保留 \(events.count) 筆操作紀錄；其中有 \(interrupted) 次前次未正常結束的線索。\n已收到 \(count) 份 iOS 診斷／統計報告；0 份不代表沒有操作紀錄。"
         }
+    }
+
+    // Called only on the storage queue; event rotation bounds the amount read.
+    private func storedEvents() -> [[String: Any]] {
+        var events: [[String: Any]] = []
+        for number in [2, 1, 0] {
+            guard let text = try? String(contentsOf: eventFile(number), encoding: .utf8) else { continue }
+            for line in text.split(separator: "\n") {
+                if let event = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any] {
+                    events.append(event)
+                }
+            }
+        }
+        return events
     }
 
     func export() throws -> URL {
         try queue.sync {
-            var events: [Any] = []
-            for number in [2, 1, 0] {
-                let file = eventFile(number)
-                guard let text = try? String(contentsOf: file, encoding: .utf8) else { continue }
-                for line in text.split(separator: "\n") {
-                    if let object = try? JSONSerialization.jsonObject(with: Data(line.utf8)) { events.append(object) }
-                }
-            }
+            let events = storedEvents()
             let reports: [Any] = try systemReports().compactMap { try? JSONSerialization.jsonObject(with: Data(contentsOf: $0)) }
             let document: [String: Any] = [
                 "format": 1, "exportedAt": ISO8601DateFormatter().string(from: Date()),

@@ -31,6 +31,20 @@ final class DiagnosticsTests: XCTestCase {
         XCTAssertFalse(events.contains { $0["action"] as? String == "previousSessionEndedInForeground" })
     }
 
+    func testSummarySeparatesRecordedEventsFromMissingSystemReports() throws {
+        let dir = directory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let first = DiagnosticStore(directory: dir)
+        first.beginSession(); first.setActive(true)
+        first.record(.scanStarted)
+        let next = DiagnosticStore(directory: dir)
+        next.beginSession()
+        XCTAssertTrue(next.summary().contains("5 筆操作紀錄"))
+        XCTAssertTrue(next.summary().contains("1 次前次未正常結束"))
+        XCTAssertTrue(next.summary().contains("0 份 iOS"))
+        XCTAssertEqual((try exported(next)["events"] as? [Any])?.count, 5)
+    }
+
     func testErrorExportOmitsPrivateDescriptionsAndDomains() throws {
         let dir = directory()
         defer { try? FileManager.default.removeItem(at: dir) }

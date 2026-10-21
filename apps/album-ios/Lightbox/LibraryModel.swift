@@ -25,7 +25,7 @@ final class LibraryModel: ObservableObject {
     private var navigationID = UUID()
     private var scanTask: Task<Void, Never>?
     private var scanID = UUID()
-    private let scanIndex = ScanIndex()
+    private let scanIndex = ScanIndex(diagnostics: .shared)
     private var root = ""
 
     init() {

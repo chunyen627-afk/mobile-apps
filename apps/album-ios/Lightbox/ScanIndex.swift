@@ -28,9 +28,11 @@ private struct ScanCatalog: Codable {
 /// Stores metadata only. Incomplete scans never replace a previously complete index.
 actor ScanIndex {
     private let directory: URL
+    private let diagnostics: DiagnosticStore?
 
-    init(directory: URL = URL.applicationSupportDirectory.appendingPathComponent("ScanIndex", isDirectory: true)) {
+    init(directory: URL = URL.applicationSupportDirectory.appendingPathComponent("ScanIndex", isDirectory: true), diagnostics: DiagnosticStore? = nil) {
         self.directory = directory
+        self.diagnostics = diagnostics
     }
 
     static func key(settings: ConnectionSettings, chosen: [AlbumEntry]) throws -> String {
@@ -50,6 +52,7 @@ actor ScanIndex {
                  list: @Sendable (String) async throws -> [AlbumEntry],
                  progress: @Sendable (Int, Int, String) async -> Void = { _, _, _ in }) async throws -> ScanResult {
         try Task.checkCancellation()
+        diagnostics?.record(.scanIndexLoading)
         let file = directory.appendingPathComponent(key + ".catalog.json")
         var catalog = ScanCatalog()
         var needsSave = true
@@ -62,6 +65,7 @@ actor ScanIndex {
                   let snapshot = try? JSONDecoder().decode(ScanSnapshot.self, from: data), snapshot.version == 1 {
             catalog = Self.migrate(snapshot, chosen: chosen)
         }
+        diagnostics?.record(.scanIndexLoaded, values: ["cachedFolders": catalog.listings.count])
         let roots = SelectionRules.roots(chosen)
         if force {
             for root in roots where root.kind == .folder {
@@ -76,6 +80,7 @@ actor ScanIndex {
         var warnings: [String] = []
         var warningCount = 0
         var lastProgress = Date.distantPast
+        var lastDirectoryDiagnostic = Date.distantPast
         while let entry = pending.popLast() {
             try Task.checkCancellation()
             if entry.kind == .folder {
@@ -91,7 +96,17 @@ actor ScanIndex {
                         children = []
                     } else {
                         networkLists += 1
+                        // Sample network operations at most once every two seconds.
+                        // Never record a directory path or media name.
+                        let traceRead = Date().timeIntervalSince(lastDirectoryDiagnostic) >= 2
+                        if traceRead {
+                            lastDirectoryDiagnostic = Date()
+                            diagnostics?.record(.scanDirectoryReading, values: ["folders": visited.count, "media": found.count, "networkLists": networkLists])
+                        }
                         children = try await list(entry.path)
+                        if traceRead {
+                            diagnostics?.record(.scanDirectoryRead, values: ["children": children.count, "networkLists": networkLists])
+                        }
                         catalog.listings[entry.path] = children
                     }
                     pending.append(contentsOf: children)
@@ -112,6 +127,7 @@ actor ScanIndex {
         }
         try Task.checkCancellation()
         if networkLists > 0 { catalog.date = Date() }
+        diagnostics?.record(.scanSorting, values: ["media": found.count, "folders": visited.count])
         let snapshot = ScanSnapshot(entries: found.values.sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }, folders: visited.count, date: catalog.date)
         var result = ScanResult(snapshot: snapshot, reused: networkLists == 0 && !force, warnings: warnings, warningCount: warningCount)
         if warningCount == 0 {
@@ -120,10 +136,12 @@ actor ScanIndex {
                 return result
             }
             do {
+                diagnostics?.record(.scanIndexSaving, values: ["cachedFolders": catalog.listings.count])
                 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
                 let data = try JSONEncoder().encode(catalog)
                 try Task.checkCancellation()
                 try data.write(to: file, options: .atomic)
+                diagnostics?.record(.scanIndexSaved, values: ["bytes": data.count])
                 result.saved = true
             } catch is CancellationError { throw CancellationError() }
             catch {

@@ -81,6 +81,26 @@ final class ScanIndexTests: XCTestCase {
         XCTAssertEqual(result.snapshot.entries.count, 2)
     }
 
+    func testScanDiagnosticsSurviveFailedReadWithoutStoringPaths() async throws {
+        let dir = directory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = DiagnosticStore(directory: dir.appendingPathComponent("diagnostics"))
+        let index = ScanIndex(directory: dir.appendingPathComponent("index"), diagnostics: store)
+        let privateRoot = AlbumEntry(path: "private-directory", name: "private-directory", kind: .folder, size: 0)
+        _ = try await index.prepare(key: "test", chosen: [privateRoot], list: { _ in
+            throw AlbumError.message("private-server private-password")
+        })
+        let data = try Data(contentsOf: store.export())
+        let text = String(decoding: data, as: UTF8.self)
+        XCTAssertFalse(text.contains("private-"))
+        let report = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let events = try XCTUnwrap(report["events"] as? [[String: Any]])
+        let actions = events.compactMap { $0["action"] as? String }
+        XCTAssertTrue(actions.contains("scanDirectoryReading"))
+        XCTAssertFalse(actions.contains("scanDirectoryRead"))
+        XCTAssertFalse(actions.contains("scanIndexSaved"))
+    }
+
     func testKeysSeparateAccountsSelectionsAndShareButIgnoreOrderAndFileSize() throws {
         var settings = ConnectionSettings(server: "example.local", share: "Photos")
         let other = AlbumEntry(path: "other", name: "other", kind: .folder, size: 0)
