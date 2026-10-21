@@ -16,6 +16,15 @@ struct ScanResult: Sendable {
     var saved = false
 }
 
+private struct ScanCatalog: Codable {
+    var version = 2
+    var listings: [String: [AlbumEntry]] = [:]
+    // Legacy indexes omit empty folders. A complete legacy root proves that an
+    // unrepresented descendant has no media, so it need not be scanned again.
+    var legacyRoots: [String] = []
+    var date = Date()
+}
+
 /// Stores metadata only. Incomplete scans never replace a previously complete index.
 actor ScanIndex {
     private let directory: URL
@@ -33,17 +42,35 @@ actor ScanIndex {
         return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
-    func prepare(key: String, chosen: [AlbumEntry], force: Bool = false,
+    static func scopeKey(settings: ConnectionSettings) throws -> String {
+        try key(settings: settings, chosen: [])
+    }
+
+    func prepare(key: String, chosen: [AlbumEntry], force: Bool = false, legacyKey: String? = nil,
                  list: @Sendable (String) async throws -> [AlbumEntry],
                  progress: @Sendable (Int, Int, String) async -> Void = { _, _, _ in }) async throws -> ScanResult {
         try Task.checkCancellation()
-        let file = directory.appendingPathComponent(key + ".json")
-        if !force, let data = try? Data(contentsOf: file),
-           let snapshot = try? JSONDecoder().decode(ScanSnapshot.self, from: data), snapshot.version == 1 {
-            try Task.checkCancellation()
-            return ScanResult(snapshot: snapshot, reused: true, saved: true)
+        let file = directory.appendingPathComponent(key + ".catalog.json")
+        var catalog = ScanCatalog()
+        var needsSave = true
+        if let data = try? Data(contentsOf: file),
+           let stored = try? JSONDecoder().decode(ScanCatalog.self, from: data), stored.version == 2 {
+            catalog = stored
+            needsSave = false
+        } else if !force, let legacyKey,
+                  let data = try? Data(contentsOf: directory.appendingPathComponent(legacyKey + ".json")),
+                  let snapshot = try? JSONDecoder().decode(ScanSnapshot.self, from: data), snapshot.version == 1 {
+            catalog = Self.migrate(snapshot, chosen: chosen)
         }
-        var pending = SelectionRules.roots(chosen)
+        let roots = SelectionRules.roots(chosen)
+        if force {
+            for root in roots where root.kind == .folder {
+                catalog.listings = catalog.listings.filter { !AlbumPath.contains(root.path, $0.key) }
+                catalog.legacyRoots.removeAll { AlbumPath.contains(root.path, $0) }
+            }
+        }
+        var pending = roots
+        var networkLists = 0
         var visited = Set<String>()
         var found: [String: AlbumEntry] = [:]
         var warnings: [String] = []
@@ -57,7 +84,18 @@ actor ScanIndex {
                     await progress(found.count, visited.count, entry.path)
                     lastProgress = Date()
                 }
-                do { pending.append(contentsOf: try await list(entry.path)) }
+                do {
+                    let children: [AlbumEntry]
+                    if !force, let saved = catalog.listings[entry.path] { children = saved }
+                    else if !force, catalog.legacyRoots.contains(where: { AlbumPath.contains($0, entry.path) }) {
+                        children = []
+                    } else {
+                        networkLists += 1
+                        children = try await list(entry.path)
+                        catalog.listings[entry.path] = children
+                    }
+                    pending.append(contentsOf: children)
+                }
                 catch is CancellationError { throw CancellationError() }
                 catch {
                     warningCount += 1
@@ -73,12 +111,17 @@ actor ScanIndex {
             }
         }
         try Task.checkCancellation()
-        let snapshot = ScanSnapshot(entries: found.values.sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }, folders: visited.count)
-        var result = ScanResult(snapshot: snapshot, warnings: warnings, warningCount: warningCount)
+        if networkLists > 0 { catalog.date = Date() }
+        let snapshot = ScanSnapshot(entries: found.values.sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }, folders: visited.count, date: catalog.date)
+        var result = ScanResult(snapshot: snapshot, reused: networkLists == 0 && !force, warnings: warnings, warningCount: warningCount)
         if warningCount == 0 {
+            if networkLists == 0 && !force && !needsSave {
+                result.saved = true
+                return result
+            }
             do {
                 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-                let data = try JSONEncoder().encode(snapshot)
+                let data = try JSONEncoder().encode(catalog)
                 try Task.checkCancellation()
                 try data.write(to: file, options: .atomic)
                 result.saved = true
@@ -89,5 +132,24 @@ actor ScanIndex {
             }
         }
         return result
+    }
+
+    private static func migrate(_ snapshot: ScanSnapshot, chosen: [AlbumEntry]) -> ScanCatalog {
+        var catalog = ScanCatalog(date: snapshot.date)
+        for root in SelectionRules.roots(chosen) where root.kind == .folder {
+            catalog.legacyRoots.append(root.path)
+            var rows: [String: [String: AlbumEntry]] = [root.path: [:]]
+            for entry in snapshot.entries where AlbumPath.contains(root.path, entry.path) {
+                var current = entry
+                while current.path != root.path {
+                    let parent = current.path.split(separator: "/").dropLast().joined(separator: "/")
+                    rows[parent, default: [:]][current.path] = current
+                    if parent == root.path { break }
+                    current = AlbumEntry(path: parent, name: parent.split(separator: "/").last.map(String.init) ?? "", kind: .folder, size: 0)
+                }
+            }
+            for (path, children) in rows { catalog.listings[path] = Array(children.values) }
+        }
+        return catalog
     }
 }

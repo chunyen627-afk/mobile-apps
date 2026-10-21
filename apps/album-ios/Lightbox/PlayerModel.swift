@@ -50,6 +50,7 @@ final class PlayerModel: ObservableObject {
     func start() {
         guard !didStart, !entries.isEmpty else { return }
         didStart = true
+        DiagnosticStore.shared.record(.playbackStarted, values: ["items": entries.count])
         previousIdleSetting = UIApplication.shared.isIdleTimerDisabled
         UIApplication.shared.isIdleTimerDisabled = true
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
@@ -63,6 +64,7 @@ final class PlayerModel: ObservableObject {
     func stop() {
         guard didStart else { return }
         didStart = false
+        DiagnosticStore.shared.record(.playbackStopped)
         sessionID = UUID()
         clearMedia()
         image = nil
@@ -98,6 +100,7 @@ final class PlayerModel: ObservableObject {
         loading = true
         message = nil
         let item = entry
+        DiagnosticStore.shared.record(item.kind == .video ? .videoSelected : .photoSelected, values: ["index": index, "items": entries.count])
         let upcoming = entries[(index + 1) % entries.count]
         photos.retain([item, upcoming])
         prefetchTask?.cancel()
@@ -130,6 +133,7 @@ final class PlayerModel: ObservableObject {
                         self.loading = false
                         if !self.paused { self.player?.play() }
                     } else if current.status == .failed {
+                        if let error = current.error { DiagnosticStore.shared.recordError(.videoFailed, error: error) }
                         self.fail("此影片無法播放：可能是編碼不支援或網路中斷。請按下一個略過。", ticket: ticket)
                     }
                 }
@@ -159,7 +163,10 @@ final class PlayerModel: ObservableObject {
                     self.scheduleSlide()
                     self.prefetch(upcoming)
                 } catch is CancellationError { }
-                catch { self?.fail(error.localizedDescription, ticket: ticket) }
+                catch {
+                    DiagnosticStore.shared.recordError(.photoFailed, error: error)
+                    self?.fail(error.localizedDescription, ticket: ticket)
+                }
             }
         }
     }
@@ -177,6 +184,7 @@ final class PlayerModel: ObservableObject {
 
     func seekVideo(_ seconds: Double) {
         guard seconds.isFinite, videoDuration > 0 else { return }
+        DiagnosticStore.shared.record(.videoSeek, values: ["seconds": Int(min(max(0, seconds), videoDuration))])
         player?.seek(to: CMTime(seconds: min(max(0, seconds), videoDuration), preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
     }
 
@@ -189,6 +197,7 @@ final class PlayerModel: ObservableObject {
 
     private func fail(_ text: String, ticket: UUID) {
         guard ticket == sessionID else { return }
+        DiagnosticStore.shared.record(.playbackFailed, values: ["index": index])
         loading = false; message = text; paused = true; controlsVisible = true
         controlsTask?.cancel()
         player?.pause()

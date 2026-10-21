@@ -5,6 +5,7 @@ struct LibraryView: View {
     @StateObject private var model = LibraryModel()
     @State private var search = ""
     @State private var showSettings = false
+    @State private var showDiagnostics = false
     @State private var showSelections = false
     @State private var filter = PlaybackFilter.all
     @AppStorage("randomPlayback") private var random = true
@@ -23,6 +24,9 @@ struct LibraryView: View {
             }
             .navigationTitle("光盒相簿")
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("診斷紀錄", systemImage: "waveform.path.ecg") { showDiagnostics = true }
+                }
                 if model.service != nil {
                     ToolbarItem(placement: .topBarTrailing) {
                         Menu {
@@ -40,6 +44,7 @@ struct LibraryView: View {
                 Button("知道了") { model.error = nil }
             } message: { Text(model.error ?? "") }
             .sheet(isPresented: $showSettings) { playbackSettings }
+            .sheet(isPresented: $showDiagnostics) { DiagnosticsView() }
             .sheet(isPresented: $showSelections) { selectionList }
             .sheet(isPresented: $model.showScan) { scanProgress.interactiveDismissDisabled() }
             .fullScreenCover(isPresented: $model.showPlayer) {

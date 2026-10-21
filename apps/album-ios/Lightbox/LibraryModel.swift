@@ -37,6 +37,7 @@ final class LibraryModel: ObservableObject {
             selections = Dictionary(uniqueKeysWithValues: entries.map { ($0.path, $0) })
             UserDefaults.standard.set(false, forKey: "randomPlayback")
             UserDefaults.standard.set(2.0, forKey: "photoInterval")
+            UserDefaults.standard.set(false, forKey: "cropVideoToFill")
             return
         }
         #endif
@@ -48,6 +49,7 @@ final class LibraryModel: ObservableObject {
     }
 
     func connect() async {
+        DiagnosticStore.shared.record(.connectStarted)
         busy = true
         defer { busy = false }
         do {
@@ -63,12 +65,14 @@ final class LibraryModel: ObservableObject {
             currentPath = root
             entries = rows
             service = connected
+            DiagnosticStore.shared.record(.connectSucceeded, values: ["rows": rows.count])
             if let saved = UserDefaults.standard.data(forKey: "selection." + settings.identity),
                let decoded = try? JSONDecoder().decode([AlbumEntry].self, from: saved) {
                 selections = Dictionary(decoded.filter { AlbumPath.contains(root, $0.path) }.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
             } else { selections = [:] }
             favorites = Set(UserDefaults.standard.stringArray(forKey: "favorites." + settings.identity) ?? [])
         } catch {
+            DiagnosticStore.shared.recordError(.connectFailed, error: error)
             self.error = "連線失敗：\(error.localizedDescription)\n請確認手機網路、主機／分享名稱及帳號密碼。電腦的 Z: 連線不會自動授權給手機。"
         }
     }
@@ -84,7 +88,10 @@ final class LibraryModel: ObservableObject {
             guard navigationID == ticket else { return }
             currentPath = path
             entries = rows
-        } catch { if navigationID == ticket { self.error = error.localizedDescription } }
+        } catch {
+            DiagnosticStore.shared.recordError(.navigationFailed, error: error)
+            if navigationID == ticket { self.error = error.localizedDescription }
+        }
     }
 
     var canGoUp: Bool { currentPath != root }
@@ -109,6 +116,7 @@ final class LibraryModel: ObservableObject {
     func removeSelection(_ path: String) { selections.removeValue(forKey: path); persistSelection() }
     func clearSelection() { selections = [:]; persistSelection() }
     private func persistSelection() {
+        DiagnosticStore.shared.record(.selectionChanged, values: ["selected": selections.count])
         if let data = try? JSONEncoder().encode(Array(selections.values)) {
             UserDefaults.standard.set(data, forKey: "selection." + settings.identity)
         }
@@ -120,6 +128,7 @@ final class LibraryModel: ObservableObject {
     }
 
     func disconnect() {
+        DiagnosticStore.shared.record(.disconnected)
         cancelScan()
         navigationID = UUID()
         service = nil
@@ -128,10 +137,14 @@ final class LibraryModel: ObservableObject {
         busy = false
     }
 
-    func cancelScan() { scanID = UUID(); scanTask?.cancel(); scanTask = nil; showScan = false }
+    func cancelScan() {
+        if scanTask != nil && !scanFinished { DiagnosticStore.shared.record(.scanCancelled) }
+        scanID = UUID(); scanTask?.cancel(); scanTask = nil; showScan = false
+    }
 
     func scan(filter: PlaybackFilter, random: Bool, favoritesOnly: Bool, force: Bool = false) {
         guard let service, !selections.isEmpty else { return }
+        DiagnosticStore.shared.record(.scanStarted, values: ["selected": selections.count, "force": force ? 1 : 0])
         scanTask?.cancel()
         let ticket = UUID()
         scanID = ticket
@@ -140,7 +153,7 @@ final class LibraryModel: ObservableObject {
         scanCount = 0
         scanFolders = 0
         scanPath = ""
-        scanNote = force ? "正在重新掃描…" : "正在讀取已儲存清單；首次使用才會掃描。"
+        scanNote = force ? "正在重新掃描…" : "正在整理已儲存清單；只補掃尚未掃過的資料夾。"
         warnings = []
         warningCount = 0
         playlist = []
@@ -148,8 +161,9 @@ final class LibraryModel: ObservableObject {
         let favoritePaths = favorites
         scanTask = Task {
             do {
-                let key = try ScanIndex.key(settings: settings, chosen: chosen)
-                let result = try await scanIndex.prepare(key: key, chosen: chosen, force: force, list: { path in
+                let key = try ScanIndex.scopeKey(settings: settings)
+                let legacyKey = try ScanIndex.key(settings: settings, chosen: chosen)
+                let result = try await scanIndex.prepare(key: key, chosen: chosen, force: force, legacyKey: legacyKey, list: { path in
                     #if DEBUG && targetEnvironment(simulator)
                     if SimulatorFixtures.active { return try await SimulatorFixtures.list(path) }
                     #endif
@@ -158,7 +172,7 @@ final class LibraryModel: ObservableObject {
                     await MainActor.run {
                         guard self.scanID == ticket else { return }
                         self.scanCount = count; self.scanFolders = folders; self.scanPath = path
-                        self.scanNote = "正在掃描；完成後會自動記住清單。"
+                        self.scanNote = "正在整理清單；已掃過的資料夾直接重用，未掃過的才補掃。"
                     }
                 })
                 try Task.checkCancellation()
@@ -173,8 +187,12 @@ final class LibraryModel: ObservableObject {
                     ? "\(result.reused ? "使用已儲存清單" : "清單已儲存") · \(result.snapshot.date.formatted(date: .abbreviated, time: .shortened))\n電腦新增、移動或刪除檔案後，請按「重新掃描」。"
                     : "掃描未完整完成或無法儲存；本次仍可播放已找到項目，原有完整清單保留。"
                 scanFinished = true
+                DiagnosticStore.shared.record(.scanFinished, values: ["media": scanCount, "folders": scanFolders, "reused": result.reused ? 1 : 0, "warnings": warningCount])
             } catch is CancellationError { }
-            catch { if scanID == ticket { self.error = error.localizedDescription; showScan = false } }
+            catch {
+                DiagnosticStore.shared.recordError(.scanFailed, error: error)
+                if scanID == ticket { self.error = error.localizedDescription; showScan = false }
+            }
         }
     }
 

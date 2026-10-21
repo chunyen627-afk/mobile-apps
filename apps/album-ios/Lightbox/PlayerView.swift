@@ -11,7 +11,8 @@ struct PlayerView: View {
     @State private var seekValue = 0.0
     @State private var seekingVideo = false
     @State private var videoSeekValue = 0.0
-    @AppStorage("fillVideoScreen") private var fillVideo = true
+    // New preference key resets the old default crop mode when upgrading.
+    @AppStorage("cropVideoToFill") private var fillVideo = false
 
     init(entries: [AlbumEntry], service: SMBService, interval: Double, library: LibraryModel) {
         self.library = library

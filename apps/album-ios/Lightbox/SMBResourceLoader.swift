@@ -58,6 +58,7 @@ final class SMBResourceLoader: NSObject, AVAssetResourceLoaderDelegate, @uncheck
                     self.pump(request, id: id, offset: offset + Int64(data.count), end: end)
                 }
             } catch {
+                if !(error is CancellationError) { DiagnosticStore.shared.recordError(.mediaReadFailed, error: error) }
                 self?.queue.async { [weak self] in
                     if !request.isCancelled && !request.isFinished { request.finishLoading(with: error) }
                     self?.tasks.removeValue(forKey: id)

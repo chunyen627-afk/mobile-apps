@@ -74,7 +74,7 @@ final class ScanIndexTests: XCTestCase {
         let dir = directory()
         defer { try? FileManager.default.removeItem(at: dir) }
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        try Data("invalid".utf8).write(to: dir.appendingPathComponent("test.json"))
+        try Data("invalid".utf8).write(to: dir.appendingPathComponent("test.catalog.json"))
         let fixture = DirectoryFixture()
         let result = try await ScanIndex(directory: dir).prepare(key: "test", chosen: [root], list: { await fixture.list($0) })
         XCTAssertFalse(result.reused)
@@ -87,9 +87,78 @@ final class ScanIndexTests: XCTestCase {
         let first = try ScanIndex.key(settings: settings, chosen: [root, other])
         XCTAssertEqual(first, try ScanIndex.key(settings: settings, chosen: [other, root]))
         XCTAssertNotEqual(first, try ScanIndex.key(settings: settings, chosen: [root]))
+        XCTAssertEqual(try ScanIndex.scopeKey(settings: settings), try ScanIndex.key(settings: settings, chosen: []))
         settings.username = "another-account"
         XCTAssertNotEqual(first, try ScanIndex.key(settings: settings, chosen: [root, other]))
         settings.username = ""; settings.share = "OtherPhotos"
         XCTAssertNotEqual(first, try ScanIndex.key(settings: settings, chosen: [root, other]))
+    }
+
+    func testSelectionSubsetsAndNewCombinationsReuseDirectoryListings() async throws {
+        let dir = directory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let other = AlbumEntry(path: "album2", name: "album2", kind: .folder, size: 0)
+        let fixture = DirectoryFixture()
+        let index = ScanIndex(directory: dir)
+        _ = try await index.prepare(key: "scope", chosen: [root, other], list: { await fixture.list($0) })
+        for selection in [[root], [other], [root, other], []] {
+            let result = try await ScanIndex(directory: dir).prepare(key: "scope", chosen: selection, list: { _ in XCTFail("selection changes must not scan"); return [] })
+            XCTAssertTrue(result.reused)
+            XCTAssertEqual(result.snapshot.entries.count, selection.count * 2)
+        }
+        let calls = await fixture.calls
+        XCTAssertEqual(calls, 2)
+    }
+
+    func testSelectingParentOnlyScansUnknownFoldersAndPreservesEmptyFolders() async throws {
+        let dir = directory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let child = AlbumEntry(path: "album/child", name: "child", kind: .folder, size: 0)
+        let empty = AlbumEntry(path: "album/empty", name: "empty", kind: .folder, size: 0)
+        let fixture = DirectoryFixture()
+        let index = ScanIndex(directory: dir)
+        _ = try await index.prepare(key: "scope", chosen: [child], list: { await fixture.list($0) })
+        let expanded = try await index.prepare(key: "scope", chosen: [root], list: { path in
+            if path == "album" { return [child, empty] }
+            if path == empty.path { return [] }
+            XCTFail("known child must not scan"); return []
+        })
+        XCTAssertFalse(expanded.reused)
+        XCTAssertEqual(expanded.snapshot.entries.count, 2)
+        let subset = try await ScanIndex(directory: dir).prepare(key: "scope", chosen: [child, empty], list: { _ in XCTFail("known descendants must not scan"); return [] })
+        XCTAssertTrue(subset.reused)
+        XCTAssertEqual(subset.snapshot.folders, 2)
+    }
+
+    func testRefreshChildUpdatesParentWithoutLosingSiblingCache() async throws {
+        let dir = directory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let child = AlbumEntry(path: "album/child", name: "child", kind: .folder, size: 0)
+        let sibling = AlbumEntry(path: "album/sibling", name: "sibling", kind: .folder, size: 0)
+        let fixture = DirectoryFixture()
+        let index = ScanIndex(directory: dir)
+        _ = try await index.prepare(key: "scope", chosen: [root], list: { path in
+            if path == "album" { return [child, sibling] }
+            return await fixture.list(path)
+        })
+        _ = try await index.prepare(key: "scope", chosen: [child], force: true, list: { _ in [] })
+        let parent = try await index.prepare(key: "scope", chosen: [root], list: { _ in XCTFail("refresh must update parent and preserve sibling"); return [] })
+        XCTAssertEqual(parent.snapshot.entries.map(\.path).sorted(), ["album/sibling/a.jpg", "album/sibling/b.mov"])
+    }
+
+    func testLegacyExactSelectionMigratesForSubsequentSubsets() async throws {
+        let dir = directory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let media = AlbumEntry(path: "album/child/a.jpg", name: "a.jpg", kind: .photo, size: 10)
+        try JSONEncoder().encode(ScanSnapshot(entries: [media], folders: 3)).write(to: dir.appendingPathComponent("legacy.json"))
+        let migrated = try await ScanIndex(directory: dir).prepare(key: "scope", chosen: [root], legacyKey: "legacy", list: { _ in XCTFail("must migrate"); return [] })
+        XCTAssertTrue(migrated.reused)
+        let child = AlbumEntry(path: "album/child", name: "child", kind: .folder, size: 0)
+        let subset = try await ScanIndex(directory: dir).prepare(key: "scope", chosen: [child], list: { _ in XCTFail("must reuse migrated subtree"); return [] })
+        XCTAssertEqual(subset.snapshot.entries, [media])
+        let empty = AlbumEntry(path: "album/empty", name: "empty", kind: .folder, size: 0)
+        let noMedia = try await ScanIndex(directory: dir).prepare(key: "scope", chosen: [empty], list: { _ in XCTFail("complete legacy root proves empty subtree"); return [] })
+        XCTAssertTrue(noMedia.snapshot.entries.isEmpty)
     }
 }

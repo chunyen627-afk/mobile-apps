@@ -27,7 +27,7 @@ final class AlbumUITests: XCTestCase {
             app.buttons["開始播放"].tap()
             let play = app.buttons[pass == 1 ? "播放 3 個項目" : "播放 4 個項目"]
             XCTAssertTrue(play.waitForExistence(timeout: 10))
-            if pass == 2 { XCTAssertTrue(savedNote.waitForExistence(timeout: 3)) }
+            if pass > 0 { XCTAssertTrue(savedNote.waitForExistence(timeout: 3)) }
             capture("scan-pass-\(pass)")
             play.tap()
             XCTAssertTrue(app.buttons["leavePlayer"].waitForExistence(timeout: 5))
@@ -72,7 +72,11 @@ final class AlbumUITests: XCTestCase {
         XCTAssertTrue(app.buttons["播放 1 個項目"].waitForExistence(timeout: 10))
         app.buttons["播放 1 個項目"].tap()
         XCTAssertTrue(app.sliders["影片進度"].waitForExistence(timeout: 8))
-        capture("video-fill-portrait-controls")
+        capture("video-fit-portrait-default")
+        waitUntilGone(app.buttons["leavePlayer"], timeout: 8)
+        assertVideoBands(dark: true)
+        centerTap()
+        app.buttons["填滿螢幕（會裁切邊緣）"].tap()
         waitUntilGone(app.buttons["leavePlayer"], timeout: 8)
         assertVideoBands(dark: false)
         capture("video-fill-portrait-hidden")
@@ -100,6 +104,15 @@ final class AlbumUITests: XCTestCase {
         waitUntilGone(app.buttons["leavePlayer"], timeout: 8)
         assertVideoBands(dark: false)
         capture("video-fill-landscape-hidden")
+    }
+
+    func testDiagnosticsCanPrepareExportWithoutSMBTransfer() {
+        app.buttons["診斷紀錄"].tap()
+        XCTAssertTrue(app.buttons["標記剛剛發生問題"].waitForExistence(timeout: 3))
+        app.buttons["標記剛剛發生問題"].tap()
+        app.buttons["準備診斷檔"].tap()
+        XCTAssertTrue(app.buttons["分享診斷檔"].waitForExistence(timeout: 5))
+        capture("diagnostics-export-ready")
     }
 
     private var savedNote: XCUIElement { app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "使用已儲存清單")).firstMatch }
