@@ -143,6 +143,15 @@ final class AlbumUITests: XCTestCase {
             XCTAssertEqual(XCTWaiter.wait(for: [reached], timeout: 10), .completed)
             capture("avi-paused-seek-\(pass)")
             app.buttons["繼續"].tap()
+            // Wait past the temporary seek display. This must be the decoder's
+            // advancing clock, not merely the slider's requested position.
+            Thread.sleep(forTimeInterval: 3.5)
+            centerTap()
+            let resumed = XCTNSPredicateExpectation(predicate: NSPredicate { [self] _, _ in
+                let parts = app.staticTexts["videoTime"].label.split(separator: ":").compactMap { Int($0) }
+                return parts.count == 2 && (17...24).contains(parts[0] * 60 + parts[1])
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [resumed], timeout: 3), .completed)
             XCUIDevice.shared.orientation = .landscapeLeft
             centerTap()
             app.buttons["填滿螢幕（會裁切邊緣）"].tap()

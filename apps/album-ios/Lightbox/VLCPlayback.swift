@@ -19,6 +19,8 @@ final class VLCPlayback {
     private var stopped = false
     private var paused: Bool
     private var crop = ""
+    private var requestedPosition: Double?
+    private var seekDeadline = Date.distantPast
 
     static func prefersVLC(_ name: String) -> Bool {
         !["mp4", "mov", "m4v"].contains((name as NSString).pathExtension.lowercased())
@@ -52,7 +54,14 @@ final class VLCPlayback {
                 let state = self.player.state
                 if self.paused && self.player.isPlaying { self.player.pause() }
                 let media = self.player.media
-                let value = Update(position: max(0, Double(self.player.time.intValue) / 1000),
+                let clock = max(0, Double(self.player.time.intValue) / 1000)
+                // VLCKit caches time notifications; a paused seek renders the new
+                // frame without refreshing that clock until playback resumes.
+                if let requested = self.requestedPosition,
+                   abs(clock - requested) < 1 || (!self.paused && Date() > self.seekDeadline) {
+                    self.requestedPosition = nil
+                }
+                let value = Update(position: self.requestedPosition ?? clock,
                                    duration: max(0, Double(media?.length.intValue ?? 0) / 1000),
                                    visible: (media?.numberOfDisplayedPictures ?? 0) > 0,
                                    buffering: state == .opening || state == .buffering,
@@ -64,11 +73,14 @@ final class VLCPlayback {
     }
     func setPaused(_ paused: Bool) {
         self.paused = paused
+        if !paused { seekDeadline = Date().addingTimeInterval(3) }
         guard started, !stopped else { return }
         if paused { player.pause() } else { player.play() }
     }
     func seek(_ seconds: Double) {
         guard !stopped, player.isSeekable, seconds.isFinite else { return }
+        requestedPosition = max(0, seconds)
+        seekDeadline = Date().addingTimeInterval(3)
         player.time = VLCTime(int: Int32(min(Double(Int32.max), max(0, seconds * 1000))))
     }
     func layout(size: CGSize, fill: Bool) {
