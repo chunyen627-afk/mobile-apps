@@ -4,7 +4,7 @@
 
 | App | 平台 | 用途 | 驗證狀態 |
 | --- | --- | --- | --- |
-| [光盒相簿](apps/album-ios) | iPhone / iOS 17+ | 透過 SMB 瀏覽電腦相簿、勾選資料夾或影片、遞迴掃描與全螢幕播放 | 首次編譯及 5 項單元測試通過；IPA 封裝修正版重建中，實機待驗 |
+| [光盒相簿](apps/album-ios) | iPhone / iOS 17+ | 透過 SMB 瀏覽電腦相簿、勾選資料夾或影片、遞迴掃描與全螢幕播放 | 編譯、5 項單元測試與修正版 IPA 封裝檢查通過；實機安裝與功能待驗 |
 
 ## 目錄
 
@@ -19,7 +19,7 @@ apps/
 
 ## 相簿下載與安裝
 
-前往 [Build Album iOS](https://github.com/chunyen627-afk/mobile-apps/actions/workflows/album-ios.yml)，在修正版成功執行的 Artifacts 下載 `Lightbox-unsigned-ipa`。[首次執行](https://github.com/chunyen627-afk/mobile-apps/actions/runs/39531617330) 的 5 項測試通過，但產物缺少 SMB 動態程式庫，不應安裝；修正版重建中。
+前往 [已驗證的修正版編譯](https://github.com/chunyen627-afk/mobile-apps/actions/runs/39532413253)，在 Artifacts 下載 `Lightbox-unsigned-ipa`。Xcode 編譯、5 項單元測試與 SMB 動態程式庫封裝檢查均通過。產物到期時可從 [Build Album iOS](https://github.com/chunyen627-afk/mobile-apps/actions/workflows/album-ios.yml) 手動重建。首次執行的舊產物缺少程式庫，不應安裝。
 
 產物為**未簽署 IPA**，需用自己的 Apple 帳號簽署後才能裝到 iPhone。Windows 可使用 Sideloadly；免費帳號簽署需每 7 天續簽。編譯成功不代表手機上的 SMB 連線與播放已經通過實測。完整功能、設定與限制請看 [相簿 README](apps/album-ios/README.md)。
 

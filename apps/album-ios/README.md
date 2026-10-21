@@ -2,9 +2,11 @@
 
 SwiftUI + SMB2/3 的個人相簿。目標：iPhone 17、iOS 27、6.3 吋；最低 iOS 17。
 
-**狀態：首次 Xcode 編譯與 5 項模擬器單元測試通過；IPA 檢查發現缺少 SMB 動態程式庫，已加入嵌入設定與封裝檢查，修正版重建中。尚未完成 iPhone 安裝與實測。**
+**狀態：修正版 Xcode 編譯、5 項模擬器單元測試與 IPA 封裝檢查通過。已產生未簽署 IPA，尚未完成 iPhone 安裝與實測。**
 
-首次測試證據：[GitHub Actions #1](https://github.com/chunyen627-afk/mobile-apps/actions/runs/39531617330)，Xcode 16.4、iPhone 16 Pro / iOS 18.5 模擬器，5 項單元測試、0 失敗。這不是 iPhone 17 / iOS 27 實測；首次產物缺少動態程式庫，不應安裝。
+測試證據：[修正版 GitHub Actions](https://github.com/chunyen627-afk/mobile-apps/actions/runs/39532413253)，來源 `342dc73e6bffc6e17aca47c47babb55c7f37c1b4`，Xcode 16.4、iPhone 16 Pro / iOS 18.5 模擬器，5 項單元測試、0 失敗。這不是 iPhone 17 / iOS 27 實機或 UI 操作測試。首次產物缺少動態程式庫，不應安裝；修正版已確認包含 `Frameworks/AMSMB2.framework/AMSMB2`。
+
+修正版 IPA：462,276 bytes；SHA256：`123c49e6c13fc6fa64081b9b6ba07274d8b4fc6d57d93b50da3e6974ca43a59c`。下載後已驗證 artifact 雜湊、IPA ZIP 完整性、Bundle ID 與程式庫存在。後續重建的雜湊可能不同。
 
 ## 使用方式
 
@@ -60,4 +62,4 @@ Tests/SelectionTests.swift 驗證選取去重、根目錄包含規則、路徑�
 
 ## 更新紀錄
 
-- 2026-10-21：原生相簿原型移入 `mobile-apps/apps/album-ios`，加入獨立 GitHub Actions 編譯流程；首次編譯與 5 項單元測試通過，修正 IPA 缺少 SMB 動態程式庫的封裝設定；實機待驗。
+- 2026-10-21：原生相簿原型移入 `mobile-apps/apps/album-ios`，加入獨立 GitHub Actions 編譯流程；修正 IPA 缺少 SMB 動態程式庫的封裝設定，修正版編譯、5 項單元測試與封裝檢查通過；實機待驗。
