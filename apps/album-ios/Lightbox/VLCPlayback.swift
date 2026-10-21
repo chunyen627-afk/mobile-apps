@@ -18,7 +18,6 @@ final class VLCPlayback {
     private var started = false
     private var stopped = false
     private var paused: Bool
-    private var crop = ""
     private var requestedPosition: Double?
     private var seekDeadline = Date.distantPast
 
@@ -83,15 +82,6 @@ final class VLCPlayback {
         seekDeadline = Date().addingTimeInterval(3)
         player.time = VLCTime(int: Int32(min(Double(Int32.max), max(0, seconds * 1000))))
     }
-    func layout(size: CGSize, fill: Bool) {
-        guard !stopped, size.width > 0, size.height > 0 else { return }
-        let next = fill ? "\(Int(size.width)):\(Int(size.height))" : ""
-        guard next != crop else { return }
-        crop = next
-        player.scaleFactor = 0
-        if next.isEmpty { player.videoCropGeometry = nil }
-        else { next.withCString { player.videoCropGeometry = UnsafeMutablePointer(mutating: $0) } }
-    }
     func stop() {
         guard !stopped else { return }
         stopped = true
@@ -104,13 +94,10 @@ final class VLCPlayback {
 
 struct VLCSurface: UIViewRepresentable {
     let playback: VLCPlayback
-    let fill: Bool
     func makeUIView(context: Context) -> VLCDrawableView { VLCDrawableView() }
     func updateUIView(_ view: VLCDrawableView, context: Context) {
         view.playback = playback
-        view.fill = fill
         playback.attach(view)
-        playback.layout(size: view.bounds.size, fill: fill)
     }
     static func dismantleUIView(_ view: VLCDrawableView, coordinator: ()) {
         view.playback?.stop(); view.playback = nil
@@ -119,11 +106,6 @@ struct VLCSurface: UIViewRepresentable {
 
 final class VLCDrawableView: UIView {
     weak var playback: VLCPlayback?
-    var fill = false
     override init(frame: CGRect) { super.init(frame: frame); clipsToBounds = true; backgroundColor = .black }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        playback?.layout(size: bounds.size, fill: fill)
-    }
 }

@@ -37,7 +37,6 @@ final class LibraryModel: ObservableObject {
             selections = Dictionary(uniqueKeysWithValues: entries.map { ($0.path, $0) })
             UserDefaults.standard.set(false, forKey: "randomPlayback")
             UserDefaults.standard.set(2.0, forKey: "photoInterval")
-            UserDefaults.standard.set(false, forKey: "cropVideoToFill")
             return
         }
         #endif

@@ -9,7 +9,8 @@ final class AlbumUITests: XCTestCase {
         XCUIDevice.shared.orientation = .portrait
         app = XCUIApplication()
         app.launchEnvironment["LIGHTBOX_UI_TEST"] = "1"
-        app.launchArguments = ["-AppleLanguages", "(zh-Hant)", "-AppleLocale", "zh_TW"]
+        // An old saved crop preference must no longer affect playback.
+        app.launchArguments = ["-AppleLanguages", "(zh-Hant)", "-AppleLocale", "zh_TW", "-cropVideoToFill", "YES"]
         app.launch()
         XCTAssertTrue(app.buttons["開始播放"].waitForExistence(timeout: 60))
     }
@@ -66,7 +67,7 @@ final class AlbumUITests: XCTestCase {
         capture("photo-landscape")
     }
 
-    func testVideoFillFitHideRotateAndSeek() {
+    func testVideoAlwaysFitsHideRotateAndSeek() {
         app.buttons["勾選 測試照片"].tap()
         app.buttons["開始播放"].tap()
         XCTAssertTrue(app.buttons["播放 1 個項目"].waitForExistence(timeout: 10))
@@ -74,20 +75,10 @@ final class AlbumUITests: XCTestCase {
         XCTAssertTrue(app.sliders["影片進度"].waitForExistence(timeout: 8))
         capture("video-fit-portrait-default")
         waitUntilGone(app.buttons["leavePlayer"], timeout: 8)
-        assertVideoBands(dark: true)
-        centerTap()
-        app.buttons["填滿螢幕（會裁切邊緣）"].tap()
-        waitUntilGone(app.buttons["leavePlayer"], timeout: 8)
-        assertVideoBands(dark: false)
-        capture("video-fill-portrait-hidden")
-        centerTap()
-        XCTAssertTrue(app.buttons["完整顯示影片"].waitForExistence(timeout: 2))
-        app.buttons["完整顯示影片"].tap()
-        waitUntilGone(app.buttons["leavePlayer"], timeout: 8)
-        assertVideoBands(dark: true)
+        assertVideoFits(aspect: 16.0 / 9.0)
         capture("video-fit-portrait")
         centerTap()
-        app.buttons["填滿螢幕（會裁切邊緣）"].tap()
+        XCTAssertFalse(app.buttons["填滿螢幕（會裁切邊緣）"].exists)
         XCUIDevice.shared.orientation = .landscapeLeft
         centerTap()
         XCTAssertTrue(app.sliders["影片進度"].waitForExistence(timeout: 3))
@@ -99,11 +90,11 @@ final class AlbumUITests: XCTestCase {
             return (8...14).contains(parts[0] * 60 + parts[1])
         }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [seekReached], timeout: 8), .completed, "The 36-second fixture must actually seek near 30%, not return to zero")
-        capture("video-fill-landscape-seek")
+        capture("video-fit-landscape-seek")
         app.buttons["繼續"].tap()
         waitUntilGone(app.buttons["leavePlayer"], timeout: 8)
-        assertVideoBands(dark: false)
-        capture("video-fill-landscape-hidden")
+        assertVideoFits(aspect: 16.0 / 9.0)
+        capture("video-fit-landscape-hidden")
     }
 
     func testDiagnosticsCanPrepareExportWithoutSMBTransfer() {
@@ -138,7 +129,7 @@ final class AlbumUITests: XCTestCase {
             XCTAssertTrue(app.otherElements["vlcVideoSurface"].waitForExistence(timeout: 10))
             XCTAssertTrue(app.sliders["影片進度"].waitForExistence(timeout: 15))
             waitUntilGone(app.buttons["leavePlayer"], timeout: 8)
-            assertVideoBands(dark: true)
+            assertVideoFits(aspect: pass == 0 ? 16.0 / 9.0 : 4.0 / 3.0)
             capture("avi-fit-playing-\(pass)")
             centerTap()
             app.buttons["暫停"].tap()
@@ -161,12 +152,11 @@ final class AlbumUITests: XCTestCase {
             XCTAssertEqual(XCTWaiter.wait(for: [resumed], timeout: 3), .completed)
             XCUIDevice.shared.orientation = .landscapeLeft
             centerTap()
-            app.buttons["填滿螢幕（會裁切邊緣）"].tap()
+            XCTAssertFalse(app.buttons["填滿螢幕（會裁切邊緣）"].exists)
             waitUntilGone(app.buttons["leavePlayer"], timeout: 8)
-            assertVideoBands(dark: false)
-            capture("avi-landscape-fill-\(pass)")
+            assertVideoFits(aspect: pass == 0 ? 16.0 / 9.0 : 4.0 / 3.0)
+            capture("avi-landscape-fit-\(pass)")
             centerTap()
-            app.buttons["完整顯示影片"].tap()
             app.buttons["leavePlayer"].tap()
             XCTAssertTrue(app.buttons["開始播放"].waitForExistence(timeout: 5))
             XCUIDevice.shared.orientation = .portrait
@@ -188,22 +178,43 @@ final class AlbumUITests: XCTestCase {
         add(attachment)
     }
 
-    private func assertVideoBands(dark: Bool) {
+    private func assertVideoFits(aspect: CGFloat) {
+        // Rotation/rendering can settle after XCUITest reports idle.
+        let rendered = XCTNSPredicateExpectation(predicate: NSPredicate { [self] _, _ in
+            videoFits(aspect: aspect)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [rendered], timeout: 5), .completed,
+            "Video must reach the aspect-fit bounds, with black only outside the complete frame")
+    }
+
+    private func videoFits(aspect: CGFloat) -> Bool {
         let screenshot = XCUIScreen.main.screenshot().image
-        let small = UIGraphicsImageRenderer(size: CGSize(width: 16, height: 16)).image { _ in
-            screenshot.draw(in: CGRect(x: 0, y: 0, width: 16, height: 16))
+        let side = 128
+        let small = UIGraphicsImageRenderer(size: CGSize(width: side, height: side)).image { _ in
+            screenshot.draw(in: CGRect(x: 0, y: 0, width: side, height: side))
         }
-        var pixels = [UInt8](repeating: 0, count: 16 * 16 * 4)
+        var pixels = [UInt8](repeating: 0, count: side * side * 4)
         pixels.withUnsafeMutableBytes { bytes in
-            let context = CGContext(data: bytes.baseAddress, width: 16, height: 16, bitsPerComponent: 8, bytesPerRow: 64,
+            let context = CGContext(data: bytes.baseAddress, width: side, height: side, bitsPerComponent: 8, bytesPerRow: side * 4,
                 space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.premultipliedLast.rawValue)!
-            context.draw(small.cgImage!, in: CGRect(x: 0, y: 0, width: 16, height: 16))
+            context.draw(small.cgImage!, in: CGRect(x: 0, y: 0, width: side, height: side))
         }
-        for row in [4, 11] {
-            let offset = (row * 16 + 8) * 4
-            let brightness = pixels[offset..<offset + 3].map(Int.init).max()!
-            if dark { XCTAssertLessThan(brightness, 12, "Fit must preserve the complete 16:9 frame with letterboxing") }
-            else { XCTAssertGreaterThan(brightness, 40, "Fill must render video beyond the center without app-imposed black bands") }
+        func brightness(_ x: CGFloat, _ y: CGFloat) -> Int {
+            let col = min(side - 1, max(0, Int(x * CGFloat(side))))
+            let row = min(side - 1, max(0, Int(y * CGFloat(side))))
+            let offset = (row * side + col) * 4
+            return pixels[offset..<offset + 3].map(Int.init).max()!
         }
+        let screenAspect = screenshot.size.width / screenshot.size.height
+        let width: CGFloat = min(1, aspect / screenAspect)
+        let height: CGFloat = min(1, screenAspect / aspect)
+        let x = (1 - width) / 2, y = (1 - height) / 2
+        // Sample inside all four edges: a blank or undersized frame must fail.
+        let lit = [brightness(x + width * 0.03, 0.5), brightness(x + width * 0.97, 0.5),
+                   brightness(0.5, y + height * 0.03), brightness(0.5, y + height * 0.97)]
+        guard lit.allSatisfy({ $0 > 40 }) else { return false }
+        if x > 0.02 { return brightness(x / 2, 0.5) < 12 && brightness(1 - x / 2, 0.5) < 12 }
+        if y > 0.02 { return brightness(0.5, y / 2) < 12 && brightness(0.5, 1 - y / 2) < 12 }
+        return true
     }
 }

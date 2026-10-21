@@ -11,8 +11,6 @@ struct PlayerView: View {
     @State private var seekValue = 0.0
     @State private var seekingVideo = false
     @State private var videoSeekValue = 0.0
-    // New preference key resets the old default crop mode when upgrading.
-    @AppStorage("cropVideoToFill") private var fillVideo = false
 
     init(entries: [AlbumEntry], service: SMBService, interval: Double, library: LibraryModel) {
         self.library = library
@@ -37,12 +35,12 @@ struct PlayerView: View {
                 }.ignoresSafeArea()
             }
             if let player = playback.player {
-                VideoSurface(player: player, fill: fillVideo) { playback.videoBecameVisible(player) }
+                VideoSurface(player: player) { playback.videoBecameVisible(player) }
                     .ignoresSafeArea().opacity(playback.videoReady ? 1 : 0)
                     .accessibilityIdentifier("videoSurface")
             }
             if let vlc = playback.vlc {
-                VLCSurface(playback: vlc, fill: fillVideo)
+                VLCSurface(playback: vlc)
                     .ignoresSafeArea().opacity(playback.videoReady ? 1 : 0)
                     .accessibilityIdentifier("vlcVideoSurface")
             }
@@ -65,11 +63,6 @@ struct PlayerView: View {
                     HStack {
                         Button { playback.stop(); dismiss() } label: { Label("返回", systemImage: "chevron.left") }.accessibilityIdentifier("leavePlayer")
                         Spacer()
-                        if playback.entry.kind == .video {
-                            Button { fillVideo.toggle(); playback.revealControls() } label: {
-                                Image(systemName: fillVideo ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
-                            }.accessibilityLabel(fillVideo ? "完整顯示影片" : "填滿螢幕（會裁切邊緣）")
-                        }
                         Button { library.toggleFavorite(playback.entry.path); playback.revealControls() } label: {
                             Image(systemName: library.favorites.contains(playback.entry.path) ? "heart.fill" : "heart").foregroundStyle(library.favorites.contains(playback.entry.path) ? .pink : .white)
                         }.accessibilityLabel("收藏此項目")
@@ -78,7 +71,7 @@ struct PlayerView: View {
                     VStack(spacing: 12) {
                         Text(playback.entry.name).font(.caption).lineLimit(1)
                         if playback.entry.kind == .video {
-                            Text(fillVideo ? "填滿螢幕 · 邊緣可能裁切" : "完整顯示 · 保留原始比例").font(.caption2)
+                            Text("完整顯示 · 保留原始比例").font(.caption2)
                             if playback.videoDuration > 0 {
                                 HStack {
                                     Text(timeLabel(seekingVideo ? videoSeekValue : playback.videoPosition)).monospacedDigit().accessibilityIdentifier("videoTime")
@@ -130,14 +123,13 @@ struct PlayerView: View {
 /// No native controls or reserved margins: the app's overlay owns visibility and seeking.
 private struct VideoSurface: UIViewRepresentable {
     let player: AVPlayer
-    let fill: Bool
     let ready: () -> Void
 
     func makeUIView(context: Context) -> VideoLayerView { VideoLayerView() }
     func updateUIView(_ view: VideoLayerView, context: Context) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        view.videoLayer.videoGravity = fill ? .resizeAspectFill : .resizeAspect
+        view.videoLayer.videoGravity = .resizeAspect
         CATransaction.commit()
         view.onReady = ready
         if view.videoLayer.player !== player {
