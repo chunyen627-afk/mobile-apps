@@ -120,6 +120,8 @@ AVI 模擬器素材為 FFmpeg 產生的 30 秒色彩測試圖與 440 Hz 音訊�
 
 SideStore 首次開啟另遇到啟動失敗。USB 取得的 ConsoleLogs 明確記錄 `The app extension is missing a valid provisioning profile.`，對應安裝包唯一的 WidgetKit 小工具。Sideloadly 排除此小工具後以相同帳號及 Bundle ID 覆蓋安裝，使用者確認可進主畫面；沒有撤銷憑證。這僅確認啟動問題排除，尚未驗證登入、續簽或自動化；此安裝暫時不含桌面小工具。
 
+後續登入實測回覆 `-80045`，USB 紀錄確認來自 Apple 驗證端。正在依 [SideStore 問題回報](https://github.com/SideStore/SideStore/issues/1665) 檢查 Anisette 模式及伺服器，登入及手機端續簽尚未完成。相簿掃描索引、偏好與診斷已額外保存於本機，未上傳私人資料；0.3.1 IPA 已放入手機供後續匯入，這不代表已遷移至 SideStore。
+
 Windows 請依 [Sideloadly 官方說明](https://sideloadly.io/) 安裝其指定的網頁版 iTunes、iCloud 與 Sideloadly。iTunes 在此提供 Apple 手機通訊元件，無需用來聽音樂；Apple Devices 的備份與同步功能不包含替未簽署 IPA 做開發簽署。安裝元件不代表要啟用 iCloud 照片同步。
 
 本流程不更新或還原 iOS。iTunes 提示系統更新時選取消／稍後，由使用者日後在手機上決定升級。手機安裝 App 仍需完成信任電腦、簽署帳號驗證及開發者模式；這些與升級 iOS 是不同操作。

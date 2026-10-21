@@ -120,6 +120,8 @@ SideStore 是另一種手機端續簽方式，首次仍需電腦安裝與配對�
 
 版本選擇以當日官方公告為準：2026-10-21 查到 SideStore 0.6.4 及以前有登入故障，官方 latest 為 0.7.0-alpha 修正版；「Stable」按鈕名稱不代表下載內容沒有 alpha 標記。遇到登入 WebSocket 中斷先檢查登入輔助伺服器，不要直接判斷密碼錯誤。[版本公告](https://github.com/SideStore/SideStore/releases/tag/0.7.0-alpha)。
 
+0.7.0-alpha 也不保證目前可以登入：2026 年 10 月另有 Apple 登入端回覆 `-80045` 的回報。先確認當前使用裝置端或遠端 Anisette，依官方倉庫的最新排查資訊調整並實測；不要反覆更換密碼或撤銷憑證來處理尚未定位的登入錯誤。[登入問題回報](https://github.com/SideStore/SideStore/issues/1665)。
+
 切換簽署工具若提示憑證數量上限，不要直接撤銷現有憑證。它可能正是現有 App 使用的憑證；先比對，再準備同帳號、同 Bundle Identifier 的覆蓋重簽與資料保留方式。配對檔含敏感裝置信任資料，不上傳公開倉庫。
 
 SideStore 安裝成功不等於可啟動。若改用其他簽署工具後提示缺少 profile，先讀完整錯誤，區分主程式、擴充套件與裝置配對資料；不要一律當成密碼或 VPN 錯誤。官方啟動排錯優先要求使用 iloader。若確定只有非必要小工具缺少描述檔，可評估排除該小工具後覆蓋安裝，但須清楚記錄功能差異，重新驗證開啟、續簽及自動化。[SideStore 啟動排錯](https://docs.sidestore.io/docs/troubleshooting/common-issues#unable-to-launch-sidestore)。
