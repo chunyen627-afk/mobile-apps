@@ -2,9 +2,11 @@
 
 SwiftUI + SMB2/3 的個人相簿。目標：iPhone 17、iOS 27、6.3 吋；最低 iOS 17。
 
-**狀態：修正版 Xcode 編譯、5 項模擬器單元測試與 IPA 封裝檢查通過。已透過 Sideloadly 側載至 iPhone，使用者確認 App 可開啟並顯示連線表單；SMB 登入、掃描與播放尚待實機驗證。**
+**狀態：修正版 Xcode 編譯、5 項模擬器單元測試與 IPA 封裝檢查通過。已透過 Sideloadly 側載至 iPhone，使用者確認 App 可開啟且 SMB 連線成功；遞迴掃描與照片／影片播放尚待實機驗證。**
 
 2026-10-21 安裝證據：Sideloadly 0.71.1 顯示 `Done.`、`100%`，USB 裝置顯示 iOS 27.0；使用者完成手機端授權後回報 App 可以開啟，正在設定連線欄位。沒有更新或還原 iOS，也沒有將簽署帳號、裝置識別碼或密碼存入倉庫。
+
+2026-10-21 連線結果：使用者先回報連線失敗，之後回報連線成功。尚未確認首次失敗原因，也未完成反覆連線穩定性驗證；不據此推定所有網路或帳號都可用。主機欄可直接填 IP／名稱，也接受 `smb://` 前綴；分享與資料夾仍填在各自欄位。
 
 測試證據：[修正版 GitHub Actions](https://github.com/chunyen627-afk/mobile-apps/actions/runs/39532413253)，來源 `342dc73e6bffc6e17aca47c47babb55c7f37c1b4`，Xcode 16.4、iPhone 16 Pro / iOS 18.5 模擬器，5 項單元測試、0 失敗。這不是 iPhone 17 / iOS 27 實機或 UI 操作測試。首次產物缺少動態程式庫，不應安裝；修正版已確認包含 `Frameworks/AMSMB2.framework/AMSMB2`。
 
@@ -69,7 +71,7 @@ bash scripts/build.sh
 
 Tests/SelectionTests.swift 驗證選取去重、根目錄包含規則、路徑邊界與媒體過濾。只有實際執行通過才能稱通過。
 
-實機待驗：SMB 登入、中文路徑、多層掃描、影片 seek/音訊、網路中斷、取消、旋轉、退出後鎖屏恢復。Windows 可讀或 TCP 445 可達不能代替手機完整 SMB 登入測試。
+實機已由使用者確認：App 啟動與一次 SMB 連線成功。待驗：連線穩定性、中文子路徑、多層掃描、照片輪播、影片 seek/音訊、網路中斷、取消、旋轉、退出後鎖屏恢復。Windows 可讀或 TCP 445 可達不能代替手機完整 SMB 登入測試。
 
 第三方來源與授權見 THIRD_PARTY.md。
 
