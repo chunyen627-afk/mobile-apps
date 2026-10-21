@@ -22,6 +22,7 @@ targets:
       - Lightbox
     dependencies:
       - package: AMSMB2
+        embed: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: org.personal.lightbox.album

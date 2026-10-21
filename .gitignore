@@ -1,4 +1,5 @@
 .DS_Store
 .runtime/
+.serena/
 __pycache__/
 *.pyc

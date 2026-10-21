@@ -23,6 +23,10 @@ xcodebuild archive -project Lightbox.xcodeproj -scheme Lightbox \
 
 APP=build/Lightbox.xcarchive/Products/Applications/Lightbox.app
 test -f "$APP/Lightbox"
+test -s "$APP/Frameworks/AMSMB2.framework/AMSMB2"
+# The simulator can find package frameworks in DerivedData even when the
+# archive forgets to embed them. Validate the device bundle explicitly.
+otool -L "$APP/Lightbox" | grep -F '@rpath/AMSMB2.framework/AMSMB2'
 mkdir -p build/package/Payload
 ditto "$APP" build/package/Payload/Lightbox.app
 (cd build/package && /usr/bin/zip -qr ../Lightbox-unsigned.ipa Payload)
