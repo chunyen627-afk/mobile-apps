@@ -1,0 +1,47 @@
+name: Build Album iOS
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/album-ios/Lightbox/**'
+      - 'apps/album-ios/Tests/**'
+      - 'apps/album-ios/scripts/**'
+      - 'apps/album-ios/project.yml'
+      - '.github/workflows/album-ios.yml'
+permissions:
+  contents: read
+concurrency:
+  group: album-ios-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    # Fail closed for private repositories; standard public runners are free.
+    if: github.event.repository.private == false
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install project generator
+        run: brew install xcodegen
+      - name: Build and test
+        working-directory: apps/album-ios
+        run: bash scripts/build.sh
+      - name: Save package for local signing
+        uses: actions/upload-artifact@v4
+        with:
+          name: Lightbox-unsigned-ipa
+          path: apps/album-ios/build/Lightbox-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 3
+      - name: Save test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Lightbox-test-results
+          path: apps/album-ios/build/Tests.xcresult
+          if-no-files-found: ignore
+          retention-days: 3
+
