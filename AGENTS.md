@@ -1,7 +1,7 @@
 # Repository instructions
 
 - 新接手先讀 [Windows／iPhone 開發快速上手與 AI 交接](docs/windows-iphone-quickstart.md)，再讀根目錄與目標 App 的 README。通用教學不得加入特定 App 名稱、私人 IP、帳號或路徑；此倉庫版本為原稿，桌面僅為同步副本。
-- 當前產品優先支援 iPhone；畫面使用動態容器尺寸，不綁定機型或吋數。iPad 原生支援尚未開啟或驗證，不可將 iPhone 相容模式宣稱為平板適配完成。
+- 當前產品優先支援 iPhone；畫面使用動態容器尺寸，不綁定機型或吋數。實際 0.3.0 IPA 的 UIDeviceFamily 為 [1, 2]，但 iPad 尚未驗證；以封裝產物為準，不可只憑專案層設定或可安裝就宣稱平板適配完成。
 
 - 使用繁體中文撰寫使用者文件。
 - 每個手機 App 位於 `apps/<app-name>/`，共用 CI workflow 放在 `.github/workflows/`。
