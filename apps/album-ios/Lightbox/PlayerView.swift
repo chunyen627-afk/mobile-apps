@@ -29,10 +29,11 @@ struct PlayerView: View {
         ZStack {
             Color.black.ignoresSafeArea()
             if let image = playback.image {
-                GeometryReader { geometry in
-                    Image(uiImage: image).resizable().scaledToFit().frame(width: geometry.size.width, height: geometry.size.height)
-                        .accessibilityIdentifier("displayedPhoto")
-                }.ignoresSafeArea()
+                ZoomablePhotoSurface(image: image, identity: playback.entry.path,
+                    zoomEnabled: playback.paused && playback.entry.kind == .photo && !playback.loading && playback.message == nil,
+                    tapped: { playback.toggleControls() }, zoomBegan: { playback.hideControls() },
+                    next: { playback.next() }, previous: { playback.previous() })
+                    .ignoresSafeArea()
             }
             if let player = playback.player {
                 VideoSurface(player: player) { playback.videoBecameVisible(player) }
@@ -44,9 +45,9 @@ struct PlayerView: View {
                     .ignoresSafeArea().opacity(playback.videoReady ? 1 : 0)
                     .accessibilityIdentifier("vlcVideoSurface")
             }
-            Group {
+            if playback.image == nil || playback.entry.kind != .photo {
                 Color.clear.contentShape(Rectangle()).accessibilityIdentifier("playerCanvas")
-                    .onTapGesture { playback.revealControls() }
+                    .onTapGesture { playback.toggleControls() }
                     .gesture(DragGesture(minimumDistance: 40).onEnded { gesture in
                         guard abs(gesture.translation.width) > abs(gesture.translation.height) else { return }
                         if gesture.translation.width < 0 { playback.next() } else { playback.previous() }

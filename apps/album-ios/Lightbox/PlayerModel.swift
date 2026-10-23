@@ -260,6 +260,16 @@ final class PlayerModel: ObservableObject {
         }
     }
 
+    func toggleControls() {
+        if controlsVisible { hideControls() } else { revealControls() }
+    }
+
+    func hideControls() {
+        guard !interacting, message == nil else { return }
+        controlsTask?.cancel()
+        controlsVisible = false
+    }
+
     func revealControls() {
         controlsVisible = true
         controlsTask?.cancel()

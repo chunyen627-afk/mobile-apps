@@ -97,6 +97,35 @@ final class PlaybackTests: XCTestCase {
         XCTAssertTrue(model.paused)
     }
 
+    func testPausedVideoCanHideAndRevealWithoutResuming() async throws {
+        let video = AlbumEntry(path: "v.mov", name: "v.mov", kind: .video, size: 10)
+        let model = PlayerModel(entries: [video], service: try service(), interval: 5, controlsDelay: 0.04)
+        model.togglePause()
+        XCTAssertTrue(model.paused)
+        model.toggleControls()
+        XCTAssertFalse(model.controlsVisible)
+        try await Task.sleep(for: .seconds(0.1))
+        XCTAssertTrue(model.paused)
+        XCTAssertFalse(model.controlsVisible)
+        model.toggleControls()
+        XCTAssertTrue(model.controlsVisible)
+        XCTAssertTrue(model.paused)
+        // A cancelled old hide task must not remove paused controls again.
+        try await Task.sleep(for: .seconds(0.1))
+        XCTAssertTrue(model.controlsVisible)
+    }
+
+    func testControlsCannotBeHiddenDuringSeekingOrAnError() throws {
+        let model = PlayerModel(entries: [a], service: try service(), interval: 5)
+        model.setInteracting(true)
+        model.toggleControls()
+        XCTAssertTrue(model.controlsVisible)
+        model.message = "Fixture error"
+        model.setInteracting(false)
+        model.hideControls()
+        XCTAssertTrue(model.controlsVisible)
+    }
+
     func testRapidSkippingDoesNotLetOldPhotoReplaceLatest() async throws {
         let fixture = PhotoFixture(delay: 0.06)
         let c = AlbumEntry(path: "c.jpg", name: "c.jpg", kind: .photo, size: 10)

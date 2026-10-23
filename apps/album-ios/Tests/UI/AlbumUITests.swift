@@ -91,6 +91,7 @@ final class AlbumUITests: XCTestCase {
         }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [seekReached], timeout: 8), .completed, "The 36-second fixture must actually seek near 30%, not return to zero")
         capture("video-fit-landscape-seek")
+        assertPausedVideoCanHideControls(aspect: 16.0 / 9.0, name: "native-paused-hidden")
         app.buttons["繼續"].tap()
         waitUntilGone(app.buttons["leavePlayer"], timeout: 8)
         assertVideoFits(aspect: 16.0 / 9.0)
@@ -145,6 +146,7 @@ final class AlbumUITests: XCTestCase {
             }, object: nil)
             XCTAssertEqual(XCTWaiter.wait(for: [reached], timeout: 10), .completed)
             capture("avi-paused-seek-\(pass)")
+            assertPausedVideoCanHideControls(aspect: pass == 0 ? 16.0 / 9.0 : 4.0 / 3.0, name: "avi-paused-hidden-\(pass)")
             app.buttons["繼續"].tap()
             // Wait past the temporary seek display. This must be the decoder's
             // advancing clock, not merely the slider's requested position.
@@ -168,8 +170,101 @@ final class AlbumUITests: XCTestCase {
         }
     }
 
+    func testPausedPhotoPinchPanResetAndTapGestures() {
+        // Give explicit gestures time; auto-advance is covered by the separate fast-slide test.
+        app.terminate()
+        app.launchArguments += ["-photoInterval", "30"]
+        app.launch()
+        XCTAssertTrue(app.buttons["開始播放"].waitForExistence(timeout: 30))
+        app.buttons["勾選 測試影片"].tap()
+        app.buttons["開始播放"].tap()
+        XCTAssertTrue(app.buttons["播放 3 個項目"].waitForExistence(timeout: 10))
+        app.buttons["播放 3 個項目"].tap()
+        let image = app.images["displayedPhoto"]
+        let viewport = app.scrollViews["photoViewport"]
+        XCTAssertTrue(image.waitForExistence(timeout: 5))
+        centerTap()
+        app.buttons["暫停"].tap()
+        let title = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "測試照片 ")).firstMatch.label
+        viewport.pinch(withScale: 2, velocity: 1)
+        assertPhotoZoom { $0 > 150 }
+        XCTAssertFalse(app.buttons["leavePlayer"].exists, "Zoom should hide chrome without a spurious single tap")
+        capture("photo-paused-pinched")
+        let beforePan = photoPixels()
+        viewport.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.5))
+            .press(forDuration: 0.1, thenDragTo: viewport.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.5)))
+        capture("photo-paused-panned")
+        XCTAssertNotEqual(beforePan, photoPixels(), "Dragging must change the rendered image, not merely a zoom value")
+        centerTap()
+        XCTAssertTrue(app.buttons["繼續"].exists)
+        XCTAssertTrue(app.staticTexts[title].exists, "Panning must not turn the page")
+        app.buttons["繼續"].tap()
+        assertPhotoZoom { $0 == 100 }
+        viewport.pinch(withScale: 2, velocity: 1)
+        assertPhotoZoom { $0 == 100 }
+        app.buttons["暫停"].tap()
+        viewport.pinch(withScale: 2, velocity: 1)
+        assertPhotoZoom { $0 > 150 }
+        centerTap()
+        app.buttons["下一個"].tap()
+        assertPhotoZoom { $0 == 100 }
+        XCTAssertFalse(app.staticTexts[title].exists)
+        XCTAssertTrue(app.buttons["繼續"].exists, "Changing photos must keep the slideshow paused")
+        // Wait for the replacement photo, whose loading uses a synthetic delay.
+        Thread.sleep(forTimeInterval: 1)
+        viewport.doubleTap()
+        assertPhotoZoom { $0 > 150 }
+        viewport.doubleTap()
+        assertPhotoZoom { $0 == 100 }
+        // At fit size, a horizontal swipe may navigate; at zoom size it must only pan.
+        viewport.swipeRight()
+        centerTap()
+        XCTAssertTrue(app.staticTexts[title].waitForExistence(timeout: 3))
+        Thread.sleep(forTimeInterval: 1)
+        viewport.pinch(withScale: 2, velocity: 1)
+        assertPhotoZoom { $0 > 150 }
+        XCUIDevice.shared.orientation = .landscapeLeft
+        assertPhotoZoom { $0 == 100 }
+        capture("photo-zoom-rotation-refit")
+    }
+
+    private func assertPhotoZoom(_ condition: @escaping (Int) -> Bool) {
+        let expectation = XCTNSPredicateExpectation(predicate: NSPredicate { [self] _, _ in
+            let text = (app.images["displayedPhoto"].value as? String) ?? ""
+            guard let percent = Int(text.filter { $0.isNumber }) else { return false }
+            return condition(percent)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 4), .completed)
+    }
+
+    private func photoPixels() -> [UInt8] {
+        let screenshot = XCUIScreen.main.screenshot().image
+        var pixels = [UInt8](repeating: 0, count: 32 * 32 * 4)
+        pixels.withUnsafeMutableBytes { bytes in
+            let context = CGContext(data: bytes.baseAddress, width: 32, height: 32, bitsPerComponent: 8, bytesPerRow: 32 * 4,
+                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+            context.draw(screenshot.cgImage!, in: CGRect(x: 0, y: 0, width: 32, height: 32))
+        }
+        return pixels
+    }
+
+    private func assertPausedVideoCanHideControls(aspect: CGFloat, name: String) {
+        XCTAssertTrue(app.buttons["繼續"].exists)
+        let position = app.staticTexts["videoTime"].label
+        tapCanvas()
+        waitUntilGone(app.buttons["leavePlayer"], timeout: 2)
+        assertVideoFits(aspect: aspect)
+        capture(name)
+        Thread.sleep(forTimeInterval: 2)
+        tapCanvas()
+        XCTAssertTrue(app.buttons["繼續"].waitForExistence(timeout: 2))
+        XCTAssertEqual(app.staticTexts["videoTime"].label, position, "Hiding controls must not resume a paused video")
+    }
+
     private var savedNote: XCUIElement { app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "使用已儲存清單")).firstMatch }
-    private func centerTap() { app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
+    // Existing playback tests need visible controls, regardless of timer timing.
+    private func centerTap() { if !app.buttons["leavePlayer"].exists { tapCanvas() } }
+    private func tapCanvas() { app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
     private func waitUntilGone(_ element: XCUIElement, timeout: TimeInterval) {
         let expectation = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: element)
         XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: timeout), .completed)
