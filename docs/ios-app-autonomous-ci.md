@@ -29,7 +29,9 @@
 6. 封裝 IPA → `unzip -t` → 算 SHA256
 7. **失敗時輸出 annotation**：用 `trap ... EXIT` 把失敗階段、`error:` 行與 log 結尾輸出為 `::error` 指令。換行要轉成 `%0A`，`%` 要轉成 `%25`，每一步最多 10 則
 
-第 7 點是自主迭代的關鍵：**Actions 的 log 要登入才看得到，但 annotation 用公開 API 就讀得到。**
+8. **成功時輸出 notice**：用 `::notice` 公開實際的 `Executed N tests, with 0 failures` 那一行、Xcode 與模擬器版本；workflow 再用 `::notice` 公開 IPA 大小與 SHA256
+
+第 7、8 點是自主迭代的關鍵：**Actions 的 log 要登入才看得到，但 annotation 用公開 API 就讀得到。**
 
 ## 三、Workflow 必備設定
 
@@ -67,7 +69,7 @@ jobs:
 3. 失敗時讀出失敗的 job 與步驟：`.../actions/runs/<run_id>/jobs`
 4. 讀錯誤內容：`.../check-runs/<job_id>/annotations`
 5. 修正、提交、再 push，回到第 2 步
-6. **完成的定義**：run 結論為 success，而且拿到 run 網址、實際執行的測試數、0 失敗。三項缺一項都不能宣稱完成
+6. **完成的定義**：run 結論為 success，而且拿到 run 網址、實際執行的測試數、0 失敗。三項缺一項都不能宣稱完成。測試數與 IPA SHA256 從同一個 annotations API 的 notice 讀取；Step Summary 與 artifact 要登入才看得到，不能當作 AI 的證據來源
 
 不要請使用者去複製 log。看不到錯誤時，代表 `build.sh` 的 annotation 沒有涵蓋到那一段，應該補上 annotation 再推一次。
 

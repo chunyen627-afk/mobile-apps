@@ -59,6 +59,11 @@ if [[ "${RUN_TESTS:-1}" == "1" ]]; then
     echo "Expected ${EXPECTED_TESTS} executed XCTest methods with 0 failures; see build/test-summary.txt."
     exit 1
   fi
+  # Public evidence: annotations are readable through the API without signing in.
+  if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+    echo "::notice title=XCTest::$(grep -E "Executed ${EXPECTED_TESTS} tests?, with 0 failures" "$CURRENT_LOG" | tail -n 1 | sed 's/^ *//')"
+    echo "::notice title=Toolchain::$(xcodebuild -version | tr '\n' ' ')/ simulator: $(xcrun simctl list devices | grep -F "$SIMULATOR_ID" | sed 's/^ *//')"
+  fi
 else
   PHASE=simulator-build
   CURRENT_LOG=build/xcodebuild-sim.log

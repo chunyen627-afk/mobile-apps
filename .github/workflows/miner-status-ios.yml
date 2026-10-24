@@ -37,6 +37,7 @@ jobs:
           sha=$(cut -d' ' -f1 MinerStatus-unsigned.ipa.sha256)
           echo "IPA size: $size bytes"
           echo "IPA SHA256: $sha"
+          echo "::notice title=IPA (not uploaded)::size ${size} bytes, SHA256 ${sha}"
           {
             echo "### MinerStatus-unsigned.ipa (not uploaded)"
             echo "- size: $size bytes"
