@@ -23,7 +23,12 @@ annotate_failure() {
   [[ $code -ne 0 && -n "${GITHUB_ACTIONS:-}" ]] || return 0
   echo "::error title=build.sh failed::phase ${PHASE} exited with ${code}"
   if [[ -n "$CURRENT_LOG" && -f "$CURRENT_LOG" ]]; then
-    { grep -E '(error|fatal error):' "$CURRENT_LOG" || true; } | sort -u | head -n 8 | while IFS= read -r line; do
+    # Which test methods failed and how many passed, before the individual error lines.
+    local failed passed
+    failed=$({ grep -E "^Test Case '.*' failed" "$CURRENT_LOG" || true; } | sed -E "s/^Test Case '-\[[^ ]+ ([^]]+)\]'.*/\1/" | sort -u | tr '\n' ' ')
+    passed=$({ grep -E "^Test Case '.*' passed" "$CURRENT_LOG" || true; } | wc -l | tr -d ' ')
+    if [[ -n "$failed" ]]; then echo "::error title=failed tests::${passed} passed; failed: ${failed}"; fi
+    { grep -E '(error|fatal error):' "$CURRENT_LOG" || true; } | sort -u | head -n 6 | while IFS= read -r line; do
       echo "::error title=${PHASE}::$(printf '%s\n' "$line" | escape_annotation)"
     done
     echo "::error title=${PHASE} log tail::$(tail -n 40 "$CURRENT_LOG" | escape_annotation)"

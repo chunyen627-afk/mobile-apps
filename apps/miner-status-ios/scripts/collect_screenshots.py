@@ -14,6 +14,17 @@ import subprocess
 import sys
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".heic"}
+IMAGE_MAGIC = (b"\x89PNG", b"\xff\xd8\xff")
+
+
+def is_image(path):
+    """By suffix or, since exported names may lack one, by PNG/JPEG magic bytes."""
+    if not path.is_file():
+        return False
+    if path.suffix.lower() in IMAGE_SUFFIXES:
+        return True
+    with path.open("rb") as handle:
+        return handle.read(4).startswith(IMAGE_MAGIC)
 
 
 def attachments(node, test=None):
@@ -42,9 +53,10 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     manifest = json.loads((source / "manifest.json").read_text(encoding="utf-8"))
     index = []
-    for test, attachment in attachments(manifest):
+    entries = list(attachments(manifest))
+    for test, attachment in entries:
         image = source / attachment["exportedFileName"]
-        if image.suffix.lower() not in IMAGE_SUFFIXES or not image.is_file():
+        if not is_image(image):
             continue
         name = readable_name(attachment)
         target = output / f"{name}.jpg"
@@ -59,6 +71,11 @@ def main():
         index.append(f"{target.name}\t{test}{failed}")
     (output / "INDEX.txt").write_text("\n".join(sorted(index)) + "\n", encoding="utf-8")
     print(f"collected {len(index)} screenshots into {output}")
+    if not index:
+        # Shows up as a CI annotation so the export format can be fixed without the full log.
+        files = sorted(p.name for p in source.iterdir())[:8]
+        sample = json.dumps(entries[:2], ensure_ascii=False)[:600] if entries else json.dumps(manifest)[:600]
+        print(f"::warning title=screenshots::0 images; {len(entries)} manifest entries; files {files}; sample {sample}")
 
 
 if __name__ == "__main__":

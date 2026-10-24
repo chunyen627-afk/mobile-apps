@@ -25,10 +25,12 @@ struct RootView: View {
             if sizeClass == .regular {
                 NavigationSplitView {
                     OverviewList(model: model, selection: $selection) { showingSettings = true }
+                        .modeBanner(model)
                 } detail: {
                     NavigationStack {
                         if let selection {
                             MachineDetailView(model: model, machineId: selection)
+                                .modeBanner(model)
                         } else {
                             Text("請選擇一台機器").foregroundStyle(.secondary)
                         }
@@ -37,15 +39,25 @@ struct RootView: View {
             } else {
                 NavigationStack {
                     OverviewList(model: model, selection: nil) { showingSettings = true }
-                        .navigationDestination(for: String.self) { MachineDetailView(model: model, machineId: $0) }
+                        .modeBanner(model)
+                        .navigationDestination(for: String.self) {
+                            MachineDetailView(model: model, machineId: $0).modeBanner(model)
+                        }
                 }
             }
         }
-        .safeAreaInset(edge: .top, spacing: 0) { ModeBanner(model: model) }
         .sheet(isPresented: $showingSettings) { SourceSettingsView(model: model) }
         .onChange(of: scenePhase) { phase in
             model.setForeground(phase == .active)
         }
+    }
+}
+
+extension View {
+    /// Puts the banner under each screen's navigation bar. Inset outside the NavigationStack, it
+    /// was laid over the navigation bar and covered the 資料來源 button (found by the UI tests).
+    func modeBanner(_ model: AppModel) -> some View {
+        safeAreaInset(edge: .top, spacing: 0) { ModeBanner(model: model) }
     }
 }
 
