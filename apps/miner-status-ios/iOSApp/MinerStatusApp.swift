@@ -86,7 +86,13 @@ struct ModeBanner: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 16)
         .padding(.vertical, 6)
-        .background(model.mode == .demo ? Color.orange.opacity(0.25) : Color.blue.opacity(0.15))
+        // Opaque: with only the translucent tint, scrolled content showed through the banner text.
+        .background {
+            ZStack {
+                Color(uiColor: .systemBackground)
+                model.mode == .demo ? Color.orange.opacity(0.25) : Color.blue.opacity(0.15)
+            }
+        }
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("mode-banner")
     }

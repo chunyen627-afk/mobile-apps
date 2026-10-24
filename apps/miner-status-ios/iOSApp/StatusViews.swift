@@ -57,16 +57,15 @@ struct OverviewList: View {
 
     @ViewBuilder private var demoSection: some View {
         Section {
-            Menu {
+            // A pushed list rather than a Menu: a Menu inside the List did not open reliably in the
+            // simulator UI tests, and seven long titles read better as a list on a phone.
+            Picker("目前情境", selection: Binding(get: { model.scenario }, set: { model.selectDemo($0) })) {
                 ForEach(DemoScenario.allCases) { scenario in
-                    Button { model.selectDemo(scenario) } label: {
-                        if scenario == model.scenario { Label(scenario.title, systemImage: "checkmark") } else { Text(scenario.title) }
-                    }
+                    Text(scenario.title).tag(scenario)
                 }
-            } label: {
-                LabeledContent("目前情境", value: model.scenario.title)
             }
-            .accessibilityIdentifier("scenario-menu")
+            .pickerStyle(.navigationLink)
+            .accessibilityIdentifier("scenario-picker")
             Text(model.scenario.summary).font(.caption).foregroundStyle(.secondary)
             if let error = model.demoError {
                 Label(error, systemImage: "exclamationmark.octagon").foregroundStyle(.red)

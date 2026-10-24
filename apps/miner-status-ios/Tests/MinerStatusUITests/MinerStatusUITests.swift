@@ -83,21 +83,25 @@ final class MinerStatusUITests: XCTestCase {
     }
 
     private func checkScenario(_ title: String, light: String, shot: String) throws {
-        let menu = element("scenario-menu")
-        XCTAssertTrue(menu.waitForExistence(timeout: 5), "scenario menu missing")
-        menu.tap()
+        let picker = element("scenario-picker")
+        XCTAssertTrue(picker.waitForExistence(timeout: 5), "scenario picker missing")
+        picker.tap()
         let item = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", title)).firstMatch
-        if !item.waitForExistence(timeout: 3) {
-            menu.press(forDuration: 0.8)
-        }
-        snapshot("\(shot)-menu")
         guard item.waitForExistence(timeout: 5) else {
+            snapshot("\(shot)-picker")
             let labels = app.buttons.allElementsBoundByIndex.prefix(30).map(\.label)
-            XCTFail("scenario \(title) missing from menu; buttons on screen: \(labels)")
+            XCTFail("scenario \(title) missing from the picker list; buttons on screen: \(labels)")
             return
         }
+        if title == "首筆資料" { snapshot("00-scenario-list") }
         item.tap()
-        XCTAssertTrue(waitFor(menu, labelContains: title, timeout: 5), "scenario \(title) was not selected")
+        // The navigation-link picker normally pops back by itself; go back explicitly if not.
+        if !(picker.waitForExistence(timeout: 3) && picker.isHittable) {
+            app.navigationBars.buttons.element(boundBy: 0).tap()
+        }
+        XCTAssertTrue(picker.waitForExistence(timeout: 5), "did not return from the scenario list")
+        XCTAssertTrue(waitFor(picker, labelContains: title, timeout: 5),
+                      "scenario \(title) was not selected; picker says \(picker.label)")
         for id in ["demo-rig-a", "demo-rig-b"] {
             let row = element("machine-\(id)")
             XCTAssertTrue(row.waitForExistence(timeout: 5), "\(id) row missing in \(title)")

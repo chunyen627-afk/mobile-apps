@@ -3,6 +3,8 @@
 name: MinerStatus
 options:
   bundleIdPrefix: org.personal.minerstatus
+  # The app is Traditional Chinese only; system controls (for example the back button) follow it.
+  developmentLanguage: zh-Hant
   deploymentTarget:
     iOS: "16.0"
 settings:
