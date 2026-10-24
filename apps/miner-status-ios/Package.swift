@@ -1,8 +1,9 @@
 // swift-tools-version:5.9
 import PackageDescription
 
-// Pure, UI-free status core plus its XCTest suite. Tests read ../fixtures via #filePath, so they
-// are meant for `swift test` / Xcode on a Mac checkout, not for an on-device test bundle.
+// Optional: run the UI-free core and its XCTest suite with `swift test` on a Mac checkout.
+// scripts/build.sh and CI use project.yml (simulator tests) instead. Tests read ../fixtures
+// via #filePath, so they are not meant for an on-device test bundle.
 let package = Package(
     name: "MinerStatus",
     platforms: [.iOS(.v16), .macOS(.v13)],

@@ -13,7 +13,7 @@
 | 純 Swift 核心 `MinerStatusCore`（模型、狀態引擎、顯示文字、唯讀 HTTP client） | 實作完成；**未編譯** |
 | XCTest（80 項） | 已撰寫；**未編譯、未執行** |
 | SwiftUI App（示範＋自訂來源） | 實作完成；**未編譯、未在模擬器或實機檢視** |
-| Xcode 專案設定（XcodeGen `App/project.yml`）、建置腳本 `scripts/build.sh` | 已撰寫；**未產生專案、未執行** |
+| Xcode 專案設定（XcodeGen `project.yml`，沿用 album-ios 架構）、建置腳本 `scripts/build.sh` | 已撰寫；**未產生專案、未執行** |
 | Swift 語法剖析、靜態設定檢查 | Windows 上執行通過；只代表可剖析與設定內容相符，不代表編譯通過 |
 | 真實資料來源 | 未連線驗證；沒有已驗證可用的來源端點 |
 | CI workflow、IPA | 已撰寫 `miner-status-ios.yml`（push 到本分支才觸發）；**尚未執行**；IPA 只在 runner 內產生、不上傳 |
@@ -48,12 +48,12 @@
 ## 目錄
 
 ```text
-Package.swift                 SwiftPM：MinerStatusCore + 測試
+project.yml                   XcodeGen 規格（App、核心 framework、單元測試、內建示範資料）
 Sources/MinerStatusCore/      模型、狀態引擎、顯示文字、唯讀 HTTP client（無 UI）
-Tests/MinerStatusCoreTests/   XCTest
+Tests/MinerStatusCoreTests/   XCTest（在 iOS 模擬器執行）
 iOSApp/                       SwiftUI App 原始碼與 Info.plist
-App/project.yml               XcodeGen 規格（App target、本機套件、內建示範資料）
-scripts/build.sh              Mac 建置：契約檢查、swift test、編譯、未簽署 IPA
+Package.swift                 選用：在 Mac 上直接 `swift test`；建置腳本與 CI 不使用
+scripts/build.sh              Mac 建置：契約檢查、模擬器測試、啟動檢查、未簽署 IPA
 schema/                       JSON Schema（Draft 2020-12）
 fixtures/                     合成示範資料（全部標示 demo）
 tools/                        Windows 可執行的契約、語法、靜態設定檢查

@@ -27,7 +27,7 @@
 **靜態設定檢查的範圍**
 
 - **Info.plist**：只開 `NSAllowsLocalNetworking`，沒有任意載入或例外網域，沒有背景模式，並有本地網路用途說明。
-- **XcodeGen 規格**：iOS 16、本機套件 `..`、連結 `MinerStatusCore`、內建 `demo-running.json`、明確的 Info.plist、沒有遠端套件。
+- **XcodeGen 規格**（沿用 album-ios 架構）：iOS 16、核心為 framework target、單元測試 target 由 App scheme 執行、內建 `demo-running.json`、明確的 Info.plist、沒有任何套件相依。
 - **App 與核心原始碼**：
   - 沒有 POST、PUT、PATCH、DELETE、背景工作、WebSocket、監聽或 WebView
   - 只有 `StatusClient.swift` 使用 URLSession
@@ -49,7 +49,7 @@
 
 | 項目 | 狀態 |
 | --- | --- |
-| `swift build`、`swift test` | 未執行；沒有 Swift 工具鏈 |
+| 模擬器 `xcodebuild test` | 未成功執行；第一次 CI（舊的 `swift test` 流程）失敗於建置步驟，已改為 album-ios 架構 |
 | XCTest 80 項（模型 16、引擎 41、client 15、fixture／文字 8） | 未編譯、未執行 |
 | `xcodegen generate`、`scripts/build.sh` | 未執行；沒有 Mac／Xcode／XcodeGen |
 | SwiftUI App（示範與自訂來源） | 未編譯；未在模擬器或實機檢視畫面 |

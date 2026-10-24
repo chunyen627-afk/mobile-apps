@@ -40,7 +40,7 @@ jobs:
             echo "### MinerStatus-unsigned.ipa (not uploaded)"
             echo "- size: $size bytes"
             echo "- SHA256: \`$sha\`"
-            grep -E "Executed [0-9]+ tests?, with [0-9]+ failures" swift-test.log | tail -1 | sed 's/^/- XCTest: /'
+            grep -E "Executed [0-9]+ tests?, with [0-9]+ failures" test-summary.txt | tail -1 | sed 's/^/- XCTest: /'
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Collect small reports (1 MB limit)
         id: collect
@@ -48,7 +48,7 @@ jobs:
         working-directory: ${{ env.APP_DIR }}/build
         run: |
           mkdir -p reports
-          [ -f swift-test.log ] && cp swift-test.log reports/
+          [ -f test-summary.txt ] && cp test-summary.txt reports/
           [ -f screenshots/launch-demo.jpg ] && cp screenshots/launch-demo.jpg reports/
           ls -l reports
           total=$(find reports -type f -exec stat -f %z {} + | awk '{s+=$1} END {print s+0}')

@@ -40,17 +40,23 @@ for key in ("NSAllowsArbitraryLoads", "NSAllowsArbitraryLoadsInWebContent", "NSA
 check("UIBackgroundModes" not in info, "Info.plist: UIBackgroundModes must not be set (foreground only)")
 check(bool(info.get("NSLocalNetworkUsageDescription")), "Info.plist: NSLocalNetworkUsageDescription required")
 
-# 2. XcodeGen spec: iOS 16, local package, bundled demo fixture, explicit Info.plist, no remote packages.
-spec = (ROOT / "App" / "project.yml").read_text(encoding="utf-8")
+# 2. XcodeGen spec (album-ios layout): iOS 16, core framework target, simulator unit tests,
+#    bundled demo fixture, explicit Info.plist, no packages at all.
+spec = (ROOT / "project.yml").read_text(encoding="utf-8")
+check(not (ROOT / "App" / "project.yml").exists(), "App/project.yml must be gone: project.yml lives at the app root")
 check(re.search(r'iOS:\s*"16\.0"', spec) is not None, "project.yml: deployment target must be iOS 16.0")
-check(re.search(r"packages:\s*\n(?:\s*#.*\n)*\s*MinerStatus:\s*\n\s*path:\s*\.\.\s*\n", spec) is not None,
-      "project.yml: MinerStatus must be the local package at ..")
-check(re.search(r"package:\s*MinerStatus\s*\n\s*product:\s*MinerStatusCore", spec) is not None,
-      "project.yml: app must link product MinerStatusCore")
-check(re.search(r"path:\s*\.\./fixtures/demo-running\.json\s*\n\s*buildPhase:\s*resources", spec) is not None,
+check(re.search(r"\n  MinerStatusCore:\s*\n\s*type:\s*framework\s*\n", spec) is not None,
+      "project.yml: MinerStatusCore must be a framework target")
+check(re.search(r"dependencies:\s*\n\s*- target:\s*MinerStatusCore\s*\n", spec) is not None,
+      "project.yml: app must depend on the MinerStatusCore target")
+check(re.search(r"\n  MinerStatusCoreTests:\s*\n\s*type:\s*bundle\.unit-test\s*\n", spec) is not None,
+      "project.yml: MinerStatusCoreTests must be a unit-test bundle")
+check(re.search(r"testTargets:\s*\n\s*- MinerStatusCoreTests\s*\n", spec) is not None,
+      "project.yml: app scheme must run MinerStatusCoreTests")
+check(re.search(r"path:\s*fixtures/demo-running\.json\s*\n\s*buildPhase:\s*resources", spec) is not None,
       "project.yml: demo-running.json must be a bundled resource")
-check("INFOPLIST_FILE: ../iOSApp/Info.plist" in spec, "project.yml: INFOPLIST_FILE must point to iOSApp/Info.plist")
-check(re.search(r"^\s*url:", spec, re.MULTILINE) is None, "project.yml: no remote package dependencies")
+check("INFOPLIST_FILE: iOSApp/Info.plist" in spec, "project.yml: INFOPLIST_FILE must point to iOSApp/Info.plist")
+check(re.search(r"^packages:", spec, re.MULTILINE) is None, "project.yml: no package dependencies")
 check((ROOT / "fixtures" / "demo-running.json").is_file(), "fixtures/demo-running.json must exist")
 
 # 3. Read-only network surface in shipped code (Sources/ and iOSApp/).

@@ -6,17 +6,18 @@
 
 - macOS、Xcode 15 以上（Swift 5.9，`swift-tools-version:5.9`）、[XcodeGen](https://github.com/yonaskolb/XcodeGen)
 - 契約檢查另需 Python 3 與 `jsonschema`；沒有時建置腳本會標示 SKIPPED，不算通過
-- App 最低 iOS 16。核心套件另支援 macOS 13，供 `swift test` 使用
+- App 最低 iOS 16。`Package.swift` 另支援 macOS 13，只供在 Mac 上選用 `swift test`，建置腳本與 CI 不使用
 
 ## 專案結構
 
-`App/project.yml` 由 XcodeGen 產生 `App/MinerStatus.xcodeproj`。產生的專案檔不進版控。
+沿用 `apps/album-ios` 的架構：本目錄的 `project.yml` 由 XcodeGen 產生 `MinerStatus.xcodeproj`，產生的專案檔不進版控。
 
 | 項目 | 設定 |
 | --- | --- |
-| App target | `MinerStatus`；來源 `../iOSApp`；明確的 `iOSApp/Info.plist` |
-| 本機套件 | `packages.MinerStatus.path: ..`；連結 product `MinerStatusCore` |
-| 內建資源 | `../fixtures/demo-running.json`（離線示範必需，缺少時 App 只顯示載入錯誤） |
+| App target | `MinerStatus`；來源 `iOSApp`；明確的 `iOSApp/Info.plist`；scheme 執行 `MinerStatusCoreTests` |
+| 核心 | framework target `MinerStatusCore`（`Sources/MinerStatusCore`），內嵌於 App；沒有任何套件相依 |
+| 測試 | unit-test target `MinerStatusCoreTests`，在 iOS 模擬器執行；fixtures 以 `#filePath` 讀取 |
+| 內建資源 | `fixtures/demo-running.json`（離線示範必需，缺少時 App 只顯示載入錯誤） |
 | Bundle ID | `org.personal.minerstatus.app`；免費 Apple 帳號會佔用一個 App ID，之後請固定沿用 |
 | 裝置 | `TARGETED_DEVICE_FAMILY = 1,2`；iPhone 優先，iPad 版面未驗證 |
 | ATS | 只開 `NSAllowsLocalNetworking`；不設 `NSAllowsArbitraryLoads`，也沒有背景模式 |
@@ -32,15 +33,16 @@ bash scripts/build.sh
 腳本依序執行：
 
 1. `tools/validate_contract.py`（已安裝 `jsonschema` 才執行）
-2. `swift test`（核心與 80 項 XCTest，在 macOS 主機執行）；紀錄存到 `build/swift-test.log`，必須實際執行 80 項且 0 失敗，否則失敗結束（數量可用 `EXPECTED_TESTS` 調整）
-3. `xcodegen generate`
-4. 在可用的 iPhone 模擬器上 Debug 編譯（不簽署）
-5. 選用（`RUN_SIM_SMOKE=1`）：安裝並啟動離線示範，8 秒後確認仍在執行，存一張截圖 `build/screenshots/launch-demo.jpg`
-6. 裝置用 Release archive（關閉簽署）
-7. 檢查 App bundle：主程式存在、內含 `demo-running.json`、`NSAllowsLocalNetworking` 為 true、沒有 `NSAllowsArbitraryLoads` 與 `UIBackgroundModes`，並列出最低 iOS 版本與 `UIDeviceFamily`
-8. 封裝並以 `unzip -t` 檢查 `build/MinerStatus-unsigned.ipa`，SHA256 寫入 `build/MinerStatus-unsigned.ipa.sha256`
+2. `xcodegen generate`
+3. 在可用的 iPhone 模擬器上 `xcodebuild test`（80 項 XCTest，不簽署）；摘要存到 `build/test-summary.txt`，必須實際執行 80 項且 0 失敗，否則失敗結束（數量可用 `EXPECTED_TESTS` 調整）
+4. 選用（`RUN_SIM_SMOKE=1`）：安裝並啟動離線示範，8 秒後確認仍在執行，存一張截圖 `build/screenshots/launch-demo.jpg`
+5. 裝置用 Release archive（關閉簽署）
+6. 檢查 App bundle：主程式存在、內含 `demo-running.json` 與 `MinerStatusCore.framework`、`NSAllowsLocalNetworking` 為 true、沒有 `NSAllowsArbitraryLoads` 與 `UIBackgroundModes`，並列出最低 iOS 版本與 `UIDeviceFamily`
+7. 封裝並以 `unzip -t` 檢查 `build/MinerStatus-unsigned.ipa`，SHA256 寫入 `build/MinerStatus-unsigned.ipa.sha256`
 
-設 `RUN_TESTS=0` 可略過 `swift test`，但不能據此宣稱測試通過。啟動檢查只確認 App 沒有立即閃退，不是 UI 測試；畫面仍需人工在 iPhone 與 iPad 模擬器逐一檢查七種示範情境與自訂來源畫面。
+在 GitHub Actions 中失敗時，腳本會把失敗階段、錯誤行與 log 結尾輸出為 annotation，不登入也能從公開 API 讀取。
+
+設 `RUN_TESTS=0` 可改為只編譯不測試，但不能據此宣稱測試通過。啟動檢查只確認 App 沒有立即閃退，不是 UI 測試；畫面仍需人工在 iPhone 與 iPad 模擬器逐一檢查七種示範情境與自訂來源畫面。
 
 ## 簽署與安裝
 
@@ -60,7 +62,7 @@ bash scripts/build.sh
 - 條件：`if: github.event.repository.private == false`，標準 `macos-15` runner，`timeout-minutes: 30`，同 ref 取消舊執行，`permissions: contents: read`
 - 步驟：checkout → `brew install xcodegen` → `RUN_SIM_SMOKE=1 bash scripts/build.sh`
 - IPA **不上傳**：只在 runner 內產生，大小與 SHA256 印在執行紀錄與 Summary
-- 只上傳 `MinerStatus-reports`（`swift-test.log` 與一張啟動截圖），總和超過 1 MB 時 workflow 失敗且不上傳；保留 1 天，到期由 GitHub 自動刪除
+- 只上傳 `MinerStatus-reports`（`test-summary.txt` 與一張啟動截圖），總和超過 1 MB 時 workflow 失敗且不上傳；保留 1 天，到期由 GitHub 自動刪除
 - 上傳 IPA 需另行同意，並加大小上限（例如超過 5 MB 即失敗）與 1 天保留
 
 費用：公開倉庫使用標準 GitHub-hosted runner（含 `macos-15`）的分鐘數免費，見 [GitHub Actions 計費說明](https://docs.github.com/en/billing/concepts/product-billing/github-actions)。Artifact 儲存額度對公開倉庫是否另計，官方文件未寫明，因此只上傳小檔、保留 1 天。
