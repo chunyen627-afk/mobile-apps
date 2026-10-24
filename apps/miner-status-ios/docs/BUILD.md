@@ -32,14 +32,15 @@ bash scripts/build.sh
 腳本依序執行：
 
 1. `tools/validate_contract.py`（已安裝 `jsonschema` 才執行）
-2. `swift test`（核心與 80 項 XCTest，在 macOS 主機執行）
+2. `swift test`（核心與 80 項 XCTest，在 macOS 主機執行）；紀錄存到 `build/swift-test.log`，必須實際執行 80 項且 0 失敗，否則失敗結束（數量可用 `EXPECTED_TESTS` 調整）
 3. `xcodegen generate`
-4. 模擬器 Debug 編譯（不簽署）
-5. 裝置用 Release archive（關閉簽署）
-6. 檢查 App bundle：主程式存在、內含 `demo-running.json`、`NSAllowsLocalNetworking` 為 true、沒有 `NSAllowsArbitraryLoads` 與 `UIBackgroundModes`，並列出最低 iOS 版本與 `UIDeviceFamily`
-7. 封裝並以 `unzip -t` 檢查 `build/MinerStatus-unsigned.ipa`
+4. 在可用的 iPhone 模擬器上 Debug 編譯（不簽署）
+5. 選用（`RUN_SIM_SMOKE=1`）：安裝並啟動離線示範，8 秒後確認仍在執行，存一張截圖 `build/screenshots/launch-demo.jpg`
+6. 裝置用 Release archive（關閉簽署）
+7. 檢查 App bundle：主程式存在、內含 `demo-running.json`、`NSAllowsLocalNetworking` 為 true、沒有 `NSAllowsArbitraryLoads` 與 `UIBackgroundModes`，並列出最低 iOS 版本與 `UIDeviceFamily`
+8. 封裝並以 `unzip -t` 檢查 `build/MinerStatus-unsigned.ipa`，SHA256 寫入 `build/MinerStatus-unsigned.ipa.sha256`
 
-設 `RUN_TESTS=0` 可略過 `swift test`，但不能據此宣稱測試通過。目前沒有模擬器 UI 測試，畫面需人工在 iPhone 與 iPad 模擬器逐一檢查七種示範情境與自訂來源畫面。
+設 `RUN_TESTS=0` 可略過 `swift test`，但不能據此宣稱測試通過。啟動檢查只確認 App 沒有立即閃退，不是 UI 測試；畫面仍需人工在 iPhone 與 iPad 模擬器逐一檢查七種示範情境與自訂來源畫面。
 
 ## 簽署與安裝
 
@@ -51,23 +52,20 @@ bash scripts/build.sh
 - 首次連線時 iOS 可能詢問「本地網路」權限。
 - 來源服務本身是否已啟用、是否只允許特定來源連線，屬於來源端設定，不在本 App 處理範圍。
 
-## CI（未新增；需父層決定）
+## CI
 
-目前**沒有** workflow，本 App 的提交不會觸發任何 Actions。若要以雲端 macOS 建置，建議方案如下（尚未建立、未執行）：
+`.github/workflows/miner-status-ios.yml` 已撰寫，**尚未執行**。
 
-- 檔案：`.github/workflows/miner-status-ios.yml`
-- 條件：比照 `album-ios.yml`。`if: github.event.repository.private == false`，使用標準 `macos-15` runner，`timeout-minutes: 30`，同 ref 取消舊執行，`permissions: contents: read`
-- 步驟：checkout → `brew install xcodegen` → `bash apps/miner-status-ios/scripts/build.sh` → 上傳 `MinerStatus-unsigned.ipa`（保留 3 天）
-- 觸發：`workflow_dispatch` 只有在 workflow 檔已存在於預設分支（main）時才能手動執行。若只放在本分支，就需要 `push` 觸發才會跑。兩者都會改變倉庫行為，需事先決定
+- 觸發：只有 `push` 到 `claude/miner-status-ios-demo` 且變更 `apps/miner-status-ios/**` 時。沒有 `workflow_dispatch`，因為它要求 workflow 檔存在於預設分支，而本 App 不合併 main
+- 條件：`if: github.event.repository.private == false`，標準 `macos-15` runner，`timeout-minutes: 30`，同 ref 取消舊執行，`permissions: contents: read`
+- 步驟：checkout → `brew install xcodegen` → `RUN_SIM_SMOKE=1 bash scripts/build.sh`
+- IPA **不上傳**：只在 runner 內產生，大小與 SHA256 印在執行紀錄與 Summary
+- 只上傳 `MinerStatus-reports`（`swift-test.log` 與一張啟動截圖），總和超過 1 MB 時 workflow 失敗且不上傳；保留 1 天，到期由 GitHub 自動刪除
+- 上傳 IPA 需另行同意，並加大小上限（例如超過 5 MB 即失敗）與 1 天保留
 
-費用依據與未知項：
+費用：公開倉庫使用標準 GitHub-hosted runner（含 `macos-15`）的分鐘數免費，見 [GitHub Actions 計費說明](https://docs.github.com/en/billing/concepts/product-billing/github-actions)。Artifact 儲存額度對公開倉庫是否另計，官方文件未寫明，因此只上傳小檔、保留 1 天。
 
-- 依本倉庫 `AGENTS.md`、根 README 與快速上手文件，公開倉庫使用標準 GitHub-hosted runner 不收費，既有 `album-ios.yml` 也以此為前提。本次**未**重新核對 GitHub 計費頁，啟用前請以 [GitHub Actions 計費說明](https://docs.github.com/en/billing/concepts/product-billing/github-actions) 為準。
-- 未知項：
-  - 當時 `macos-15` 映像的 Xcode 與模擬器版本
-  - 排隊時間與 `brew install xcodegen` 耗時
-  - Artifact 儲存是否計入額度
-  - 首次編譯若失敗需要的修正輪數
+未知項：`macos-15` 映像當時的 Xcode 與模擬器版本、排隊時間，以及首次編譯需要的修正輪數。
 
 ## Windows 上可執行的檢查
 

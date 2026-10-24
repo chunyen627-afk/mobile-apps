@@ -16,7 +16,7 @@
 | Xcode 專案設定（XcodeGen `App/project.yml`）、建置腳本 `scripts/build.sh` | 已撰寫；**未產生專案、未執行** |
 | Swift 語法剖析、靜態設定檢查 | Windows 上執行通過；只代表可剖析與設定內容相符，不代表編譯通過 |
 | 真實資料來源 | 未連線驗證；沒有已驗證可用的來源端點 |
-| CI workflow、IPA | 未新增 workflow；未產生 IPA |
+| CI workflow、IPA | 已撰寫 `miner-status-ios.yml`（push 到本分支才觸發）；**尚未執行**；IPA 只在 runner 內產生、不上傳 |
 
 「實作完成」不等於「編譯通過」。Swift 編譯、XCTest、模擬器與實機都需要 Apple 工具鏈，詳見 [建置](docs/BUILD.md) 與 [狀態](docs/STATUS.md)。
 

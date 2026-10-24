@@ -56,7 +56,7 @@
 | iPad 版面 | 未驗證 |
 | IPA、簽署、安裝 | 未產生 |
 | 真實資料來源 | 未連線；沒有已驗證可用的來源端點；ATS 對 HTTP 私有位址的效果未驗證 |
-| CI | 未新增 workflow，本 App 的提交不觸發任何 Actions |
+| CI | 已撰寫 `.github/workflows/miner-status-ios.yml`，**尚未執行**；見 [建置](BUILD.md#ci) |
 
 Python 檢查只驗證 JSON 契約與設定文字，**不是** Swift 程式的測試，不能互相替代。
 
@@ -65,7 +65,7 @@ Python 檢查只驗證 JSON 契約與設定文字，**不是** Swift 程式的�
 唯一阻塞是需要 macOS 與 Xcode。可選的做法：
 
 1. **自有 Mac**：在 `apps/miner-status-ios` 執行 `bash scripts/build.sh`，再在模擬器人工檢查畫面。
-2. **GitHub 標準 macOS runner**：需新增 workflow，方案與費用依據見 [建置](BUILD.md#ci未新增需父層決定)。是否新增、用 push 或手動觸發，由父層決定。
+2. **GitHub 標準 macOS runner**：workflow 已撰寫，push 到 `claude/miner-status-ios-demo` 且變更 `apps/miner-status-ios/**` 時觸發，見 [建置](BUILD.md#ci)。
 
 第一次編譯很可能出現需要修正的編譯錯誤，修正後才能談測試結果。
 
