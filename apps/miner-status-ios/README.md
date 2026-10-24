@@ -15,11 +15,11 @@
 | SwiftUI App（示範＋自訂來源） | **模擬器 UI 測試通過**：11 項、0 失敗，13 張截圖已人工檢視；iPad 與實機未驗證 |
 | Xcode 專案設定（XcodeGen `project.yml`，沿用 album-ios 架構）、建置腳本 `scripts/build.sh` | CI 實際執行通過，含 Release archive 與 bundle 檢查 |
 | Swift 語法剖析、靜態設定檢查 | Windows 上執行通過；只代表可剖析與設定內容相符 |
-| 真實資料來源 | 未連線驗證；沒有已驗證可用的來源端點 |
+| 真實資料來源 | **實機通過**（2026-10-25）：手機經私人虛擬網路讀電腦端唯讀彙整服務，兩台礦機都亮綠燈；電腦端程式與位址只在本機 |
 | CI workflow、IPA | `miner-status-ios.yml` push 到本分支即觸發；未簽署 IPA 以公開 prerelease [miner-status-0.1.0-build2](https://github.com/chunyen627-afk/mobile-apps/releases/tag/miner-status-0.1.0-build2) 發布（214,783 bytes） |
-| 實機 | **build 2 實機通過**（2026-10-25，SideStore 安裝，打得開、畫面正常，離線示範）；真實資料來源未驗證 |
+| 實機 | **build 2 實機通過**（2026-10-25，SideStore 安裝，打得開、畫面正常；接真實來源兩台皆綠燈） |
 
-iPad 與真實資料來源仍待驗證，詳見 [狀態](docs/STATUS.md) 與 [建置](docs/BUILD.md)。
+iPad 仍待驗證，詳見 [狀態](docs/STATUS.md) 與 [建置](docs/BUILD.md)。
 
 ## 燈號
 
@@ -77,7 +77,7 @@ python -I tools\check_static_policy.py
 
 | 階段 | 內容 | 狀態 |
 | --- | --- | --- |
-| 1. 驗穩 | 模擬器單元＋UI 測試、截圖檢視、發布 IPA；實機安裝並接上真實來源 | 模擬器已通過；build 2 實機打得開、畫面正常（build 1 因中文 App ID 名稱無法用 SideStore 安裝）；真實來源待電腦端服務 |
+| 1. 驗穩 | 模擬器單元＋UI 測試、截圖檢視、發布 IPA；實機安裝並接上真實來源 | **完成**：模擬器通過；build 2 實機打得開、畫面正常（build 1 因中文 App ID 名稱無法用 SideStore 安裝）；接電腦端唯讀服務的真實資料，兩台皆綠燈 |
 | 2. 收益與電費 | 每台礦機列收益，有總收益；可勾選要不要扣電費；App 直接查 Kryptex 礦池（Pearl 自動換 BTC）與公開行情，電費用台電簡易型二段式（基本電費 75 元，費率可改）；耗電＝GPU 回報瓦數＋每台額外瓦數 | 規格已確認，未開始 |
 | 3. 整合進工具箱 | 免費 Apple 帳號每台裝置只能同時 3 個 App；最終與相簿合成一個工具箱 App（沿用相簿的 Bundle ID，覆蓋安裝保留相簿資料），礦機成為其中一格 | 規劃中；動相簿需另行同意 |
 
