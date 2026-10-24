@@ -49,7 +49,7 @@
 
 | 項目 | 狀態 |
 | --- | --- |
-| 模擬器 `xcodebuild test` | 未成功執行；第一次 CI（舊的 `swift test` 流程）失敗於建置步驟，已改為 album-ios 架構 |
+| 模擬器 `xcodebuild test` | 未成功執行；改為 album-ios 架構後首次實際編譯，找到並修正 1 個編譯錯誤（`StatusEngine` 重疊存取），待重跑 |
 | XCTest 80 項（模型 16、引擎 41、client 15、fixture／文字 8） | 未編譯、未執行 |
 | `xcodegen generate`、`scripts/build.sh` | 未執行；沒有 Mac／Xcode／XcodeGen |
 | SwiftUI App（示範與自訂來源） | 未編譯；未在模擬器或實機檢視畫面 |

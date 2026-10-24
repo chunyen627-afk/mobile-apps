@@ -5,6 +5,7 @@ on:
     branches: [claude/miner-status-ios-demo]
     paths:
       - 'apps/miner-status-ios/**'
+      - '.github/workflows/miner-status-ios.yml'
 permissions:
   contents: read
 concurrency:

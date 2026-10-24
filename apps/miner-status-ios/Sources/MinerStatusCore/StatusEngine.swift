@@ -182,6 +182,8 @@ public struct StatusEngine: Sendable {
         }
         feedProblem = nil
 
+        // Local copy: reading self.policy while mutating self.trackers would overlap accesses to self.
+        let policy = self.policy
         let present = Set(feed.machines.map(\.machineId))
         for id in order where !present.contains(id) {
             trackers[id]?.reject(.missingFromFeed)

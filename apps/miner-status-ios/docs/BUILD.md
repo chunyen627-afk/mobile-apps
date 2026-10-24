@@ -58,7 +58,7 @@ bash scripts/build.sh
 
 `.github/workflows/miner-status-ios.yml` 已撰寫，**尚未執行**。
 
-- 觸發：只有 `push` 到 `claude/miner-status-ios-demo` 且變更 `apps/miner-status-ios/**` 時。沒有 `workflow_dispatch`，因為它要求 workflow 檔存在於預設分支，而本 App 不合併 main
+- 觸發：只有 `push` 到 `claude/miner-status-ios-demo`，且變更 `apps/miner-status-ios/**` 或 workflow 檔本身時。沒有 `workflow_dispatch`，因為它要求 workflow 檔存在於預設分支，而本 App 不合併 main
 - 條件：`if: github.event.repository.private == false`，標準 `macos-15` runner，`timeout-minutes: 30`，同 ref 取消舊執行，`permissions: contents: read`
 - 步驟：checkout → `brew install xcodegen` → `RUN_SIM_SMOKE=1 bash scripts/build.sh`
 - IPA **不上傳**：只在 runner 內產生，大小與 SHA256 印在執行紀錄與 Summary
