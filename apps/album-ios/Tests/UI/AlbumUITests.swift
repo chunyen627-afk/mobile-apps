@@ -151,9 +151,6 @@ final class AlbumUITests: XCTestCase {
             // Wait past the temporary seek display. This must be the decoder's
             // advancing clock, not merely the slider's requested position.
             Thread.sleep(forTimeInterval: 3.5)
-            // Finish the actual four-second auto-hide cycle before revealing.
-            // Checking visible at 3.5 s races the next accessibility snapshot.
-            waitUntilGone(app.buttons["leavePlayer"], timeout: 8)
             centerTap()
             let resumed = XCTNSPredicateExpectation(predicate: NSPredicate { [self] _, _ in
                 guard app.staticTexts["videoTime"].exists else { return false }
@@ -206,6 +203,7 @@ final class AlbumUITests: XCTestCase {
         assertPhotoZoom { $0 == 100 }
         viewport.pinch(withScale: 2, velocity: 1)
         assertPhotoZoom { $0 == 100 }
+        centerTap()
         app.buttons["暫停"].tap()
         viewport.pinch(withScale: 2, velocity: 1)
         assertPhotoZoom { $0 > 150 }
@@ -266,9 +264,12 @@ final class AlbumUITests: XCTestCase {
     }
 
     private var savedNote: XCUIElement { app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "使用已儲存清單")).firstMatch }
-    // Existing playback tests need visible controls, regardless of timer timing.
+    // Start each group of playing controls from a newly revealed overlay.
+    // An exists snapshot can be true just before the four-second timer fires.
     private func centerTap() {
-        if !app.buttons["leavePlayer"].exists { tapCanvas() }
+        if app.buttons["繼續"].exists { return } // Paused controls have no hide timer.
+        waitUntilGone(app.buttons["leavePlayer"], timeout: 8)
+        tapCanvas()
         // Photo single taps wait for the double-tap recognizer to fail. XCTest
         // returning from tap does not mean that delayed callback has executed.
         XCTAssertTrue(app.buttons["leavePlayer"].waitForExistence(timeout: 2))
