@@ -7,7 +7,7 @@
 | App | 平台 | 用途 | 驗證狀態 |
 | --- | --- | --- | --- |
 | [光盒相簿](apps/album-ios) | iPhone / iOS 17+ | SMB 相簿、資料夾索引、照片預載、影片播放與診斷匯出 | 0.3.1 的 39 項測試、畫面檢查及封裝通過；已覆蓋安裝並讀回確認 build 4，新版功能回歸與偶發退出問題待實機驗證 |
-| [礦機狀態](apps/miner-status-ios) | iPhone / iOS 16+ | 以燈號與白名單詳情顯示礦機狀態；預設離線示範，可手動設定唯讀來源（僅前景） macOS CI 編譯通過；80 項單元測試、11 項模擬器 UI 測試 0 失敗，截圖已人工檢視（[run 40102507820](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40102507820)）；IPA 已發布為公開 prerelease，iPad 未驗證，未實機安裝 |
+| [礦機狀態](apps/miner-status-ios) | iPhone / iOS 16+ | 以燈號與白名單詳情顯示礦機狀態；預設離線示範，可手動設定唯讀來源（僅前景） | macOS CI 編譯通過；80 項單元測試、11 項模擬器 UI 測試 0 失敗，截圖已人工檢視（[run 40109294512](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40109294512)）；IPA 以公開 prerelease 發布；**build 2 實機通過**（打得開、畫面正常）；iPad 與真實資料來源未驗證 |
 
 ## 目錄
 

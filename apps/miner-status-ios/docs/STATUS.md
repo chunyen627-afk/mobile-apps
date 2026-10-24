@@ -74,18 +74,26 @@ UI 測試與截圖找到並修正的畫面問題：
 2. [run 40094798800](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40094798800)：首次實際編譯，`StatusEngine.swift` 修改 `trackers` 時同時讀 `self.policy`，觸發重疊存取錯誤；改用區域常數
 3. [run 40095024930](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40095024930)：全部通過；之後補上公開 notice，讓測試數與 IPA SHA256 不登入也能查證
 
+## 實機
+
+| 項目 | 結果 |
+| --- | --- |
+| build 1（`miner-status-0.1.0-build1`） | SideStore 安裝失敗：中文 `CFBundleDisplayName` 被當成 Apple App ID 名稱而遭拒（`invalid value '礦機狀態' … 'appIdName'`） |
+| build 2（[`miner-status-0.1.0-build2`](https://github.com/chunyen627-afk/mobile-apps/releases/tag/miner-status-0.1.0-build2)，SHA256 `c5bfede7…f36309`） | 2026-10-25 本人以 SideStore 安裝，回報**打得開、畫面正常**（iPhone，離線示範） |
+
 ## 未執行
 
 | 項目 | 狀態 |
 | --- | --- |
 | iPad 版面 | 未驗證（UI 測試只在 iPhone 模擬器執行） |
-| 簽署、安裝、實機 | build 1 用 SideStore 安裝失敗：中文 `CFBundleDisplayName` 被當成 App ID 名稱而遭 Apple 拒絕（`invalid value '礦機狀態' … 'appIdName'`）。已改為英文名稱加中文語系檔（build 2），待重新安裝 |
+| 實機：真實資料來源 | 未驗證；電腦端狀態服務尚未建立 |
 | 真實資料來源 | 未連線；沒有已驗證可用的來源端點；ATS 對 HTTP 私有位址的效果未驗證 |
 
 Python 檢查只驗證 JSON 契約與設定文字，**不是** Swift 程式的測試，不能互相替代。
 
 ## 下一步
 
-1. 本人簽署並安裝 0.1.0 build 1，在實機確認開啟、示範情境與設定畫面。
-2. 需要時加 iPad 模擬器的 UI 測試與截圖。
+1. 建立電腦端唯讀狀態服務（只在 ZeroTier／區網開放），在實機用自訂來源驗證：ATS、本地網路權限、失敗與重連。
+2. 收益與電費功能（規格見 README 開發路線），同樣先模擬器驗證再實機確認。
+3. 需要時加 iPad 模擬器的 UI 測試與截圖。
 3. 來源端確認可用後，在實機以自訂來源驗證：ATS、本地網路權限、失敗與重連。
