@@ -19,6 +19,7 @@
 | 測試 | unit-test target `MinerStatusCoreTests`，在 iOS 模擬器執行；fixtures 以 `#filePath` 讀取 |
 | 內建資源 | `fixtures/demo-running.json`（離線示範必需，缺少時 App 只顯示載入錯誤） |
 | Bundle ID | `org.personal.minerstatus.app`；免費 Apple 帳號會佔用一個 App ID，之後請固定沿用 |
+| App 名稱 | `Info.plist` 的 `CFBundleDisplayName` 為英文 `MinerStatus`（SideStore 拿它當 Apple App ID 名稱，中文會被拒絕）；主畫面的「礦機狀態」來自 `iOSApp/zh-Hant.lproj/InfoPlist.strings` |
 | 裝置 | `TARGETED_DEVICE_FAMILY = 1,2`；iPhone 優先，iPad 版面未驗證 |
 | ATS | 只開 `NSAllowsLocalNetworking`；不設 `NSAllowsArbitraryLoads`，也沒有背景模式 |
 

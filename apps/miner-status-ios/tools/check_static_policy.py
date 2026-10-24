@@ -39,6 +39,12 @@ for key in ("NSAllowsArbitraryLoads", "NSAllowsArbitraryLoadsInWebContent", "NSA
     check(key not in ats, f"Info.plist: {key} must not be set")
 check("UIBackgroundModes" not in info, "Info.plist: UIBackgroundModes must not be set (foreground only)")
 check(bool(info.get("NSLocalNetworkUsageDescription")), "Info.plist: NSLocalNetworkUsageDescription required")
+# SideStore sends CFBundleDisplayName as the Apple App ID name, which rejects non-ASCII text.
+check(re.fullmatch(r"[A-Za-z0-9 ]+", info.get("CFBundleDisplayName", "")) is not None,
+      "Info.plist: CFBundleDisplayName must be ASCII (SideStore App ID name); localize it instead")
+strings = ROOT / "iOSApp" / "zh-Hant.lproj" / "InfoPlist.strings"
+check(strings.is_file() and '"CFBundleDisplayName" = "礦機狀態";' in strings.read_text(encoding="utf-8"),
+      "zh-Hant.lproj/InfoPlist.strings must give the Chinese home-screen name")
 
 # 2. XcodeGen spec (album-ios layout): iOS 16, core framework target, simulator unit tests,
 #    bundled demo fixture, explicit Info.plist, no packages at all.

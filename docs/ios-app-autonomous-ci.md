@@ -12,6 +12,7 @@
 | --- | --- |
 | 專案規格 | `apps/<app>/project.yml`（XcodeGen），放在 App 根目錄；產生的 `.xcodeproj` 不進版控 |
 | App target | `type: application`，明確的 `Info.plist`，固定的 Bundle ID |
+| App 名稱 | `CFBundleDisplayName` 必須是英文（SideStore 拿它建 Apple App ID，中文會被拒絕）；中文主畫面名稱放在 `zh-Hant.lproj/InfoPlist.strings`，並宣告 `CFBundleLocalizations` 為 zh-Hant |
 | 無 UI 的核心（選用） | `type: framework` target，App 以 `- target:` 相依；原始碼可保留 `import <Core>` |
 | 單元測試 | `type: bundle.unit-test`，由 App scheme 的 `testTargets` 執行 |
 | 測試方式 | 在 iOS 模擬器用 `xcodebuild test`，**不用** SwiftPM 的 `swift test` |
@@ -117,6 +118,7 @@ jobs:
 | 測試全綠，但其實一項都沒跑 | 沒有數量閘門；見第二節第 3 點 |
 | 報告超過 1 MB | 截圖改 JPEG；不要上傳完整的 xcodebuild log 或 xcresult |
 | API 回應缺欄位（例如 `KeyError: 'jobs'`） | 公開 API 每小時 60 次用完了；等 `rate_limit` 的 reset 時間，輪詢間隔拉長 |
+| SideStore 安裝失敗：`An invalid value '<中文名>' was provided for the parameter 'appIdName'` | 中文 `CFBundleDisplayName` 被當成 App ID 名稱；改英文，中文名稱用語系檔（見第一節）。用 Sideloadly 裝過的 App 不會遇到，所以舊 App 看起來沒問題 |
 | 產物要下載到本機備份 | Artifact 下載要登入；請使用者下載，放到使用者指定的本機備份位置（私人路徑，只記在本機，不寫進倉庫） |
 
 ## 實戰日記

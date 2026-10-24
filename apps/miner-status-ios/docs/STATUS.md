@@ -79,7 +79,7 @@ UI 測試與截圖找到並修正的畫面問題：
 | 項目 | 狀態 |
 | --- | --- |
 | iPad 版面 | 未驗證（UI 測試只在 iPhone 模擬器執行） |
-| 簽署、安裝、實機 | 未執行；IPA 已發布，待本人簽署安裝 |
+| 簽署、安裝、實機 | build 1 用 SideStore 安裝失敗：中文 `CFBundleDisplayName` 被當成 App ID 名稱而遭 Apple 拒絕（`invalid value '礦機狀態' … 'appIdName'`）。已改為英文名稱加中文語系檔（build 2），待重新安裝 |
 | 真實資料來源 | 未連線；沒有已驗證可用的來源端點；ATS 對 HTTP 私有位址的效果未驗證 |
 
 Python 檢查只驗證 JSON 契約與設定文字，**不是** Swift 程式的測試，不能互相替代。

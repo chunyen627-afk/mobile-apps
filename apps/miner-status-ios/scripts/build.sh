@@ -158,6 +158,15 @@ if /usr/libexec/PlistBuddy -c 'Print :UIBackgroundModes' "$PLIST" >/dev/null 2>&
   echo 'UIBackgroundModes must not be set: the app reads in the foreground only'
   exit 1
 fi
+# SideStore uses CFBundleDisplayName as the Apple App ID name, which must be ASCII; the Chinese
+# home-screen name comes from zh-Hant.lproj/InfoPlist.strings.
+DISPLAY_NAME=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$PLIST")
+if ! [[ "$DISPLAY_NAME" =~ ^[A-Za-z0-9\ ]+$ ]]; then
+  echo "CFBundleDisplayName '$DISPLAY_NAME' must be ASCII letters, digits or spaces (SideStore App ID name)"
+  exit 1
+fi
+test "$(plutil -extract CFBundleDisplayName raw -o - "$APP/zh-Hant.lproj/InfoPlist.strings")" = '礦機狀態'
+echo "Display name: $DISPLAY_NAME (zh-Hant: 礦機狀態)"
 echo "MinimumOSVersion: $(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$PLIST")"
 echo "UIDeviceFamily: $(/usr/libexec/PlistBuddy -c 'Print :UIDeviceFamily' "$PLIST" | tr -d '\n')"
 
