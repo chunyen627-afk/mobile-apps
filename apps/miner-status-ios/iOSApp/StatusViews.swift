@@ -20,6 +20,7 @@ struct OverviewList: View {
                 Button(action: showSettings) {
                     Label("資料來源", systemImage: "antenna.radiowaves.left.and.right")
                 }
+                .accessibilityIdentifier("source-settings")
             }
         }
     }
@@ -40,6 +41,7 @@ struct OverviewList: View {
             }
             ForEach(model.snapshots, id: \.machineId) { snapshot in
                 NavigationLink(value: snapshot.machineId) { MachineRow(snapshot: snapshot) }
+                    .accessibilityIdentifier("machine-\(snapshot.machineId)")
             }
         }
 
@@ -64,6 +66,7 @@ struct OverviewList: View {
             } label: {
                 LabeledContent("目前情境", value: model.scenario.title)
             }
+            .accessibilityIdentifier("scenario-menu")
             Text(model.scenario.summary).font(.caption).foregroundStyle(.secondary)
             if let error = model.demoError {
                 Label(error, systemImage: "exclamationmark.octagon").foregroundStyle(.red)
@@ -82,10 +85,12 @@ struct OverviewList: View {
             LabeledContent("最後成功", value: model.lastSuccessAt.map(timeText) ?? DisplayText.noData)
             if let failure = model.lastFailure {
                 Label(failure.displayText, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+                    .accessibilityIdentifier("live-failure")
             }
             Button("立即讀取一次") { model.refreshNow() }
                 .disabled(!model.isPolling)
             Button("停止讀取並回到離線示範") { model.stopLiveAndReturnToDemo() }
+                .accessibilityIdentifier("stop-live")
         } header: {
             Text("自訂來源（唯讀）")
         } footer: {

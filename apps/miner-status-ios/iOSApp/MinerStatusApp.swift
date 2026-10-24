@@ -76,5 +76,6 @@ struct ModeBanner: View {
         .padding(.vertical, 6)
         .background(model.mode == .demo ? Color.orange.opacity(0.25) : Color.blue.opacity(0.15))
         .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("mode-banner")
     }
 }

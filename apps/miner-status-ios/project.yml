@@ -33,6 +33,7 @@ targets:
       gatherCoverageData: false
       testTargets:
         - MinerStatusCoreTests
+        - MinerStatusUITests
   # The UI-free core (Sources/MinerStatusCore), embedded in the app as a framework so the
   # sources keep `import MinerStatusCore`.
   MinerStatusCore:
@@ -57,3 +58,16 @@ targets:
       base:
         GENERATE_INFOPLIST_FILE: YES
         PRODUCT_BUNDLE_IDENTIFIER: org.personal.minerstatus.tests
+  # Simulator UI tests: drive every demo scenario, the detail screen and the custom source.
+  MinerStatusUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - Tests/MinerStatusUITests
+    dependencies:
+      - target: MinerStatus
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: org.personal.minerstatus.uitests
+        TEST_TARGET_NAME: MinerStatus

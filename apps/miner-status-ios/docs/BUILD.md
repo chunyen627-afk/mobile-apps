@@ -34,7 +34,12 @@ bash scripts/build.sh
 
 1. `tools/validate_contract.py`（已安裝 `jsonschema` 才執行）
 2. `xcodegen generate`
-3. 在可用的 iPhone 模擬器上 `xcodebuild test`（80 項 XCTest，不簽署）；摘要存到 `build/test-summary.txt`，必須實際執行 80 項且 0 失敗，否則失敗結束（數量可用 `EXPECTED_TESTS` 調整）
+3. 在可用的 iPhone 模擬器上 `xcodebuild test`（不簽署），一次跑兩組：
+   - 單元測試 80 項（`EXPECTED_TESTS`）
+   - UI 測試 11 項（`EXPECTED_UI_TESTS`）：逐一切換 7 種示範情境並檢查兩台機器的燈號、打開詳情頁、網址驗證、自訂來源讀取本機假資料、讀取失敗提示、停止後回到示範；每個畫面存一張截圖
+   - 自訂來源測試用的假資料：腳本在 Mac 的 `127.0.0.1:8765` 以 `fixtures/` 啟動暫時的 HTTP 伺服器，`8799` 埠刻意無人監聽；網址以 `TEST_RUNNER_` 環境變數傳給測試，測試程式內沒有任何位址
+   - 兩組都必須剛好跑到預期數量且 0 失敗，否則失敗結束；摘要存到 `build/test-summary.txt`
+   - 結束時（含失敗）把截圖匯出成 `build/screenshots-ui/*.jpg` 與 `INDEX.txt`
 4. 選用（`RUN_SIM_SMOKE=1`）：安裝並啟動離線示範，8 秒後確認仍在執行，存一張截圖 `build/screenshots/launch-demo.jpg`
 5. 裝置用 Release archive（關閉簽署）
 6. 檢查 App bundle：主程式存在、內含 `demo-running.json` 與 `MinerStatusCore.framework`、`NSAllowsLocalNetworking` 為 true、沒有 `NSAllowsArbitraryLoads` 與 `UIBackgroundModes`，並列出最低 iOS 版本與 `UIDeviceFamily`
@@ -59,7 +64,8 @@ bash scripts/build.sh
 `.github/workflows/miner-status-ios.yml` 已實際執行通過，最新為 [run 40095550434](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40095550434)。測試數、工具版本與 IPA SHA256 以 `::notice` annotation 公開，不登入也能從 API 讀取。
 
 - 觸發：只有 `push` 到 `claude/miner-status-ios-demo`，且變更 `apps/miner-status-ios/**` 或 workflow 檔本身時。沒有 `workflow_dispatch`，因為它要求 workflow 檔存在於預設分支，而本 App 不合併 main
-- 條件：`if: github.event.repository.private == false`，標準 `macos-15` runner，`timeout-minutes: 30`，同 ref 取消舊執行，`permissions: contents: read`
+- 條件：`if: github.event.repository.private == false`，標準 `macos-15` runner，`timeout-minutes: 30`，同 ref 取消舊執行
+- 權限 `contents: write`：只用來把模擬器截圖強制推到專用分支 `ci-screenshots-miner-status-ios`（每次覆蓋、不留歷史、上限 5 MB、只有示範資料），讓截圖不登入也能檢視
 - 步驟：checkout → `brew install xcodegen` → `RUN_SIM_SMOKE=1 bash scripts/build.sh`
 - IPA **不上傳**：只在 runner 內產生，大小與 SHA256 印在執行紀錄與 Summary
 - 只上傳 `MinerStatus-reports`（`test-summary.txt` 與一張啟動截圖），總和超過 1 MB 時 workflow 失敗且不上傳；保留 1 天，到期由 GitHub 自動刪除

@@ -34,6 +34,7 @@ struct SourceSettingsView: View {
                         .keyboardType(.URL)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
+                        .accessibilityIdentifier("source-url")
                     switch validation {
                     case .success(let endpoint):
                         if endpoint.usesPlainHTTP {
@@ -44,6 +45,7 @@ struct SourceSettingsView: View {
                     case .failure(let error):
                         if !urlText.isEmpty {
                             Text(error.displayText).font(.caption).foregroundStyle(.red)
+                                .accessibilityIdentifier("source-url-error")
                         }
                     }
                 } header: {
@@ -68,6 +70,7 @@ struct SourceSettingsView: View {
                         dismiss()
                     }
                     .disabled(!isValid)
+                    .accessibilityIdentifier("start-live")
 
                     if model.mode == .live {
                         Button("停止讀取並回到離線示範") {

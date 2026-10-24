@@ -53,6 +53,10 @@ check(re.search(r"\n  MinerStatusCoreTests:\s*\n\s*type:\s*bundle\.unit-test\s*\
       "project.yml: MinerStatusCoreTests must be a unit-test bundle")
 check(re.search(r"testTargets:\s*\n\s*- MinerStatusCoreTests\s*\n", spec) is not None,
       "project.yml: app scheme must run MinerStatusCoreTests")
+check(re.search(r"\n  MinerStatusUITests:\s*\n\s*type:\s*bundle\.ui-testing\s*\n", spec) is not None,
+      "project.yml: MinerStatusUITests must be a UI-testing bundle")
+check(re.search(r"testTargets:\s*\n\s*- MinerStatusCoreTests\s*\n\s*- MinerStatusUITests\s*\n", spec) is not None,
+      "project.yml: app scheme must also run MinerStatusUITests")
 check(re.search(r"path:\s*fixtures/demo-running\.json\s*\n\s*buildPhase:\s*resources", spec) is not None,
       "project.yml: demo-running.json must be a bundled resource")
 check("INFOPLIST_FILE: iOSApp/Info.plist" in spec, "project.yml: INFOPLIST_FILE must point to iOSApp/Info.plist")

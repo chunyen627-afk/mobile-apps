@@ -6,8 +6,10 @@ on:
     paths:
       - 'apps/miner-status-ios/**'
       - '.github/workflows/miner-status-ios.yml'
+# Write access is used only to force-push simulator screenshots (demo data) to one dedicated
+# branch, so the screenshots can be reviewed without signing in.
 permissions:
-  contents: read
+  contents: write
 concurrency:
   group: miner-status-ios-${{ github.ref }}
   cancel-in-progress: true
@@ -59,6 +61,32 @@ jobs:
             echo "Reports exceed 1 MB; refusing to upload."
             exit 1
           fi
+      # Replaces the branch each run (no history kept). Only demo-data simulator screens; 5 MB cap.
+      - name: Publish simulator screenshots
+        if: always()
+        working-directory: ${{ env.APP_DIR }}/build
+        env:
+          SHOT_BRANCH: ci-screenshots-miner-status-ios
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ ! -f screenshots-ui/INDEX.txt ]; then
+            echo "No UI screenshots to publish."
+            exit 0
+          fi
+          total=$(find screenshots-ui -type f -exec stat -f %z {} + | awk '{s+=$1} END {print s+0}')
+          echo "screenshots total: $total bytes"
+          if [ "$total" -gt 5242880 ]; then
+            echo "Screenshots exceed 5 MB; refusing to publish."
+            exit 1
+          fi
+          cd screenshots-ui
+          printf 'run %s\ncommit %s\n' "$GITHUB_RUN_ID" "$GITHUB_SHA" > RUN.txt
+          git init -q -b "$SHOT_BRANCH"
+          git add .
+          git -c user.name=github-actions -c user.email=41898282+github-actions[bot]@users.noreply.github.com \
+            commit -q -m "Simulator screenshots for run $GITHUB_RUN_ID ($GITHUB_SHA)"
+          git push -q --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/${SHOT_BRANCH}"
+          echo "::notice title=Screenshots::$(grep -c . INDEX.txt) screenshots on branch ${SHOT_BRANCH} for run ${GITHUB_RUN_ID}"
       - name: Save small reports
         if: always() && steps.collect.outcome == 'success'
         uses: actions/upload-artifact@v4
