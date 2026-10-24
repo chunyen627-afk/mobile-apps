@@ -16,7 +16,7 @@
 | Xcode 專案設定（XcodeGen `project.yml`，沿用 album-ios 架構）、建置腳本 `scripts/build.sh` | CI 實際執行通過，含 Release archive 與 bundle 檢查 |
 | Swift 語法剖析、靜態設定檢查 | Windows 上執行通過；只代表可剖析與設定內容相符 |
 | 真實資料來源 | 未連線驗證；沒有已驗證可用的來源端點 |
-| CI workflow、IPA | `miner-status-ios.yml` push 到本分支即觸發；未簽署 IPA 在 runner 內產生（211,736 bytes），**未上傳、未安裝** |
+| CI workflow、IPA | `miner-status-ios.yml` push 到本分支即觸發；未簽署 IPA 以公開 prerelease [miner-status-0.1.0-build1](https://github.com/chunyen627-afk/mobile-apps/releases/tag/miner-status-0.1.0-build1) 發布（214,284 bytes），**尚未實機安裝** |
 
 模擬器通過不等於實機通過。iPad 與實機仍待驗證，詳見 [狀態](docs/STATUS.md) 與 [建置](docs/BUILD.md)。
 

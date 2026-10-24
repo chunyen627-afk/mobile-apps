@@ -49,6 +49,8 @@
 
 最新通過：[run 40102507820](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40102507820)，來源 `9f93659`，Xcode 16.4、iPhone 16 Pro 模擬器。以下數字取自該 run 的公開 annotation。
 
+發布：[run 40104542175](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40104542175)（來源 `9e8ec14`，同樣 80＋11 項 0 失敗）建立公開 prerelease [miner-status-0.1.0-build1](https://github.com/chunyen627-afk/mobile-apps/releases/tag/miner-status-0.1.0-build1)，`MinerStatus-0.1.0-build1-unsigned.ipa` 214,284 bytes，SHA256 `5b041860e9bc54b8e2c305bbc2ce1f04e7776d69e2d8212a8d4fb8dfab180887`。
+
 | 檢查 | 結果 |
 | --- | --- |
 | `xcodegen generate`、模擬器 Debug 編譯（核心 framework、App、測試） | 通過 |
@@ -77,13 +79,13 @@ UI 測試與截圖找到並修正的畫面問題：
 | 項目 | 狀態 |
 | --- | --- |
 | iPad 版面 | 未驗證（UI 測試只在 iPhone 模擬器執行） |
-| 簽署、安裝、實機 | 未執行；IPA 未上傳 |
+| 簽署、安裝、實機 | 未執行；IPA 已發布，待本人簽署安裝 |
 | 真實資料來源 | 未連線；沒有已驗證可用的來源端點；ATS 對 HTTP 私有位址的效果未驗證 |
 
 Python 檢查只驗證 JSON 契約與設定文字，**不是** Swift 程式的測試，不能互相替代。
 
 ## 下一步
 
-1. 要安裝到手機時，才提供 IPA（加大小上限、短保留期），由本人簽署安裝。
+1. 本人簽署並安裝 0.1.0 build 1，在實機確認開啟、示範情境與設定畫面。
 2. 需要時加 iPad 模擬器的 UI 測試與截圖。
 3. 來源端確認可用後，在實機以自訂來源驗證：ATS、本地網路權限、失敗與重連。
