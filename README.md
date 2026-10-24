@@ -7,19 +7,22 @@
 | App | 平台 | 用途 | 驗證狀態 |
 | --- | --- | --- | --- |
 | [光盒相簿](apps/album-ios) | iPhone / iOS 17+ | SMB 相簿、資料夾索引、照片預載、影片播放與診斷匯出 | 0.3.1 的 39 項測試、畫面檢查及封裝通過；已覆蓋安裝並讀回確認 build 4，新版功能回歸與偶發退出問題待實機驗證 |
-| [礦機狀態](apps/miner-status-ios) | iPhone / iOS 16+ | 以燈號與白名單詳情顯示礦機狀態；預設離線示範，可手動設定唯讀來源（僅前景） | 實作完成；JSON 契約、語法剖析與靜態設定檢查在 Windows 執行通過；Swift 核心、80 項 XCTest、SwiftUI 與 XcodeGen 專案均未編譯、未執行，無 workflow、無 IPA |
+| [礦機狀態](apps/miner-status-ios) | iPhone / iOS 16+ | 以燈號與白名單詳情顯示礦機狀態；預設離線示範，可手動設定唯讀來源（僅前景） | macOS CI 編譯通過、80 項模擬器測試 0 失敗、啟動檢查通過（[run 40095550434](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40095550434)）；畫面未人工檢視，IPA 未上傳、未實機安裝 |
 
 ## 目錄
 
 ```text
 apps/
   album-ios/               光盒相簿（SwiftUI 原生 App）
-  miner-status-ios/        礦機狀態（Swift 套件、SwiftUI、XcodeGen 規格；尚無 workflow）
+  miner-status-ios/        礦機狀態（SwiftUI、XcodeGen，沿用相簿架構）
 .github/workflows/
   album-ios.yml            相簿的 macOS 編譯與測試
+  miner-status-ios.yml     礦機的 macOS 編譯與測試（只在開發分支 push 時觸發，不上傳大檔）
+docs/
+  ios-app-autonomous-ci.md 新 App 的 AI 自主建置流程與實戰日記
 ```
 
-後續新 App 放在 `apps/<名稱>/`，各自建立 README 與必要的 workflow。STM32 板子相關內容留在 [stm32h7s78-project](https://github.com/chunyen627-afk/stm32h7s78-project)。
+後續新 App 放在 `apps/<名稱>/`，各自建立 README 與必要的 workflow，並依 [AI 自主建置流程](docs/ios-app-autonomous-ci.md) 建置與驗證。STM32 板子相關內容留在 [stm32h7s78-project](https://github.com/chunyen627-afk/stm32h7s78-project)。
 
 ## 相簿下載與安裝
 

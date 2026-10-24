@@ -64,7 +64,7 @@ jobs:
 ## 四、自主迭代迴圈（不需要使用者）
 
 1. Commit 並 push 到開發分支
-2. 用公開 API 找這次的 run，每 30 秒查一次，直到 `status` 變成 `completed`：
+2. 用公開 API 找這次的 run，**每 90 秒**查一次，直到 `status` 變成 `completed`（未登入的 API 每小時只有 60 次，查太密會被擋；可用 `https://api.github.com/rate_limit` 看剩餘次數）：
    `https://api.github.com/repos/<owner>/<repo>/actions/runs?branch=<分支>&per_page=5`，比對 `head_sha`
 3. 失敗時讀出失敗的 job 與步驟：`.../actions/runs/<run_id>/jobs`
 4. 讀錯誤內容：`.../check-runs/<job_id>/annotations`
@@ -105,3 +105,25 @@ jobs:
 | 只改 workflow 卻沒觸發 | `paths` 沒包含 workflow 檔本身 |
 | 測試全綠，但其實一項都沒跑 | 沒有數量閘門；見第二節第 3 點 |
 | 報告超過 1 MB | 截圖改 JPEG；不要上傳完整的 xcodebuild log 或 xcresult |
+| API 回應缺欄位（例如 `KeyError: 'jobs'`） | 公開 API 每小時 60 次用完了；等 `rate_limit` 的 reset 時間，輪詢間隔拉長 |
+| 產物要下載到本機備份 | Artifact 下載要登入；請使用者下載，放到使用者指定的本機備份位置（私人路徑，只記在本機，不寫進倉庫） |
+
+## 實戰日記
+
+### 2026-10-24：礦機狀態第一次上 CI
+
+從「Swift 程式從未編譯過」到 80 項測試通過，共 4 次 run，其中 3 次人工介入都已寫進本文件，下次不應再發生。
+
+| Run | 結果 | 原因與處理 |
+| --- | --- | --- |
+| （push 失敗） | — | Token 缺 workflow 權限 → 第二次又遇到認證失效 → 使用者在終端機用瀏覽器登入後解決（第五節） |
+| [40094203491](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40094203491) | 失敗，28 秒 | 舊的 SwiftPM `swift test` 流程；log 要登入才看得到，只好請使用者幫忙 → 改成 album-ios 架構，並加上失敗 annotation |
+| [40094798800](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40094798800) | 失敗 | Annotation 直接讀到編譯錯誤：修改 `self.trackers` 時同時讀 `self.policy`（Swift 重疊存取）→ 先複製到區域常數 |
+| [40095024930](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40095024930) | 通過 | 但測試數只在要登入的 Summary 裡 → 加上成功 notice |
+| [40095550434](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40095550434) | 通過 | 公開 notice：80 項 0 失敗、Xcode 16.4、iPhone 16 Pro 模擬器、IPA 211,736 bytes |
+
+學到的事：
+
+- 在 Windows 寫、從沒編譯過的 Swift，第一次編譯就只錯 1 處；真正花時間的是 CI 基礎設施（權限、log 可見性），不是程式本身
+- 沿用已經成功的 App 架構，比自創結構（SwiftPM＋`swift test`）少踩坑
+- 每個 run 約 6 到 12 分鐘；輪詢時注意未登入 API 的 60 次／小時上限

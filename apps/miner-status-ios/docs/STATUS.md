@@ -2,9 +2,9 @@
 
 最後更新：2026-10-24。
 
-## 已實際執行
+## Windows 上實際執行
 
-在 Windows 上執行，使用 Python 3.11.9、jsonschema 4.23.0、tree-sitter-language-pack 1.10.1。
+使用 Python 3.11.9、jsonschema 4.23.0、tree-sitter-language-pack 1.10.1。
 
 | 檢查 | 指令 | 結果 |
 | --- | --- | --- |
@@ -45,32 +45,37 @@
   - 測試中 `Result` 擴充屬性與 `case failure` 同名
   - 測試中區域常數與方法同名
 
+## CI 實際執行（GitHub 標準 macOS runner）
+
+最新通過：[run 40095550434](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40095550434)，來源 `2031641`，Xcode 16.4、iPhone 16 Pro 模擬器。以下數字取自該 run 的公開 annotation。
+
+| 檢查 | 結果 |
+| --- | --- |
+| `xcodegen generate`、模擬器 Debug 編譯（核心 framework、App、測試） | 通過 |
+| XCTest | `Executed 80 tests, with 0 failures (0 unexpected)` |
+| 模擬器啟動檢查（離線示範，8 秒後仍在執行） | 通過；截圖只存在 1 天期的 artifact，**尚未人工檢視** |
+| Release archive、bundle 檢查（主程式、`demo-running.json`、`MinerStatusCore.framework`、ATS、無背景模式） | 通過 |
+| 未簽署 IPA | 211,736 bytes，SHA256 `6ccd7347311e31e9e8b00ba71674d1b7c895c998ae58800a582b85a3ba74208b`；只在 runner 內，**未上傳** |
+
+修正紀錄：
+
+1. [run 40094203491](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40094203491)：舊的 SwiftPM `swift test` 流程，建置步驟失敗（當時沒有 annotation，log 需登入）；改為 album-ios 架構
+2. [run 40094798800](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40094798800)：首次實際編譯，`StatusEngine.swift` 修改 `trackers` 時同時讀 `self.policy`，觸發重疊存取錯誤；改用區域常數
+3. [run 40095024930](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40095024930)：全部通過；之後補上公開 notice，讓測試數與 IPA SHA256 不登入也能查證
+
 ## 未執行
 
 | 項目 | 狀態 |
 | --- | --- |
-| 模擬器 `xcodebuild test` | 未成功執行；改為 album-ios 架構後首次實際編譯，找到並修正 1 個編譯錯誤（`StatusEngine` 重疊存取），待重跑 |
-| XCTest 80 項（模型 16、引擎 41、client 15、fixture／文字 8） | 未編譯、未執行 |
-| `xcodegen generate`、`scripts/build.sh` | 未執行；沒有 Mac／Xcode／XcodeGen |
-| SwiftUI App（示範與自訂來源） | 未編譯；未在模擬器或實機檢視畫面 |
+| 七種示範情境與自訂來源畫面 | 未人工檢視（iPhone 與 iPad 模擬器都還沒看） |
 | iPad 版面 | 未驗證 |
-| IPA、簽署、安裝 | 未產生 |
+| 簽署、安裝、實機 | 未執行；IPA 未上傳 |
 | 真實資料來源 | 未連線；沒有已驗證可用的來源端點；ATS 對 HTTP 私有位址的效果未驗證 |
-| CI | 已撰寫 `.github/workflows/miner-status-ios.yml`，**尚未執行**；見 [建置](BUILD.md#ci) |
 
 Python 檢查只驗證 JSON 契約與設定文字，**不是** Swift 程式的測試，不能互相替代。
 
-## 剩下的阻塞
-
-唯一阻塞是需要 macOS 與 Xcode。可選的做法：
-
-1. **自有 Mac**：在 `apps/miner-status-ios` 執行 `bash scripts/build.sh`，再在模擬器人工檢查畫面。
-2. **GitHub 標準 macOS runner**：workflow 已撰寫，push 到 `claude/miner-status-ios-demo` 且變更 `apps/miner-status-ios/**` 時觸發，見 [建置](BUILD.md#ci)。
-
-第一次編譯很可能出現需要修正的編譯錯誤，修正後才能談測試結果。
-
 ## 下一步
 
-1. 在 Mac 或 CI 執行 `scripts/build.sh`，修正編譯錯誤，並記錄實際的通過與失敗數。
-2. 在 iPhone 與 iPad 模擬器逐一檢查七種示範情境與自訂來源畫面，包括錯誤與暫停狀態。
+1. 在 iPhone 與 iPad 模擬器逐一檢查七種示範情境與自訂來源畫面，包括錯誤與暫停狀態。
+2. 要安裝到手機時，才在 workflow 上傳 IPA（加大小上限、短保留期），由本人簽署安裝。
 3. 來源端確認可用後，在實機以自訂來源驗證：ATS、本地網路權限、失敗與重連。

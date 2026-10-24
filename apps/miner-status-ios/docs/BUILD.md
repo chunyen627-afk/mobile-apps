@@ -1,6 +1,6 @@
 # 建置
 
-下列 Mac 步驟**尚未實際執行**：撰寫時沒有可用的 Swift、Xcode 或 XcodeGen。第一次在 Mac 上執行後，請把實際結果記到 [狀態](STATUS.md)。
+下列步驟已在 GitHub 標準 macOS runner 實際執行通過（Xcode 16.4、iPhone 16 Pro 模擬器，證據見 [狀態](STATUS.md#ci-實際執行github-標準-macos-runner)）。自有 Mac 尚未執行過。
 
 ## 需求
 
@@ -56,7 +56,7 @@ bash scripts/build.sh
 
 ## CI
 
-`.github/workflows/miner-status-ios.yml` 已撰寫，**尚未執行**。
+`.github/workflows/miner-status-ios.yml` 已實際執行通過，最新為 [run 40095550434](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40095550434)。測試數、工具版本與 IPA SHA256 以 `::notice` annotation 公開，不登入也能從 API 讀取。
 
 - 觸發：只有 `push` 到 `claude/miner-status-ios-demo`，且變更 `apps/miner-status-ios/**` 或 workflow 檔本身時。沒有 `workflow_dispatch`，因為它要求 workflow 檔存在於預設分支，而本 App 不合併 main
 - 條件：`if: github.event.repository.private == false`，標準 `macos-15` runner，`timeout-minutes: 30`，同 ref 取消舊執行，`permissions: contents: read`
@@ -67,7 +67,7 @@ bash scripts/build.sh
 
 費用：公開倉庫使用標準 GitHub-hosted runner（含 `macos-15`）的分鐘數免費，見 [GitHub Actions 計費說明](https://docs.github.com/en/billing/concepts/product-billing/github-actions)。Artifact 儲存額度對公開倉庫是否另計，官方文件未寫明，因此只上傳小檔、保留 1 天。
 
-未知項：`macos-15` 映像當時的 Xcode 與模擬器版本、排隊時間，以及首次編譯需要的修正輪數。
+實測：`macos-15` 映像為 Xcode 16.4、iPhone 16 Pro 模擬器；每次 run 約 6 到 12 分鐘（含排隊）。
 
 ## Windows 上可執行的檢查
 

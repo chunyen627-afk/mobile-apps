@@ -10,15 +10,15 @@
 | 項目 | 狀態 |
 | --- | --- |
 | JSON 契約（schema）、合成示範 fixtures | 實作完成；Windows 上以 Python 實際執行契約檢查通過 |
-| 純 Swift 核心 `MinerStatusCore`（模型、狀態引擎、顯示文字、唯讀 HTTP client） | 實作完成；**未編譯** |
-| XCTest（80 項） | 已撰寫；**未編譯、未執行** |
-| SwiftUI App（示範＋自訂來源） | 實作完成；**未編譯、未在模擬器或實機檢視** |
-| Xcode 專案設定（XcodeGen `project.yml`，沿用 album-ios 架構）、建置腳本 `scripts/build.sh` | 已撰寫；**未產生專案、未執行** |
-| Swift 語法剖析、靜態設定檢查 | Windows 上執行通過；只代表可剖析與設定內容相符，不代表編譯通過 |
+| 純 Swift 核心 `MinerStatusCore`（模型、狀態引擎、顯示文字、唯讀 HTTP client） | **編譯通過**（macOS CI） |
+| XCTest（80 項） | **模擬器測試通過**：80 項、0 失敗（[run 40095550434](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40095550434)，Xcode 16.4、iPhone 16 Pro 模擬器） |
+| SwiftUI App（示範＋自訂來源） | **編譯通過**；模擬器啟動檢查通過（離線示範 8 秒後仍在執行）；畫面**尚未人工檢視**，未在實機執行 |
+| Xcode 專案設定（XcodeGen `project.yml`，沿用 album-ios 架構）、建置腳本 `scripts/build.sh` | CI 實際執行通過，含 Release archive 與 bundle 檢查 |
+| Swift 語法剖析、靜態設定檢查 | Windows 上執行通過；只代表可剖析與設定內容相符 |
 | 真實資料來源 | 未連線驗證；沒有已驗證可用的來源端點 |
-| CI workflow、IPA | 已撰寫 `miner-status-ios.yml`（push 到本分支才觸發）；**尚未執行**；IPA 只在 runner 內產生、不上傳 |
+| CI workflow、IPA | `miner-status-ios.yml` push 到本分支即觸發；未簽署 IPA 在 runner 內產生（211,736 bytes），**未上傳、未安裝** |
 
-「實作完成」不等於「編譯通過」。Swift 編譯、XCTest、模擬器與實機都需要 Apple 工具鏈，詳見 [建置](docs/BUILD.md) 與 [狀態](docs/STATUS.md)。
+模擬器通過不等於實機通過。畫面人工檢查、iPad 與實機仍待驗證，詳見 [狀態](docs/STATUS.md) 與 [建置](docs/BUILD.md)。
 
 ## 燈號
 
