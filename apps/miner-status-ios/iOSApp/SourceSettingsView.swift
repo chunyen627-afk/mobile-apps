@@ -54,13 +54,16 @@ struct SourceSettingsView: View {
                     Text("來源必須回傳符合白名單格式的 JSON；格式不符的資料一律拒收。")
                 }
 
-                Section("讀取間隔（僅在 App 位於前景時）") {
+                Section {
                     Picker("間隔", selection: $pollSeconds) {
                         ForEach(AppModel.pollIntervals.map { Int($0) }, id: \.self) { seconds in
                             Text("\(seconds) 秒").tag(seconds)
                         }
                     }
                     .pickerStyle(.segmented)
+                } header: {
+                    // Without textCase(nil) the grouped header uppercases "App" to "APP".
+                    Text("讀取間隔（僅在 App 位於前景時）").textCase(nil)
                 }
 
                 Section {

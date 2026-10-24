@@ -31,8 +31,14 @@ final class MinerStatusUITests: XCTestCase {
         XCTAssertTrue(row.waitForExistence(timeout: 5), "machine row A missing")
         row.tap()
         XCTAssertTrue(app.navigationBars["詳情（示範）"].waitForExistence(timeout: 5), "detail screen did not open")
-        XCTAssertTrue(app.staticTexts["demo-rig-a"].waitForExistence(timeout: 5), "Machine ID not shown on detail")
         snapshot("08-detail-top")
+        // LabeledContent merges title and value into one element, so match either.
+        let machineId = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "demo-rig-a", "demo-rig-a")).firstMatch
+        if !machineId.waitForExistence(timeout: 5) {
+            let texts = app.staticTexts.allElementsBoundByIndex.prefix(30).map { "\($0.label)=\($0.value ?? "")" }
+            XCTFail("Machine ID not shown on detail; texts on screen: \(texts)")
+        }
         app.swipeUp()
         snapshot("09-detail-bottom")
     }
@@ -80,8 +86,16 @@ final class MinerStatusUITests: XCTestCase {
         let menu = element("scenario-menu")
         XCTAssertTrue(menu.waitForExistence(timeout: 5), "scenario menu missing")
         menu.tap()
-        let item = app.buttons[title]
-        XCTAssertTrue(item.waitForExistence(timeout: 5), "scenario \(title) missing from menu")
+        let item = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", title)).firstMatch
+        if !item.waitForExistence(timeout: 3) {
+            menu.press(forDuration: 0.8)
+        }
+        snapshot("\(shot)-menu")
+        guard item.waitForExistence(timeout: 5) else {
+            let labels = app.buttons.allElementsBoundByIndex.prefix(30).map(\.label)
+            XCTFail("scenario \(title) missing from menu; buttons on screen: \(labels)")
+            return
+        }
         item.tap()
         XCTAssertTrue(waitFor(menu, labelContains: title, timeout: 5), "scenario \(title) was not selected")
         for id in ["demo-rig-a", "demo-rig-b"] {
