@@ -101,7 +101,7 @@ final class MinerStatusUITests: XCTestCase {
         }
         XCTAssertTrue(picker.waitForExistence(timeout: 5), "did not return from the scenario list")
         XCTAssertTrue(waitFor(picker, labelContains: title, timeout: 5),
-                      "scenario \(title) was not selected; picker says \(picker.label)")
+                      "scenario \(title) was not selected; picker says \(picker.label) / \(picker.value ?? "")")
         for id in ["demo-rig-a", "demo-rig-b"] {
             let row = element("machine-\(id)")
             XCTAssertTrue(row.waitForExistence(timeout: 5), "\(id) row missing in \(title)")
@@ -147,8 +147,9 @@ final class MinerStatusUITests: XCTestCase {
                       "\(key) not set: run through scripts/build.sh, which serves the local feed")
     }
 
+    /// Checks label or value: a picker row keeps its title in the label and the selection in the value.
     private func waitFor(_ element: XCUIElement, labelContains text: String, timeout: TimeInterval) -> Bool {
-        let predicate = NSPredicate(format: "label CONTAINS %@", text)
+        let predicate = NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", text, text)
         let expectation = XCTNSPredicateExpectation(predicate: predicate, object: element)
         return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
     }
