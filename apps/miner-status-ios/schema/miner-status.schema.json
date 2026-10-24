@@ -1,0 +1,218 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:miner-status-ios:schema:miner-status:1",
+  "title": "Miner status feed (whitelist)",
+  "description": "Whitelist-only status feed read by the iPhone app. Every key is required; absent data is an explicit null (shown as 無資料), undeterminable state is the string \"unknown\" (shown as 未知). Never pass through raw source state: no token, PID, log path, wallet, account, full command line or exception text. Receive time and monotonic time are recorded by the client and are NOT part of this payload.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "dataOrigin", "demoNotice", "publishedAt", "machines"],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "dataOrigin": {
+      "description": "\"demo\" marks hand-written mock data. The app must show a visible demo banner and must never present it as a live connection.",
+      "enum": ["demo", "live"]
+    },
+    "demoNotice": {
+      "description": "Required non-empty text when dataOrigin is demo; null when live.",
+      "type": ["string", "null"]
+    },
+    "publishedAt": {
+      "description": "When the publisher wrote/served this document. Rewriting a cache file updates this but must NOT make any observedAt newer.",
+      "$ref": "#/$defs/timestampOrNull"
+    },
+    "machines": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/machine" }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "dataOrigin": { "const": "demo" } } },
+      "then": { "properties": { "demoNotice": { "type": "string", "minLength": 1 } } },
+      "else": { "properties": { "demoNotice": { "type": "null" } } }
+    }
+  ],
+  "$defs": {
+    "timestamp": {
+      "description": "RFC 3339 date-time with explicit offset (Z or ±hh:mm). Local times without date/offset (e.g. log HH:MM:SS) must be null until calibrated.",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,9})?(Z|[+-]\\d{2}:\\d{2})$"
+    },
+    "timestampOrNull": {
+      "anyOf": [
+        { "$ref": "#/$defs/timestamp" },
+        { "type": "null" }
+      ]
+    },
+    "nonNegativeIntOrNull": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "machine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "machineId",
+        "displayName",
+        "worker",
+        "sourceStatus",
+        "sourceCheckedAt",
+        "sessionId",
+        "sampleSequence",
+        "observedAt",
+        "expectedRunning",
+        "minerRunning",
+        "hashrate",
+        "gpus",
+        "shares",
+        "stop"
+      ],
+      "properties": {
+        "machineId": {
+          "description": "Stable key. Sources are never merged across machineIds (thresholds, scripts, hashrate differ per machine).",
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._-]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "worker": {
+          "description": "null when the source has no confirmed worker field. Never guessed from wallet data.",
+          "type": ["string", "null"]
+        },
+        "sourceStatus": {
+          "description": "Publisher's last attempt to read this machine. Anything other than ok means the sample fields below are historical at best.",
+          "enum": ["ok", "unreachable", "error", "noDataYet"]
+        },
+        "sourceCheckedAt": {
+          "description": "When the publisher last attempted to read the source (success or failure).",
+          "$ref": "#/$defs/timestampOrNull"
+        },
+        "sessionId": {
+          "description": "Opaque id of one mining run/job. Counters, stop results and sequences are only comparable within the same sessionId; a change means rebuild the baseline.",
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "sampleSequence": {
+          "description": "Strictly increasing per sessionId at the source. Same or lower value within the same session = replay/stale, not new evidence.",
+          "$ref": "#/$defs/nonNegativeIntOrNull"
+        },
+        "observedAt": {
+          "description": "Data time: when the source observed this sample (source clock). Not trusted as absolute; the client bounds it with its own receive time.",
+          "$ref": "#/$defs/timestampOrNull"
+        },
+        "expectedRunning": {
+          "description": "Persisted operator intent, not an observation. null when no reliable intent source; never inferred from minerRunning.",
+          "enum": [true, false, "unknown", null]
+        },
+        "minerRunning": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state", "observedAt"],
+          "properties": {
+            "state": {
+              "description": "Observed miner child process state. A live guard/source script alone does not make this running.",
+              "enum": ["running", "stopped", "unknown", null]
+            },
+            "observedAt": { "$ref": "#/$defs/timestampOrNull" }
+          }
+        },
+        "hashrate": {
+          "description": "Reported rate may be reused from an old log line; its own observedAt decides freshness. hashrate > 0 alone never means green.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["value", "unit", "observedAt"],
+          "properties": {
+            "value": {
+              "type": ["number", "null"],
+              "minimum": 0
+            },
+            "unit": {
+              "enum": ["H/s", "kH/s", "MH/s", "GH/s", "TH/s", null]
+            },
+            "observedAt": { "$ref": "#/$defs/timestampOrNull" }
+          }
+        },
+        "gpus": {
+          "description": "null when no GPU data; [] is not used to mean missing.",
+          "type": ["array", "null"],
+          "items": { "$ref": "#/$defs/gpu" }
+        },
+        "shares": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["accepted", "stale", "rejected", "observedAt", "lastAcceptedAt"],
+          "properties": {
+            "accepted": {
+              "description": "Cumulative within sessionId. Only an increase within the same session is new share evidence.",
+              "$ref": "#/$defs/nonNegativeIntOrNull"
+            },
+            "stale": {
+              "description": "null when not recorded; never defaulted to 0.",
+              "$ref": "#/$defs/nonNegativeIntOrNull"
+            },
+            "rejected": {
+              "description": "null when not recorded; never defaulted to 0.",
+              "$ref": "#/$defs/nonNegativeIntOrNull"
+            },
+            "observedAt": { "$ref": "#/$defs/timestampOrNull" },
+            "lastAcceptedAt": {
+              "description": "Source time of the most recent accepted share in this session. null until date/timezone calibrated (log HH:MM:SS or process-monotonic values are not acceptable).",
+              "$ref": "#/$defs/timestampOrNull"
+            }
+          }
+        },
+        "stop": {
+          "description": "Stop result. Applies only when stop.sessionId equals the machine sessionId; an older run's result is never shown as the current reason. Staleness/disconnect is NOT a stop reason.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["reason", "sessionId", "observedAt"],
+          "properties": {
+            "reason": {
+              "description": "Classified, whitelisted category only. null = no stop recorded for this session.",
+              "enum": ["userRequested", "protectionTriggered", "abnormalExit", "unknown", null]
+            },
+            "sessionId": {
+              "type": ["string", "null"],
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "observedAt": { "$ref": "#/$defs/timestampOrNull" }
+          }
+        }
+      }
+    },
+    "gpu": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["index", "temperatureC", "fanPercent", "powerW", "observedAt"],
+      "properties": {
+        "index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "temperatureC": {
+          "type": ["number", "null"],
+          "minimum": -40,
+          "maximum": 150
+        },
+        "fanPercent": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 100
+        },
+        "powerW": {
+          "type": ["number", "null"],
+          "minimum": 0
+        },
+        "observedAt": { "$ref": "#/$defs/timestampOrNull" }
+      }
+    }
+  }
+}

@@ -1,0 +1,12 @@
+.build/
+build/
+.swiftpm/
+DerivedData/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+
+# Real connection settings and local reports stay local.
+*.local.json
+.env
+.env.*
+reports/

@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "dataOrigin": "demo",
+  "demoNotice": "示範資料（人工編寫）：資料不足與來源無法讀取的虛構情境，非真實礦機連線。",
+  "publishedAt": "2026-10-24T17:50:01+08:00",
+  "machines": [
+    {
+      "machineId": "demo-rig-a",
+      "displayName": "示範礦機 A（DEMO）",
+      "worker": "demo-worker-a",
+      "sourceStatus": "ok",
+      "sourceCheckedAt": "2026-10-24T17:50:01+08:00",
+      "sessionId": null,
+      "sampleSequence": null,
+      "observedAt": null,
+      "expectedRunning": null,
+      "minerRunning": { "state": "unknown", "observedAt": null },
+      "hashrate": { "value": null, "unit": null, "observedAt": null },
+      "gpus": null,
+      "shares": { "accepted": null, "stale": null, "rejected": null, "observedAt": null, "lastAcceptedAt": null },
+      "stop": { "reason": null, "sessionId": null, "observedAt": null }
+    },
+    {
+      "machineId": "demo-rig-b",
+      "displayName": "示範礦機 B（DEMO）",
+      "worker": null,
+      "sourceStatus": "unreachable",
+      "sourceCheckedAt": "2026-10-24T17:50:01+08:00",
+      "sessionId": null,
+      "sampleSequence": null,
+      "observedAt": null,
+      "expectedRunning": null,
+      "minerRunning": { "state": null, "observedAt": null },
+      "hashrate": { "value": null, "unit": null, "observedAt": null },
+      "gpus": null,
+      "shares": { "accepted": null, "stale": null, "rejected": null, "observedAt": null, "lastAcceptedAt": null },
+      "stop": { "reason": null, "sessionId": null, "observedAt": null }
+    }
+  ]
+}
