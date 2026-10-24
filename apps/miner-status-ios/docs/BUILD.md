@@ -69,7 +69,7 @@ bash scripts/build.sh
 - 步驟：checkout → `brew install xcodegen` → `RUN_SIM_SMOKE=1 bash scripts/build.sh`
 - IPA **不上傳**：只在 runner 內產生，大小與 SHA256 印在執行紀錄與 Summary
 - 只上傳 `MinerStatus-reports`（`test-summary.txt` 與一張啟動截圖），總和超過 1 MB 時 workflow 失敗且不上傳；保留 1 天，到期由 GitHub 自動刪除
-- 上傳 IPA 需另行同意，並加大小上限（例如超過 5 MB 即失敗）與 1 天保留
+- 給手機安裝的 IPA 以**公開 GitHub prerelease** 發布，只在 commit 訊息含 `[release-ipa]` 時執行；這個標記每次都要先經使用者同意才加。發布在所有測試與 bundle 檢查通過之後，IPA 超過 5 MB 或同一 build 號已發布過就失敗。Tag 為 `miner-status-<版本>-build<build 號>`，再發布前要先調高 `CURRENT_PROJECT_VERSION`
 
 費用：公開倉庫使用標準 GitHub-hosted runner（含 `macos-15`）的分鐘數免費，見 [GitHub Actions 計費說明](https://docs.github.com/en/billing/concepts/product-billing/github-actions)。Artifact 儲存額度對公開倉庫是否另計，官方文件未寫明，因此只上傳小檔、保留 1 天。
 

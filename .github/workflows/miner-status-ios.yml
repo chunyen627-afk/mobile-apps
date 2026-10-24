@@ -46,6 +46,40 @@ jobs:
             echo "- SHA256: \`$sha\`"
             grep -E "Executed [0-9]+ tests?, with [0-9]+ failures" test-summary.txt | tail -1 | sed 's/^/- XCTest: /'
           } >> "$GITHUB_STEP_SUMMARY"
+      # Public prerelease of the tested IPA, only when the head commit message contains
+      # [release-ipa]; that marker is added only after the user approves the release. 5 MB cap.
+      - name: Publish IPA release (approved builds only)
+        if: success() && contains(github.event.head_commit.message, '[release-ipa]')
+        working-directory: ${{ env.APP_DIR }}/build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          plist=MinerStatus.xcarchive/Products/Applications/MinerStatus.app/Info.plist
+          version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist")
+          build=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$plist")
+          tag="miner-status-${version}-build${build}"
+          asset="MinerStatus-${version}-build${build}-unsigned.ipa"
+          cp MinerStatus-unsigned.ipa "$asset"
+          size=$(stat -f %z "$asset")
+          if [ "$size" -gt 5242880 ]; then
+            echo "IPA exceeds 5 MB; refusing to publish."
+            exit 1
+          fi
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $tag already exists; raise CURRENT_PROJECT_VERSION before releasing again."
+            exit 1
+          fi
+          sha=$(shasum -a 256 "$asset" | cut -d' ' -f1)
+          notes=$(printf '%s\n' \
+            "未簽署 IPA，需用自己的 Apple 帳號簽署後安裝。只含離線示範資料，不含任何真實位址或帳號。" \
+            "" \
+            "- 來源 commit：${GITHUB_SHA}" \
+            "- 建置與測試：run ${GITHUB_RUN_ID}（單元測試與模擬器 UI 測試皆通過才發布）" \
+            "- 大小：${size} bytes" \
+            "- SHA256：${sha}")
+          gh release create "$tag" "$asset" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --prerelease --title "礦機狀態 ${version}（build ${build}）" --notes "$notes"
+          echo "::notice title=IPA release::${tag} ${asset} size ${size} bytes, SHA256 ${sha}"
       - name: Collect small reports (1 MB limit)
         id: collect
         if: always()

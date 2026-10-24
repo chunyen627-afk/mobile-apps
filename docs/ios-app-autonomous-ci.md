@@ -69,7 +69,7 @@ jobs:
 - 把 workflow 檔本身也列進 `paths`，否則只改 workflow 不會觸發
 - 步驟：checkout → `brew install xcodegen` → `bash scripts/build.sh` → 把 IPA 大小與 SHA256 寫進 `$GITHUB_STEP_SUMMARY`
 - Artifact：**不上傳大檔**。平常只上傳小報告（測試摘要、單張截圖），總和超過 1 MB 就讓 workflow 失敗，`retention-days: 1`
-- 唯一例外是要實際使用這個 build 時（例如使用者要安裝的 IPA）：只上傳那一個 IPA，加大小上限（超過就失敗），保留 1 天
+- 唯一例外是要實際使用這個 build 時（例如使用者要安裝的 IPA）：以公開 GitHub prerelease 發布那一個 IPA，AI 不登入就能下載到使用者的本機資料夾。發布步驟只在 commit 訊息含 `[release-ipa]` 時執行，**每次加這個標記前都要先問使用者**；排在全部測試之後、有大小上限、同一 build 號不重複發布
 - xcresult、dSYM、完整 xcodebuild log 一律不上傳；錯誤靠 annotation 取得
 
 ## 四、自主迭代迴圈（不需要使用者）
