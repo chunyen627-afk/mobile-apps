@@ -9,11 +9,13 @@ struct OverviewList: View {
     @ObservedObject var model: AppModel
     var selection: Binding<String?>?
     let showSettings: () -> Void
+    @State private var showingEarningsSettings = false
 
     var body: some View {
         Group {
             if let selection { List(selection: selection) { content } } else { List { content } }
         }
+        .sheet(isPresented: $showingEarningsSettings) { EarningsSettingsView(model: model) }
         .navigationTitle(model.mode == .demo ? "礦機狀態（示範）" : "礦機狀態")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
@@ -63,7 +65,7 @@ struct OverviewList: View {
 
         // Below the machines so their rows stay on the first screen.
         if model.hasEarnings {
-            EarningsSummarySection(model: model)
+            EarningsSummarySection(model: model) { showingEarningsSettings = true }
         }
 
         Section("圖例") {

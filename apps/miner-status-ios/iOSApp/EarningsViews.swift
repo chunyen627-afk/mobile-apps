@@ -28,10 +28,11 @@ enum EarningsText {
     }
 }
 
-/// Top-of-list totals for all machines, per day.
+/// Totals for all machines, per day. The settings sheet is presented by the list, not here: a
+/// sheet attached to a List row closes when the row scrolls away and is recycled.
 struct EarningsSummarySection: View {
     @ObservedObject var model: AppModel
-    @State private var showingSettings = false
+    let showSettings: () -> Void
 
     var body: some View {
         let total = model.earningsTotal
@@ -43,14 +44,13 @@ struct EarningsSummarySection: View {
             }
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier("earnings-summary")
-            Button("收益與電費設定") { showingSettings = true }
+            Button("收益與電費設定", action: showSettings)
                 .accessibilityIdentifier("earnings-settings")
         } header: {
             Text("今日估算")
         } footer: {
             Text("依礦池近 3 小時平均算力與目前幣價估算，不是實際入帳金額；電費依台電簡易型二段式與目前耗電推算一整天。")
         }
-        .sheet(isPresented: $showingSettings) { EarningsSettingsView(model: model) }
     }
 }
 
