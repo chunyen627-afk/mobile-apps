@@ -26,6 +26,16 @@ struct OverviewList: View {
     }
 
     @ViewBuilder private var content: some View {
+        if let headline = StatusAlerts.headline(model.snapshots) {
+            Section {
+                Label("\(headline)：\(StatusAlerts.needingAttention(model.snapshots).map(\.displayName).joined(separator: "、"))",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .font(.subheadline.bold())
+                    .foregroundStyle(.orange)
+                    .accessibilityIdentifier("attention-banner")
+            }
+        }
+
         switch model.mode {
         case .demo: demoSection
         case .live: liveSection

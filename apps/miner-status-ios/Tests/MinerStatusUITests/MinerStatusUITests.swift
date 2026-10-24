@@ -61,6 +61,9 @@ final class MinerStatusUITests: XCTestCase {
         XCTAssertTrue(element("machine-demo-rig-a").waitForExistence(timeout: 20), "live feed rows did not appear")
         XCTAssertTrue(element("machine-demo-rig-b").exists, "second live machine missing")
         XCTAssertTrue(waitFor(banner, labelContains: "示範資料", timeout: 5), "demo-marked source data is not flagged")
+        // The fixture's timestamps are old, so both machines are gray: the warning must say so.
+        XCTAssertTrue(waitFor(element("attention-banner"), labelContains: "2 台不是綠燈", timeout: 5),
+                      "attention banner missing in live mode")
         snapshot("11-live-local-feed")
         stopLiveAndCheckDemo()
     }
@@ -109,6 +112,14 @@ final class MinerStatusUITests: XCTestCase {
             XCTAssertTrue(row.waitForExistence(timeout: 5), "\(id) row missing in \(title)")
             XCTAssertTrue(waitFor(row, labelContains: light, timeout: 5),
                           "\(id) in \(title): expected \(light), row says \(row.label)")
+        }
+        let attention = element("attention-banner")
+        if light == "綠燈" {
+            XCTAssertFalse(attention.exists, "all-green \(title) must not show the attention banner")
+        } else {
+            XCTAssertTrue(attention.waitForExistence(timeout: 3), "\(title) must show the attention banner")
+            XCTAssertTrue(waitFor(attention, labelContains: "2 台不是綠燈", timeout: 3),
+                          "attention banner in \(title) says \(attention.label)")
         }
         snapshot(shot)
     }

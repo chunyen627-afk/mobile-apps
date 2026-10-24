@@ -37,6 +37,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var lastSuccessAt: Date?
     @Published private(set) var lastFailure: FetchFailure?
     @Published private(set) var sourceSentDemoData = false
+    /// Set when a live machine turns from green to another light; cleared when the user dismisses it.
+    @Published private(set) var attentionAlert: String?
 
     private var engine = StatusEngine()
     private var clock = SystemClock()
@@ -100,7 +102,12 @@ final class AppModel: ObservableObject {
     }
 
     func stopLiveAndReturnToDemo() {
+        attentionAlert = nil
         selectDemo(scenario)
+    }
+
+    func dismissAttentionAlert() {
+        attentionAlert = nil
     }
 
     func refreshNow() {
@@ -170,7 +177,12 @@ final class AppModel: ObservableObject {
 
     private func reevaluate() {
         guard mode == .live else { return }
+        let previous = snapshots
         snapshots = engine.snapshots(at: clock.reading())
         feedProblem = engine.feedProblem
+        let degraded = StatusAlerts.newlyDegraded(from: previous, to: snapshots)
+        if !degraded.isEmpty {
+            attentionAlert = StatusAlerts.describe(degraded).joined(separator: "\n")
+        }
     }
 }

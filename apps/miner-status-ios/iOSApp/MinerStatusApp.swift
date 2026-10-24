@@ -5,6 +5,7 @@
 
 import MinerStatusCore
 import SwiftUI
+import UIKit
 
 @main
 struct MinerStatusApp: App {
@@ -47,6 +48,18 @@ struct RootView: View {
             }
         }
         .sheet(isPresented: $showingSettings) { SourceSettingsView(model: model) }
+        // Foreground-only warning when a live machine leaves green; the PC side notifies when closed.
+        .alert("礦機需要注意", isPresented: Binding(
+            get: { model.attentionAlert != nil },
+            set: { if !$0 { model.dismissAttentionAlert() } }
+        )) {
+            Button("知道了", role: .cancel) {}
+        } message: {
+            Text(model.attentionAlert ?? "")
+        }
+        .onChange(of: model.attentionAlert) { alert in
+            if alert != nil { UINotificationFeedbackGenerator().notificationOccurred(.warning) }
+        }
         .onChange(of: scenePhase) { phase in
             model.setForeground(phase == .active)
         }
