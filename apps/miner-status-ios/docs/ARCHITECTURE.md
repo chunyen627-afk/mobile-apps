@@ -3,12 +3,12 @@
 ## 資料流
 
 ```text
-發佈端（未實作） ──JSON──▶ MinerStatusFeed（解碼＋白名單） ──▶ StatusEngine（狀態機） ──▶ MachineSnapshot ──▶ SwiftUI
-                                                        ▲
-                                    App 注入 ClockReading（牆鐘＋單調時間）
+使用者設定的來源 ──GET──▶ StatusFeedClient ──▶ MinerStatusFeed（解碼＋白名單） ──▶ StatusEngine（狀態機） ──▶ MachineSnapshot ──▶ SwiftUI
+                         （失敗 → FetchFailure）                                  ▲
+                                                       SystemClock 提供 ClockReading（牆鐘＋單調時間）
 ```
 
-示範版以 `fixtures/demo-running.json` 為範本，依情境改寫時間與欄位後，**仍經過真實解碼器與狀態引擎**，不直接偽造快照。
+離線示範以 `fixtures/demo-running.json` 為範本，依情境改寫時間與欄位後，**仍經過真實解碼器與狀態引擎**，不直接偽造快照。
 
 ## JSON 契約
 
@@ -68,20 +68,38 @@ Swift 解碼器比 schema 多兩條規則：重複 `machineId` 拒收；閏秒 `
 
 燈號、唯一主因 `reason`、最近問題 `problem`、最後接受樣本、樣本年齡、`isHistorical`（年齡未知或超過 300 秒，或之後有更新失敗或被拒收），以及各指標新鮮度：新鮮、過期、無時間、時間無法驗證。停止原因只在屬於同一 session 時顯示。
 
+## 唯讀 HTTP client（`StatusClient.swift`）
+
+- **`SourceEndpoint`**：只接受有主機名稱的 `http`、`https` 網址。拒收空白、內含帳密與 `#` 片段。倉庫內沒有預設位址。
+- **請求**：GET only，沒有 body、帳密、Cookie 或快取。逾時 10 秒，`Accept: application/json`。使用 ephemeral `URLSession`：不存 Cookie、快取與憑證，也不等待網路恢復。
+- **只接受符合以下條件的回應**：HTTP 200、`Content-Type` 含 `json`、與設定網址同源（scheme、主機、埠）、不超過 512 KiB、通過白名單解碼器。其餘一律是 `FetchFailure`。
+  - 轉址到其他來源的資料不採用。
+  - 512 KiB 的上限是在下載完成後檢查；逾時限制了下載時間。
+- **`StatusEngine.apply(_:at:)`**：成功時 `ingest`；`cancelled`（例如 App 離開前景）不改變任何狀態；其他失敗一律 `recordRequestFailure`，所以綠燈立即撤下，重連後要有新的基準與後續增加。`ClockReading` 必須在回應抵達後取得，作為接收時間。
+- **`SystemClock`**：牆鐘加上 `ContinuousClock` 的單調時間，裝置休眠時仍持續計時。單調時間從建立時起算，每個引擎用一個。
+
 ## 顯示文字
 
-`StatusText.swift` 放在核心以便 XCTest 固定內容。灰燈文字只描述無法確立的事（資料不足、時間無法驗證、資料逾時、請求失敗、來源無法讀取），不宣稱主機離線。
+`StatusText.swift` 放在核心，以便 XCTest 固定內容。灰燈與請求失敗的文字只描述無法確立的事（資料不足、時間無法驗證、資料逾時、請求失敗、無法建立連線、來源無法讀取），不宣稱主機離線。
 
-## 示範 App
+## App
 
-- 範本來自 App bundle 內的 `demo-running.json`；載入失敗只顯示錯誤，不自行生成資料。
-- 情境有七種：首筆、確認挖礦、已停止、未知／無資料、逾時、請求失敗、資料不足／時間無法驗證。
-- 顯示示範橫幅與凍結的模擬時鐘；情境按鈕明示僅限示範。
-- 不連線、不輪詢、沒有任何控制礦機的功能。
-- iPhone 用 `NavigationStack`；iPad 等寬版用 `NavigationSplitView`。
+- **啟動時一律是離線示範**，不會自動連線。
+- **示範模式**：
+  - 範本來自 App bundle 內的 `demo-running.json`；載入失敗只顯示錯誤，不自行生成資料。
+  - 情境有七種：首筆、確認挖礦、已停止、未知／無資料、逾時、請求失敗、資料不足／時間無法驗證。
+  - 顯示示範橫幅與凍結的模擬時鐘；情境選單明示僅限示範。
+- **自訂來源**：
+  - 只有在「資料來源」按「開始讀取」才連線，而且從全新的引擎與時鐘開始。
+  - 只在前景依 15、30 或 60 秒間隔讀取，期間每 5 秒重新評估年齡與 5 分鐘邊界。離開前景即取消讀取；回到前景立即讀一次。
+  - 停止或切換來源後才抵達的回應會被丟棄。
+  - 來源若回傳 `demo` 資料，橫幅與各列會標示為示範資料。
+- 網址與間隔只存在裝置的 UserDefaults。
+- 沒有任何控制礦機、背景讀取或通知功能。
+- iPhone 用 `NavigationStack`；iPad 等寬版用 `NavigationSplitView`，未驗證。
 
 ## 尚未決定
 
-- 真實資料的發佈端、傳輸方式、認證與存取範圍。
+- 真實資料的發佈端、傳輸方式（HTTP／HTTPS）、認證與存取範圍。目前的 client 不送任何認證資訊。
 - 每台礦機的 worker 與預期運行狀態的可靠來源；沒有時維持 null。
-- 發佈端重送完全相同的樣本會被視為重播並轉黃；輪詢間隔應大於來源更新間隔，或之後另行區分「相同重送」。
+- 發佈端重送完全相同的樣本會被視為重播並轉黃。輪詢間隔應大於來源更新間隔，或之後另行區分「相同重送」。

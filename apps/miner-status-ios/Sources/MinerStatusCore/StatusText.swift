@@ -123,6 +123,38 @@ public extension StopReason {
     }
 }
 
+public extension FetchFailure {
+    /// Describes what failed on this request only; never claims the host is offline.
+    var displayText: String {
+        switch self {
+        case .cancelled: return "讀取已取消"
+        case .timedOut: return "請求逾時"
+        case .cannotConnect: return "無法建立連線（網路、位址或服務狀態未知）"
+        case .insecureConnectionBlocked: return "系統拒絕未加密的 HTTP 連線"
+        case .transport(let code): return code.map { "網路錯誤（代碼 \($0)）" } ?? "網路錯誤"
+        case .notHTTPResponse: return "回應不是 HTTP"
+        case .httpStatus(let status): return "伺服器回應 HTTP \(status)"
+        case .redirectedElsewhere: return "回應被轉址到其他位址，已拒收"
+        case .unexpectedContentType: return "回應不是 JSON"
+        case .responseTooLarge: return "回應過大，已拒收"
+        case .invalidPayload: return "資料格式不符或含非白名單欄位，已拒收"
+        }
+    }
+}
+
+public extension SourceEndpointError {
+    var displayText: String {
+        switch self {
+        case .empty: return "請輸入來源網址"
+        case .malformed: return "網址格式不正確"
+        case .unsupportedScheme: return "只支援 http:// 或 https://"
+        case .missingHost: return "網址缺少主機名稱"
+        case .embeddedCredentials: return "網址不可包含帳號或密碼"
+        case .fragment: return "網址不可包含 # 片段"
+        }
+    }
+}
+
 public extension Freshness {
     /// `historical` is the snapshot's flag: fresh-looking values held after a failed or rejected
     /// update are still shown as unconfirmed.

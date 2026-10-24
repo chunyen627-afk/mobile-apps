@@ -7,14 +7,14 @@
 | App | 平台 | 用途 | 驗證狀態 |
 | --- | --- | --- | --- |
 | [光盒相簿](apps/album-ios) | iPhone / iOS 17+ | SMB 相簿、資料夾索引、照片預載、影片播放與診斷匯出 | 0.3.1 的 39 項測試、畫面檢查及封裝通過；已覆蓋安裝並讀回確認 build 4，新版功能回歸與偶發退出問題待實機驗證 |
-| [礦機狀態（示範）](apps/miner-status-ios) | iPhone / iOS 16+ | 以燈號與白名單詳情顯示礦機狀態；目前只讀內建人工示範資料 | 實作完成；JSON 契約檢查在 Windows 執行通過；Swift 核心、65 項 XCTest 與 SwiftUI 均未編譯、未執行，無 IPA |
+| [礦機狀態](apps/miner-status-ios) | iPhone / iOS 16+ | 以燈號與白名單詳情顯示礦機狀態；預設離線示範，可手動設定唯讀來源（僅前景） | 實作完成；JSON 契約、語法剖析與靜態設定檢查在 Windows 執行通過；Swift 核心、80 項 XCTest、SwiftUI 與 XcodeGen 專案均未編譯、未執行，無 workflow、無 IPA |
 
 ## 目錄
 
 ```text
 apps/
   album-ios/               光盒相簿（SwiftUI 原生 App）
-  miner-status-ios/        礦機狀態示範（Swift 套件＋SwiftUI 原始碼，尚無 Xcode 專案與 workflow）
+  miner-status-ios/        礦機狀態（Swift 套件、SwiftUI、XcodeGen 規格；尚無 workflow）
 .github/workflows/
   album-ios.yml            相簿的 macOS 編譯與測試
 ```
