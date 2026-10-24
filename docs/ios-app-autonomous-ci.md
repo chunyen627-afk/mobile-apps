@@ -32,6 +32,18 @@
 
 第 7、8 點是自主迭代的關鍵：**Actions 的 log 要登入才看得到，但 annotation 用公開 API 就讀得到。**
 
+### 模擬器 UI 測試與截圖（給手機安裝前必做）
+
+規則：**模擬器上畫面與功能都確認 OK，才提供 IPA 給使用者安裝。**
+
+- 加一個 `type: bundle.ui-testing` target，由 App scheme 執行；每個畫面用 `XCTAttachment(screenshot:)`（`lifetime = .keepAlways`）存圖，名稱用 `01-xxx` 這種可排序的英數
+- 要測網路功能時，`build.sh` 在 Mac 的 `127.0.0.1` 以 fixtures 開暫時的 HTTP 伺服器（模擬器與 Mac 共用網路），網址用 `TEST_RUNNER_<名稱>` 環境變數傳進測試；測試程式內不寫位址
+- 單元測試與 UI 測試**各自**檢查數量（看 `Test Suite '<bundle>.xctest' passed` 下一行的 `Executed N tests, with 0 failures`）
+- 結束時（含失敗）`xcrun xcresulttool export attachments` → 依 manifest 的名稱轉成 600 px JPEG；匯出的檔名可能沒有副檔名，要用檔頭判斷
+- Workflow 給 `contents: write`，把截圖**強制推到一個專用分支**（每次覆蓋、不留歷史、設大小上限、只能是示範資料），AI 用 `raw.githubusercontent.com/<owner>/<repo>/<分支>/<檔名>` 不登入下載來看
+- 測試失敗時，在失敗訊息裡附上畫面上的按鈕文字清單，並先截圖再斷言，下一輪就能直接對症修
+- 每張截圖都要真的看過；測試全綠不代表畫面沒問題（例如文字重疊、英文系統字）
+
 ## 三、Workflow 必備設定
 
 ```yaml
@@ -57,7 +69,7 @@ jobs:
 - 把 workflow 檔本身也列進 `paths`，否則只改 workflow 不會觸發
 - 步驟：checkout → `brew install xcodegen` → `bash scripts/build.sh` → 把 IPA 大小與 SHA256 寫進 `$GITHUB_STEP_SUMMARY`
 - Artifact：**不上傳大檔**。平常只上傳小報告（測試摘要、單張截圖），總和超過 1 MB 就讓 workflow 失敗，`retention-days: 1`
-- 唯一例外是要實際使用這個 build 時（例如使用者要安裝的 IPA）：只上傳那一個 IPA，加大小上限（超過就失敗），保留 1 天
+- 唯一例外是要實際使用這個 build 時（例如使用者要安裝的 IPA）：以公開 GitHub prerelease 發布那一個 IPA，AI 不登入就能下載到使用者的本機資料夾。發布步驟只在 commit 訊息含 `[release-ipa]` 時執行，**每次加這個標記前都要先問使用者**；排在全部測試之後、有大小上限、同一 build 號不重複發布
 - xcresult、dSYM、完整 xcodebuild log 一律不上傳；錯誤靠 annotation 取得
 
 ## 四、自主迭代迴圈（不需要使用者）
@@ -126,3 +138,17 @@ jobs:
 - 在 Windows 寫、從沒編譯過的 Swift，第一次編譯就只錯 1 處；真正花時間的是 CI 基礎設施（權限、log 可見性），不是程式本身
 - 沿用已經成功的 App 架構，比自創結構（SwiftPM＋`swift test`）少踩坑
 - 每個 run 約 6 到 12 分鐘；輪詢時注意未登入 API 的 60 次／小時上限
+
+### 2026-10-24：礦機狀態加模擬器 UI 測試
+
+5 次 run 從 0 項到 11 項 UI 測試全過（[40102507820](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40102507820)），途中抓到 5 個畫面問題，其中第 1 個在真機上會讓使用者打不開設定：
+
+| 問題 | 怎麼發現 | 修法 |
+| --- | --- | --- |
+| 頂端橫幅用 `safeAreaInset` 加在 NavigationStack 外層，壓住導覽列，右上角按鈕點不到 | UI 測試報「hit point {-1, -1}」 | 橫幅改加在每個畫面內（導覽列下方） |
+| List 裡的 `Menu` 點了不會開 | 失敗訊息附的按鈕清單＋截圖 | 改用 `.pickerStyle(.navigationLink)` 的清單頁 |
+| 半透明橫幅讓捲動內容透出來，文字重疊 | 截圖 | 橫幅底色先鋪 `systemBackground` |
+| 返回鍵顯示「Back」 | 截圖 | Info.plist 宣告 `CFBundleDevelopmentRegion`／`CFBundleLocalizations` 為 zh-Hant |
+| 分組標題把「App」轉成「APP」 | 截圖 | 該標題加 `.textCase(nil)` |
+
+測試本身的坑：`LabeledContent` 與 navigation-link Picker 會把標題和值分成 label／value 兩個屬性，比對時兩個都要看。
