@@ -4,18 +4,18 @@ SwiftUI + SMB2/3 的個人相簿。目標：iPhone 17、iOS 27、6.3 吋；最�
 
 ## 0.3.2 待建置：暫停照片縮放與影片控制列
 
-2026-10-24 開發中，版本 0.3.2／build 5，沿用 `org.personal.lightbox.album`。使用者已授權功能分支推送與 CI。首輪 [Actions 40051775633](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40051775633) 在編譯攔到 UIKit `next` 名稱衝突及缺少覆寫宣告，已修正後準備重測；沒有新版 IPA，不代表編譯、模擬器或實機已通過。以下既有 0.3.1 證據不適用於本次修改。
+2026-10-24 開發中，版本 0.3.2／build 5，沿用 `org.personal.lightbox.album`。使用者已授權功能分支推送與 CI。首輪 [Actions 40051775633](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40051775633) 的 UIKit 名稱衝突及覆寫宣告已修正；第二輪 [Actions 40051986574](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40051986574) 編譯與 41 項單元通過，6 項 UI 中 3 項失敗，沒有新版 IPA。逐項檢查截圖與錄影後，修正橫向影片標題區攔截隱藏控制列的點擊、照片單點等待雙點判定完成，以及 AVI 時鐘斷言撞上自動隱藏計時的測試操作；保留所有功能斷言，待完整重測。以下既有 0.3.1 證據不適用於本次修改。
 
 - 暫停輪播後，照片可雙指縮放（最高 5 倍）、放大後拖移；雙點放大至約 3 倍或還原。使用 UIKit 原生縮放容器，不額外讀取原圖、不增加解碼快取；細節仍受現有縮小解碼解析度限制。
 - 放大時單指拖曳只移動畫面，即使到邊緣也不切圖；回到完整顯示後才可左右滑動切圖。恢復播放、換圖或旋轉都還原完整顯示，避免沿用前一張的比例與位移。暫停狀態下切圖仍保持暫停。
 - 點照片／影片空白畫面可切換控制列，暫停影片也適用；不會因隱藏介面而恢復播放。縮放開始會隱藏控制列，單點重新顯示；雙點與雙指手勢不當成單點。正在拖曳進度或有錯誤時保留控制列。
 - AVPlayer 與 VLC 仍等比例最大完整顯示，不加入裁切或拉伸。
 
-新增 `PhotoZoomTests` 覆蓋置中、縮放期間更新、拖移與切圖手勢分工、恢復播放、延遲載入及旋轉重設；`PlaybackTests` 增加暫停影片隱藏／顯示及拉桿／錯誤保護。UI 測試新增雙指縮放、拖移後實際畫面變化、雙點還原、切圖及旋轉，並在原生影片與兩種 AVI 測試暫停時隱藏／顯示、畫面比例與播放時間不前進。這些測試目前尚未在 macOS 執行，必須確認成功並檢查截圖後才能交付 IPA。
+新增 `PhotoZoomTests` 覆蓋置中、縮放期間更新、拖移與切圖手勢分工、恢復播放、延遲載入及旋轉重設；`PlaybackTests` 增加暫停影片隱藏／顯示及拉桿／錯誤保護。UI 測試新增雙指縮放、拖移後實際畫面變化、雙點還原、切圖及旋轉，並在原生影片與兩種 AVI 測試暫停時隱藏／顯示、畫面比例與播放時間不前進。必須全部成功並檢查截圖後才能交付 IPA。
 
-本機檢查：六份變更 Swift 檔通過 tree-sitter 語法解析，project.yml 可解析且 Bundle Identifier 不變，Git diff 格式檢查通過。這不是 Swift 型別檢查；目前沒有 Xcode／iOS 模擬器，41 項單元與 6 項 UI 測試尚未執行。
+本機檢查：變更 Swift 檔通過 tree-sitter 語法解析，project.yml 可解析且 Bundle Identifier 不變，Git diff 格式檢查通過。這不是 Swift 型別檢查；目前沒有本機 Xcode／iOS 模擬器，執行證據以 macOS CI 為準。
 
-交付方式：待使用者確認後，只推送獨立分支 `codex/photo-zoom-paused-controls`，再以該 ref 手動觸發既有 `Build Album iOS` workflow（功能分支 push 不會自動建置）。無需先合併 main、建立 PR 或改權限。通過後下載 `Lightbox-unsigned-ipa`、測試附件及對應 dSYM，核對版本／Bundle ID／SHA256，提供 IPA 讓使用者在 SideStore 手動更新。不代裝、不修改 SideStore、簽署、Apple 帳戶或 VPN。首次實機驗收應重做照片暫停縮放／拖移／繼續／換圖，以及原生與 AVI 暫停隱藏控制列；確認舊設定與索引保留。
+交付方式：依既有授權，只推送獨立分支 `codex/photo-zoom-paused-controls`，再以該 ref 手動觸發既有 `Build Album iOS` workflow（功能分支 push 不會自動建置）。無需先合併 main、建立 PR 或改權限。通過後下載 `Lightbox-unsigned-ipa`、測試附件及對應 dSYM，核對版本／Bundle ID／SHA256，提供 IPA 讓使用者在 SideStore 手動更新。不代裝、不修改 SideStore、簽署、Apple 帳戶或 VPN。首次實機驗收應重做照片暫停縮放／拖移／繼續／換圖，以及原生與 AVI 暫停隱藏控制列；確認舊設定與索引保留。
 
 ## 既有版本與驗證紀錄
 

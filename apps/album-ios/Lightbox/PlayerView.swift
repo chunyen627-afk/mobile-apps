@@ -102,6 +102,9 @@ struct PlayerView: View {
                             }
                         }
                     }.padding().background(LinearGradient(colors: [.clear, .black.opacity(0.85)], startPoint: .top, endPoint: .bottom))
+                        // In landscape the title can occupy the screen center. Let
+                        // non-control taps dismiss chrome; buttons/sliders keep their actions.
+                        .onTapGesture { playback.toggleControls() }
                 }.foregroundStyle(.white).buttonStyle(PlayerButtonStyle())
             }
         }
