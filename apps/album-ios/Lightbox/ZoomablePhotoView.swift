@@ -17,8 +17,8 @@ struct ZoomablePhotoSurface: UIViewRepresentable {
     func updateUIView(_ view: ZoomablePhotoView, context: Context) {
         view.tapped = tapped
         view.zoomBegan = zoomBegan
-        view.next = next
-        view.previous = previous
+        view.onNext = next
+        view.onPrevious = previous
         view.setPhoto(image, identity: identity, zoomEnabled: zoomEnabled)
     }
 }
@@ -28,8 +28,8 @@ final class ZoomablePhotoView: UIView, UIScrollViewDelegate, UIGestureRecognizer
     let imageView = UIImageView()
     var tapped: (() -> Void)?
     var zoomBegan: (() -> Void)?
-    var next: (() -> Void)?
-    var previous: (() -> Void)?
+    var onNext: (() -> Void)?
+    var onPrevious: (() -> Void)?
     private(set) var zoomEnabled = false
     private var identity: String?
     private var viewportSize = CGSize.zero
@@ -126,14 +126,14 @@ final class ZoomablePhotoView: UIView, UIScrollViewDelegate, UIGestureRecognizer
         updatePanAndAccessibility()
     }
 
-    func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         !(gestureRecognizer is UISwipeGestureRecognizer) || scrollView.zoomScale <= 1.01
     }
 
     @objc private func didTap() { tapped?() }
     @objc private func didSwipe(_ gesture: UISwipeGestureRecognizer) {
         guard scrollView.zoomScale <= 1.01 else { return }
-        if gesture.direction == .left { next?() } else { previous?() }
+        if gesture.direction == .left { onNext?() } else { onPrevious?() }
     }
     @objc private func didDoubleTap(_ gesture: UITapGestureRecognizer) {
         guard zoomEnabled else { return }
