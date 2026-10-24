@@ -123,6 +123,7 @@ struct DemoResult {
     let snapshots: [MachineSnapshot]
     let feedProblem: UpdateProblem?
     let clock: ClockReading
+    let market: MarketReport?
 }
 
 /// Holds the bundled template. `loadBundled()` returns nil when the resource is missing or not
@@ -149,6 +150,7 @@ struct DemoPlayer {
         }
 
         var engine = StatusEngine()
+        var market: MarketReport?
         for step in scenario.steps {
             switch step {
             case let .samples(offset, sequence, accepted, edit):
@@ -159,13 +161,15 @@ struct DemoPlayer {
                     edit?(&machine, StepContext(index: index, time: time, session: session))
                     return machine
                 }
-                engine.ingest(try decodeFeed(machines, at: time), at: reading(offset))
+                let feed = try decodeFeed(machines, at: time)
+                market = feed.market
+                engine.ingest(feed, at: reading(offset))
             case let .requestFailure(offset):
                 engine.recordRequestFailure(at: reading(offset))
             }
         }
         let now = reading(scenario.evaluateAt)
-        return DemoResult(snapshots: engine.snapshots(at: now), feedProblem: engine.feedProblem, clock: now)
+        return DemoResult(snapshots: engine.snapshots(at: now), feedProblem: engine.feedProblem, clock: now, market: market)
     }
 
     /// Re-stamps the template machine for one step. Index 1 is a second, equally fictional machine.
@@ -192,6 +196,11 @@ struct DemoPlayer {
             for gpu in gpus.indices { gpus[gpu]["observedAt"] = stamp }
             machine["gpus"] = gpus
         }
+        // Fictional pool estimate: A pays for electricity by default, B does not.
+        machine["earnings"] = [
+            "coinPerDay": index == 0 ? 1.6 : 0.8, "poolHashrate": index == 0 ? 7.0e13 : 3.5e13,
+            "electricityBilled": index == 0, "observedAt": stamp,
+        ] as [String: Any]
         return machine
     }
 
@@ -200,6 +209,9 @@ struct DemoPlayer {
         let object: [String: Any] = [
             "schemaVersion": 1, "dataOrigin": "demo", "demoNotice": notice,
             "publishedAt": demoTimestamp(time), "machines": machines,
+            // Fictional prices for the demo only.
+            "market": ["coin": "PRL", "coinUsd": 1.85, "btcUsd": 80000.0, "usdTwd": 32.5,
+                       "observedAt": demoTimestamp(time)] as [String: Any],
         ]
         let data = try JSONSerialization.data(withJSONObject: object)
         return try JSONDecoder().decode(MinerStatusFeed.self, from: data)

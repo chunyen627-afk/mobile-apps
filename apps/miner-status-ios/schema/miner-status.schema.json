@@ -25,6 +25,10 @@
     "machines": {
       "type": "array",
       "items": { "$ref": "#/$defs/machine" }
+    },
+    "market": {
+      "description": "OPTIONAL extension, the only keys that may be absent: sent only to clients that ask for earnings (header X-Miner-Status-Features: earnings), so older apps keep receiving the base whitelist. Null when prices are unavailable.",
+      "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/market" }]
     }
   },
   "allOf": [
@@ -185,7 +189,36 @@
             },
             "observedAt": { "$ref": "#/$defs/timestampOrNull" }
           }
+        },
+        "earnings": {
+          "description": "OPTIONAL extension sent with feed.market (see there). Null when this machine has no pool estimate.",
+          "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/earnings" }]
         }
+      }
+    },
+    "market": {
+      "description": "Prices for converting estimated earnings. All USD prices; usdTwd is TWD per USD.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["coin", "coinUsd", "btcUsd", "usdTwd", "observedAt"],
+      "properties": {
+        "coin": { "type": "string", "pattern": "^[A-Z0-9]{2,10}$" },
+        "coinUsd": { "type": ["number", "null"], "minimum": 0 },
+        "btcUsd": { "type": ["number", "null"], "exclusiveMinimum": 0 },
+        "usdTwd": { "type": ["number", "null"], "exclusiveMinimum": 0 },
+        "observedAt": { "$ref": "#/$defs/timestampOrNull" }
+      }
+    },
+    "earnings": {
+      "description": "Pool-side estimate for one machine: coin per day at the pool's recent average hashrate, after the pool fee. An estimate, not the credited amount.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["coinPerDay", "poolHashrate", "electricityBilled", "observedAt"],
+      "properties": {
+        "coinPerDay": { "type": ["number", "null"], "minimum": 0 },
+        "poolHashrate": { "description": "H/s, the pool's recent average for this worker.", "type": ["number", "null"], "minimum": 0 },
+        "electricityBilled": { "description": "Publisher's default for whether this machine's electricity costs money; the app lets the user override it.", "type": ["boolean", "null"] },
+        "observedAt": { "$ref": "#/$defs/timestampOrNull" }
       }
     },
     "gpu": {

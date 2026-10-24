@@ -291,6 +291,29 @@ def build_cases(base: dict) -> tuple[list, list]:
         ("negative offset", [(M + ("observedAt",), "2026-10-24T04:00:00-05:30")]),
         ("leap day", [(M + ("observedAt",), "2024-02-29T00:00:00Z")]),
     ]
+
+    # Optional earnings extension: the only keys that may be absent (base fixtures omit them).
+    market = {"coin": "PRL", "coinUsd": 1.87, "btcUsd": 79646.0, "usdTwd": 32.1,
+              "observedAt": "2026-10-24T17:30:00+08:00"}
+    earnings = {"coinPerDay": 2.05, "poolHashrate": 1.75e14, "electricityBilled": True,
+                "observedAt": "2026-10-24T17:30:00+08:00"}
+    positive += [
+        ("earnings and market present", [(("market",), market), (M + ("earnings",), earnings)]),
+        ("earnings and market null", [(("market",), None), (M + ("earnings",), None)]),
+        ("earnings fields null", [(M + ("earnings",), dict.fromkeys(earnings))]),
+    ]
+    negative += [
+        ("market extra key", [(("market",), dict(market, wallet="x"))]),
+        ("market missing usdTwd", [(("market",), {k: v for k, v in market.items() if k != "usdTwd"})]),
+        ("market negative coin price", [(("market",), dict(market, coinUsd=-1))]),
+        ("market zero exchange rate", [(("market",), dict(market, usdTwd=0))]),
+        ("market lowercase coin", [(("market",), dict(market, coin="prl"))]),
+        ("market as string", [(("market",), "PRL")]),
+        ("earnings extra key", [(M + ("earnings",), dict(earnings, account="x"))]),
+        ("earnings negative coin per day", [(M + ("earnings",), dict(earnings, coinPerDay=-0.1))]),
+        ("earnings billed as string", [(M + ("earnings",), dict(earnings, electricityBilled="yes"))]),
+        ("earnings missing observedAt", [(M + ("earnings",), {k: v for k, v in earnings.items() if k != "observedAt"})]),
+    ]
     return negative, positive
 
 

@@ -36,8 +36,8 @@ bash scripts/build.sh
 1. `tools/validate_contract.py`（已安裝 `jsonschema` 才執行）
 2. `xcodegen generate`
 3. 在可用的 iPhone 模擬器上 `xcodebuild test`（不簽署），一次跑兩組：
-   - 單元測試 86 項（`EXPECTED_TESTS`）
-   - UI 測試 11 項（`EXPECTED_UI_TESTS`）：逐一切換 7 種示範情境並檢查兩台機器的燈號與「不是綠燈」警告區塊、打開詳情頁、網址驗證、自訂來源讀取本機假資料、讀取失敗提示、停止後回到示範；每個畫面存一張截圖
+   - 單元測試 95 項（`EXPECTED_TESTS`）
+   - UI 測試 13 項（`EXPECTED_UI_TESTS`）：逐一切換 7 種示範情境並檢查兩台機器的燈號與「不是綠燈」警告區塊、每台與總計的估算收益、切換電費勾選後總計改變、打開詳情頁、網址驗證、自訂來源讀取本機假資料、讀取失敗提示、停止後回到示範；每個畫面存一張截圖
    - 自訂來源測試用的假資料：腳本在 Mac 的 `127.0.0.1:8765` 以 `fixtures/` 啟動暫時的 HTTP 伺服器，`8799` 埠刻意無人監聽；網址以 `TEST_RUNNER_` 環境變數傳給測試，測試程式內沒有任何位址
    - 兩組都必須剛好跑到預期數量且 0 失敗，否則失敗結束；摘要存到 `build/test-summary.txt`
    - 結束時（含失敗）把截圖匯出成 `build/screenshots-ui/*.jpg` 與 `INDEX.txt`

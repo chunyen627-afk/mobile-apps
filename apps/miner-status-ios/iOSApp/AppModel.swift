@@ -3,6 +3,29 @@
 import Foundation
 import MinerStatusCore
 
+/// The user's earnings settings, stored only on this device. Per-machine values override the
+/// source's default (`earnings.electricityBilled`) and the default extra load.
+struct EarningsSettings: Codable, Equatable {
+    static let defaultExtraWatts: Double = 60
+
+    var tariff = TouTariff.taipowerSimpleTwoStage
+    var billed: [String: Bool] = [:]
+    var extraWatts: [String: Double] = [:]
+
+    private static let key = "earningsSettings"
+
+    static func load() -> EarningsSettings {
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let settings = try? JSONDecoder().decode(EarningsSettings.self, from: data)
+        else { return EarningsSettings() }
+        return settings
+    }
+
+    func save() {
+        if let data = try? JSONEncoder().encode(self) { UserDefaults.standard.set(data, forKey: Self.key) }
+    }
+}
+
 enum AppMode: Equatable {
     /// Built-in offline demo. Every launch starts here.
     case demo
@@ -40,6 +63,12 @@ final class AppModel: ObservableObject {
     /// Set when a live machine turns from green to another light; cleared when the user dismisses it.
     @Published private(set) var attentionAlert: String?
 
+    // Earnings
+    @Published private(set) var market: MarketReport?
+    @Published var earningsSettings = EarningsSettings.load() {
+        didSet { earningsSettings.save() }
+    }
+
     private var engine = StatusEngine()
     private var clock = SystemClock()
     private var client: StatusFeedClient?
@@ -64,6 +93,7 @@ final class AppModel: ObservableObject {
             snapshots = []
             feedProblem = nil
             demoClock = nil
+            market = nil
             demoError = "找不到或無法解碼內建示範資料 demo-running.json（需加入 App 資源，且必須標示為 demo）。"
             return
         }
@@ -72,11 +102,13 @@ final class AppModel: ObservableObject {
             snapshots = result.snapshots
             feedProblem = result.feedProblem
             demoClock = result.clock
+            market = result.market
             demoError = nil
         } catch {
             snapshots = []
             feedProblem = nil
             demoClock = nil
+            market = nil
             demoError = "示範資料未通過解碼：\(error.localizedDescription)"
         }
     }
@@ -98,6 +130,7 @@ final class AppModel: ObservableObject {
         lastSuccessAt = nil
         lastFailure = nil
         sourceSentDemoData = false
+        market = nil
         if isForeground { startPolling() }
     }
 
@@ -108,6 +141,41 @@ final class AppModel: ObservableObject {
 
     func dismissAttentionAlert() {
         attentionAlert = nil
+    }
+
+    // MARK: - Earnings
+
+    /// True when anything earnings-related arrived; older sources send none and the UI hides it.
+    var hasEarnings: Bool {
+        market != nil || snapshots.contains { $0.sample?.earnings != nil }
+    }
+
+    func isBilled(_ snapshot: MachineSnapshot) -> Bool {
+        earningsSettings.billed[snapshot.machineId] ?? snapshot.sample?.earnings?.electricityBilled ?? false
+    }
+
+    func setBilled(_ machineId: String, _ billed: Bool) {
+        earningsSettings.billed[machineId] = billed
+    }
+
+    func extraWatts(_ machineId: String) -> Double {
+        earningsSettings.extraWatts[machineId] ?? EarningsSettings.defaultExtraWatts
+    }
+
+    func setExtraWatts(_ machineId: String, _ watts: Double) {
+        earningsSettings.extraWatts[machineId] = watts
+    }
+
+    /// Demo uses its frozen clock so the shown day matches the demo data.
+    func earnings(for snapshot: MachineSnapshot) -> MachineEarnings {
+        EarningsCalculator.estimate(
+            status: snapshot.sample, market: market, billed: isBilled(snapshot),
+            extraWatts: extraWatts(snapshot.machineId), tariff: earningsSettings.tariff,
+            day: mode == .demo ? (demoClock?.wall ?? Date()) : Date())
+    }
+
+    var earningsTotal: (revenue: Double?, electricity: Double?, net: Double?) {
+        EarningsCalculator.total(snapshots.map(earnings(for:)))
     }
 
     func refreshNow() {
@@ -167,6 +235,7 @@ final class AppModel: ObservableObject {
             lastSuccessAt = Date()
             lastFailure = nil
             sourceSentDemoData = feed.isDemo
+            market = feed.market
         case .failure(.cancelled):
             break
         case .failure(let failure):

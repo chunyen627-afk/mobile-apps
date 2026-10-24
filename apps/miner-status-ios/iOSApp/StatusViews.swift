@@ -27,11 +27,14 @@ struct OverviewList: View {
 
     @ViewBuilder private var content: some View {
         if let headline = StatusAlerts.headline(model.snapshots) {
+            let text = "\(headline)：\(StatusAlerts.needingAttention(model.snapshots).map(\.displayName).joined(separator: "、"))"
             Section {
-                Label("\(headline)：\(StatusAlerts.needingAttention(model.snapshots).map(\.displayName).joined(separator: "、"))",
-                      systemImage: "exclamationmark.triangle.fill")
+                Label(text, systemImage: "exclamationmark.triangle.fill")
                     .font(.subheadline.bold())
                     .foregroundStyle(.orange)
+                    // Without this VoiceOver (and UI tests) read only the icon's name.
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(text)
                     .accessibilityIdentifier("attention-banner")
             }
         }
@@ -50,9 +53,17 @@ struct OverviewList: View {
                 Text(model.mode == .live ? "尚未收到有效資料" : DisplayText.noData).foregroundStyle(.secondary)
             }
             ForEach(model.snapshots, id: \.machineId) { snapshot in
-                NavigationLink(value: snapshot.machineId) { MachineRow(snapshot: snapshot) }
+                NavigationLink(value: snapshot.machineId) {
+                    MachineRow(snapshot: snapshot,
+                               earningsLine: model.hasEarnings ? EarningsText.rowLine(model.earnings(for: snapshot)) : nil)
+                }
                     .accessibilityIdentifier("machine-\(snapshot.machineId)")
             }
+        }
+
+        // Below the machines so their rows stay on the first screen.
+        if model.hasEarnings {
+            EarningsSummarySection(model: model)
         }
 
         Section("圖例") {
@@ -114,6 +125,7 @@ struct OverviewList: View {
 
 struct MachineRow: View {
     let snapshot: MachineSnapshot
+    var earningsLine: String?
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -128,6 +140,9 @@ struct MachineRow: View {
                     .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 if snapshot.isHistorical {
                     Text("歷史資料（未確認為目前狀態）").font(.caption.bold()).foregroundStyle(.orange)
+                }
+                if let earningsLine {
+                    Text(earningsLine).font(.caption.monospacedDigit())
                 }
                 if snapshot.dataOrigin == .demo {
                     Text("示範資料").font(.caption2.bold()).foregroundStyle(.orange)
@@ -158,7 +173,9 @@ struct MachineDetailView: View {
     var body: some View {
         Group {
             if let snapshot = model.snapshots.first(where: { $0.machineId == machineId }) {
-                DetailContent(snapshot: snapshot)
+                DetailContent(snapshot: snapshot,
+                              earnings: model.hasEarnings ? model.earnings(for: snapshot) : nil,
+                              market: model.market)
             } else {
                 Text("目前沒有這台機器的資料").foregroundStyle(.secondary)
             }
@@ -170,6 +187,8 @@ struct MachineDetailView: View {
 
 struct DetailContent: View {
     let snapshot: MachineSnapshot
+    var earnings: MachineEarnings?
+    var market: MarketReport?
 
     var body: some View {
         List {
@@ -185,6 +204,10 @@ struct DetailContent: View {
                     Label("歷史資料：以下數值未確認為目前狀態", systemImage: "clock.arrow.circlepath")
                         .foregroundStyle(.orange)
                 }
+            }
+
+            if let earnings {
+                EarningsDetailSection(earnings: earnings, market: market)
             }
 
             if let sample = snapshot.sample {

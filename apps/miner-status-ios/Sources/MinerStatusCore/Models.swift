@@ -5,7 +5,8 @@ import Foundation
 // Decoding rules shared by every object below:
 // - Every key is required. A missing key fails decoding; an explicit JSON null decodes to
 //   nil (shown as 無資料). Synthesized Codable would use decodeIfPresent and silently accept
-//   a missing key, so all types decode by hand.
+//   a missing key, so all types decode by hand. The one exception is the optional earnings
+//   extension (`feed.market`, `machine.earnings`), sent only to clients that ask for it.
 // - Keys outside the whitelist fail decoding instead of being ignored.
 // - The string "unknown" is kept distinct from null via `Reported`.
 // - Encoding writes explicit nulls so a round trip stays schema-valid.
@@ -24,11 +25,13 @@ public struct MinerStatusFeed: Codable, Hashable, Sendable {
     /// When the publisher wrote/served the document. Never makes any `observedAt` newer.
     public let publishedAt: Timestamp?
     public let machines: [MachineStatus]
+    /// Optional extension: nil when absent or null.
+    public let market: MarketReport?
 
     public var isDemo: Bool { dataOrigin == .demo }
 
     enum CodingKeys: String, CodingKey, CaseIterable {
-        case schemaVersion, dataOrigin, demoNotice, publishedAt, machines
+        case schemaVersion, dataOrigin, demoNotice, publishedAt, machines, market
     }
 
     public init(from decoder: Decoder) throws {
@@ -61,6 +64,7 @@ public struct MinerStatusFeed: Codable, Hashable, Sendable {
 
         publishedAt = try c.decodeNullable(Timestamp.self, forKey: .publishedAt)
         machines = try c.decode([MachineStatus].self, forKey: .machines)
+        market = c.contains(.market) ? try c.decodeNullable(MarketReport.self, forKey: .market) : nil
 
         // Stricter than the schema: duplicate ids would let samples from different
         // machines be compared against each other.
@@ -79,6 +83,7 @@ public struct MinerStatusFeed: Codable, Hashable, Sendable {
         try c.encode(demoNotice, forKey: .demoNotice)
         try c.encode(publishedAt, forKey: .publishedAt)
         try c.encode(machines, forKey: .machines)
+        try c.encodeIfPresent(market, forKey: .market)
     }
 }
 
@@ -109,11 +114,13 @@ public struct MachineStatus: Codable, Hashable, Sendable {
     public let gpus: [GPUStatus]?
     public let shares: SharesReport
     public let stop: StopReport
+    /// Optional extension: nil when absent or null.
+    public let earnings: EarningsReport?
 
     enum CodingKeys: String, CodingKey, CaseIterable {
         case machineId, displayName, worker, sourceStatus, sourceCheckedAt, sessionId,
              sampleSequence, observedAt, expectedRunning, minerRunning, hashrate, gpus,
-             shares, stop
+             shares, stop, earnings
     }
 
     public init(from decoder: Decoder) throws {
@@ -147,6 +154,7 @@ public struct MachineStatus: Codable, Hashable, Sendable {
         gpus = try c.decodeNullable([GPUStatus].self, forKey: .gpus)
         shares = try c.decode(SharesReport.self, forKey: .shares)
         stop = try c.decode(StopReport.self, forKey: .stop)
+        earnings = c.contains(.earnings) ? try c.decodeNullable(EarningsReport.self, forKey: .earnings) : nil
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -165,6 +173,79 @@ public struct MachineStatus: Codable, Hashable, Sendable {
         try c.encode(gpus, forKey: .gpus)
         try c.encode(shares, forKey: .shares)
         try c.encode(stop, forKey: .stop)
+        try c.encodeIfPresent(earnings, forKey: .earnings)
+    }
+}
+
+// MARK: - Earnings extension
+
+/// Prices for converting estimated earnings. USD prices; `usdTwd` is TWD per USD.
+public struct MarketReport: Codable, Hashable, Sendable {
+    public let coin: String
+    public let coinUsd: Double?
+    public let btcUsd: Double?
+    public let usdTwd: Double?
+    public let observedAt: Timestamp?
+
+    enum CodingKeys: String, CodingKey, CaseIterable {
+        case coin, coinUsd, btcUsd, usdTwd, observedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownKeys(decoder, allowed: CodingKeys.self)
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        coin = try c.decode(String.self, forKey: .coin)
+        let coinIsValid = (2 ... 10).contains(coin.count) && coin.unicodeScalars.allSatisfy {
+            $0.isASCII && (CharacterSet.uppercaseLetters.contains($0) || CharacterSet.decimalDigits.contains($0))
+        }
+        guard coinIsValid else {
+            throw DecodingError.dataCorruptedError(forKey: .coin, in: c, debugDescription: "coin must match ^[A-Z0-9]{2,10}$")
+        }
+        coinUsd = try c.decodeNumber(forKey: .coinUsd, minimum: 0)
+        btcUsd = try c.decodeNumber(forKey: .btcUsd, minimum: 0, exclusiveMinimum: true)
+        usdTwd = try c.decodeNumber(forKey: .usdTwd, minimum: 0, exclusiveMinimum: true)
+        observedAt = try c.decodeNullable(Timestamp.self, forKey: .observedAt)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(coin, forKey: .coin)
+        try c.encode(coinUsd, forKey: .coinUsd)
+        try c.encode(btcUsd, forKey: .btcUsd)
+        try c.encode(usdTwd, forKey: .usdTwd)
+        try c.encode(observedAt, forKey: .observedAt)
+    }
+}
+
+/// Pool-side estimate for one machine: coin per day at the pool's recent average hashrate,
+/// after the pool fee. An estimate, not the credited amount.
+public struct EarningsReport: Codable, Hashable, Sendable {
+    public let coinPerDay: Double?
+    /// H/s.
+    public let poolHashrate: Double?
+    /// Publisher's default; the app lets the user override it.
+    public let electricityBilled: Bool?
+    public let observedAt: Timestamp?
+
+    enum CodingKeys: String, CodingKey, CaseIterable {
+        case coinPerDay, poolHashrate, electricityBilled, observedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownKeys(decoder, allowed: CodingKeys.self)
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        coinPerDay = try c.decodeNumber(forKey: .coinPerDay, minimum: 0)
+        poolHashrate = try c.decodeNumber(forKey: .poolHashrate, minimum: 0)
+        electricityBilled = try c.decodeNullable(Bool.self, forKey: .electricityBilled)
+        observedAt = try c.decodeNullable(Timestamp.self, forKey: .observedAt)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(coinPerDay, forKey: .coinPerDay)
+        try c.encode(poolHashrate, forKey: .poolHashrate)
+        try c.encode(electricityBilled, forKey: .electricityBilled)
+        try c.encode(observedAt, forKey: .observedAt)
     }
 }
 
@@ -571,9 +652,10 @@ extension KeyedDecodingContainer {
         return value
     }
 
-    func decodeNumber(forKey key: Key, minimum: Double, maximum: Double? = nil) throws -> Double? {
+    func decodeNumber(forKey key: Key, minimum: Double, maximum: Double? = nil, exclusiveMinimum: Bool = false) throws -> Double? {
         guard let value = try decodeNullable(Double.self, forKey: key) else { return nil }
-        guard value.isFinite, value >= minimum, maximum.map({ value <= $0 }) ?? true else {
+        let aboveMinimum = exclusiveMinimum ? value > minimum : value >= minimum
+        guard value.isFinite, aboveMinimum, maximum.map({ value <= $0 }) ?? true else {
             throw DecodingError.dataCorruptedError(forKey: key, in: self, debugDescription: "number out of range")
         }
         return value

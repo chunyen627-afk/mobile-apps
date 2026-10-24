@@ -35,6 +35,9 @@ final class MinerStatusUITests: XCTestCase {
         // LabeledContent merges title and value into one element, so match either.
         let machineId = app.descendants(matching: .any)
             .matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "demo-rig-a", "demo-rig-a")).firstMatch
+        if !machineId.waitForExistence(timeout: 3) {
+            app.swipeUp()  // The earnings section above can push the machine section below the fold.
+        }
         if !machineId.waitForExistence(timeout: 5) {
             let texts = app.staticTexts.allElementsBoundByIndex.prefix(30).map { "\($0.label)=\($0.value ?? "")" }
             XCTFail("Machine ID not shown on detail; texts on screen: \(texts)")
@@ -75,6 +78,38 @@ final class MinerStatusUITests: XCTestCase {
         XCTAssertTrue(element("live-failure").waitForExistence(timeout: 30), "request failure is not shown")
         snapshot("12-live-failure")
         stopLiveAndCheckDemo()
+    }
+
+    // MARK: - Earnings
+
+    func test12EarningsShownPerMachineAndInTotal() throws {
+        let rowA = element("machine-demo-rig-a")
+        XCTAssertTrue(rowA.waitForExistence(timeout: 5), "machine row A missing")
+        XCTAssertTrue(waitFor(rowA, labelContains: "收益 ≈ NT$", timeout: 5), "row A has no earnings: \(rowA.label)")
+        XCTAssertTrue(waitFor(element("machine-demo-rig-b"), labelContains: "電費不計", timeout: 5),
+                      "demo machine B should not be billed by default")
+        let summary = element("earnings-summary")
+        if !summary.waitForExistence(timeout: 2) { app.swipeUp() }
+        XCTAssertTrue(summary.waitForExistence(timeout: 5), "earnings summary missing")
+        XCTAssertTrue(waitFor(summary, labelContains: "NT$", timeout: 3), "summary says \(summary.label)")
+        snapshot("13-earnings-summary")
+    }
+
+    func test13ElectricityToggleChangesTotals() throws {
+        let summary = element("earnings-summary")
+        if !summary.waitForExistence(timeout: 2) { app.swipeUp() }
+        XCTAssertTrue(summary.waitForExistence(timeout: 5), "earnings summary missing")
+        let before = summary.label
+        element("earnings-settings").tap()
+        let toggle = app.switches["billed-demo-rig-b"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5), "electricity toggle for machine B missing")
+        let wasOn = (toggle.value as? String) == "1"
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
+        XCTAssertTrue(poll(timeout: 3) { ((toggle.value as? String) == "1") != wasOn }, "toggle did not change")
+        snapshot("14-earnings-settings")
+        element("earnings-done").tap()
+        XCTAssertTrue(summary.waitForExistence(timeout: 5), "earnings summary missing after settings")
+        XCTAssertTrue(poll(timeout: 5) { summary.label != before }, "totals did not change: \(summary.label)")
     }
 
     // MARK: - Helpers
