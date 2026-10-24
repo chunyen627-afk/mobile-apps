@@ -100,7 +100,9 @@ final class MinerStatusUITests: XCTestCase {
             app.navigationBars.buttons.element(boundBy: 0).tap()
         }
         XCTAssertTrue(picker.waitForExistence(timeout: 5), "did not return from the scenario list")
-        XCTAssertTrue(waitFor(picker, labelContains: title, timeout: 5),
+        // Poll the value directly: an NSPredicate on `value` once missed a selection that was
+        // already shown (run 40108162409 reported "目前情境 / 首筆資料" yet failed).
+        XCTAssertTrue(poll(timeout: 5) { picker.label.contains(title) || ((picker.value as? String)?.contains(title) ?? false) },
                       "scenario \(title) was not selected; picker says \(picker.label) / \(picker.value ?? "")")
         for id in ["demo-rig-a", "demo-rig-b"] {
             let row = element("machine-\(id)")
@@ -152,6 +154,15 @@ final class MinerStatusUITests: XCTestCase {
         let predicate = NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", text, text)
         let expectation = XCTNSPredicateExpectation(predicate: predicate, object: element)
         return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
+    }
+
+    private func poll(timeout: TimeInterval, _ condition: () -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            if condition() { return true }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        } while Date() < deadline
+        return condition()
     }
 
     private func snapshot(_ name: String) {

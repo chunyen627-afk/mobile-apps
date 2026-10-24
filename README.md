@@ -22,7 +22,9 @@ docs/
   ios-app-autonomous-ci.md 新 App 的 AI 自主建置流程與實戰日記
 ```
 
-後續新 App 放在 `apps/<名稱>/`，各自建立 README 與必要的 workflow，並依 [AI 自主建置流程](docs/ios-app-autonomous-ci.md) 建置與驗證。STM32 板子相關內容留在 [stm32h7s78-project](https://github.com/chunyen627-afk/stm32h7s78-project)。
+後續新 App 放在 `apps/<名稱>/`，各自建立 README 與必要的 workflow，並依 [AI 自主建置流程](docs/ios-app-autonomous-ci.md) 建置與驗證。
+
+**工具箱整合規劃**：免費 Apple 帳號每台裝置只能同時啟用 3 個側載 App（SideStore 本身佔 1 個），每 7 天最多建立 10 個 App ID。因此各工具最終會整合成一個「工具箱」App，打開後從首頁選要進哪一個工具，只佔 1 個名額、只需續簽一次。流程：每個新工具先做成單獨 App，模擬器測試與截圖檢視通過、實機確認能動，再以同一份模組整合進工具箱；工具箱預計沿用相簿的 Bundle ID，覆蓋安裝時保留相簿資料。目前順序：礦機驗穩（含收益與電費）→ 整合 → 規劃之後的新 App。STM32 板子相關內容留在 [stm32h7s78-project](https://github.com/chunyen627-afk/stm32h7s78-project)。
 
 ## 相簿下載與安裝
 
