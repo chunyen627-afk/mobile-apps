@@ -17,7 +17,7 @@
 | 測試方式 | 在 iOS 模擬器用 `xcodebuild test`，**不用** SwiftPM 的 `swift test` |
 | 套件 | 能不用就不用；需要時固定版本（`exactVersion`） |
 
-`apps/miner-status-ios` 是依本文件建立的最小範例，新 App 可複製它的 `project.yml`、`scripts/build.sh` 與 workflow 再改名。
+依本文件建立的最小範例是 `apps/miner-status-ios`（目前在分支 `claude/miner-status-ios-demo`，尚未合併 main），新 App 可複製它的 `project.yml`、`scripts/build.sh` 與 `.github/workflows/miner-status-ios.yml` 再改名。
 
 ## 二、`scripts/build.sh` 必備步驟
 
@@ -28,7 +28,6 @@
 5. Release archive（關閉簽署）→ 檢查 bundle 內容（主程式、資源、內嵌 framework、Info.plist 關鍵值）
 6. 封裝 IPA → `unzip -t` → 算 SHA256
 7. **失敗時輸出 annotation**：用 `trap ... EXIT` 把失敗階段、`error:` 行與 log 結尾輸出為 `::error` 指令。換行要轉成 `%0A`，`%` 要轉成 `%25`，每一步最多 10 則
-
 8. **成功時輸出 notice**：用 `::notice` 公開實際的 `Executed N tests, with 0 failures` 那一行、Xcode 與模擬器版本；workflow 再用 `::notice` 公開 IPA 大小與 SHA256
 
 第 7、8 點是自主迭代的關鍵：**Actions 的 log 要登入才看得到，但 annotation 用公開 API 就讀得到。**
