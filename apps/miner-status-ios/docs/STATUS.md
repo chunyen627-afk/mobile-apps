@@ -47,15 +47,24 @@
 
 ## CI 實際執行（GitHub 標準 macOS runner）
 
-最新通過：[run 40095550434](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40095550434)，來源 `2031641`，Xcode 16.4、iPhone 16 Pro 模擬器。以下數字取自該 run 的公開 annotation。
+最新通過：[run 40102507820](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40102507820)，來源 `9f93659`，Xcode 16.4、iPhone 16 Pro 模擬器。以下數字取自該 run 的公開 annotation。
 
 | 檢查 | 結果 |
 | --- | --- |
 | `xcodegen generate`、模擬器 Debug 編譯（核心 framework、App、測試） | 通過 |
-| XCTest | `Executed 80 tests, with 0 failures (0 unexpected)` |
-| 模擬器啟動檢查（離線示範，8 秒後仍在執行） | 通過；截圖只存在 1 天期的 artifact，**尚未人工檢視** |
+| 單元測試 | `Executed 80 tests, with 0 failures (0 unexpected)` |
+| 模擬器 UI 測試 | `Executed 11 tests, with 0 failures (0 unexpected)`：7 種示範情境的燈號、詳情頁、網址驗證、自訂來源讀取本機假資料、讀取失敗、停止後回到示範 |
+| 截圖人工檢視 | 13 張全部看過（分支 `ci-screenshots-miner-status-ios`）：燈號與原因文字符合規則，無截字或重疊 |
 | Release archive、bundle 檢查（主程式、`demo-running.json`、`MinerStatusCore.framework`、ATS、無背景模式） | 通過 |
-| 未簽署 IPA | 211,736 bytes，SHA256 `6ccd7347311e31e9e8b00ba71674d1b7c895c998ae58800a582b85a3ba74208b`；只在 runner 內，**未上傳** |
+| 未簽署 IPA | 214,284 bytes，SHA256 `0b98b95f938d7655ac5df0df42d5d98a930ca0c48dd5dc8665e0eb53fc2c66e1`；只在 runner 內，**未上傳** |
+
+UI 測試與截圖找到並修正的畫面問題：
+
+1. 頂端模式橫幅蓋住導覽列，「資料來源」按鈕點不到（真機也會發生）→ 橫幅改放在各畫面導覽列下方
+2. 清單內的情境選單點了打不開 → 改為點「目前情境」進入清單頁
+3. 捲動時內容透過半透明橫幅，文字重疊 → 橫幅底色改為不透明
+4. 返回鍵顯示英文「Back」 → 宣告 App 為繁體中文
+5. 設定頁標題把「App」轉成「APP」→ 關閉該標題的自動大寫
 
 修正紀錄：
 
@@ -67,8 +76,7 @@
 
 | 項目 | 狀態 |
 | --- | --- |
-| 七種示範情境與自訂來源畫面 | 已撰寫 11 項模擬器 UI 測試與截圖流程，**尚未在 CI 執行**；iPad 還沒看 |
-| iPad 版面 | 未驗證 |
+| iPad 版面 | 未驗證（UI 測試只在 iPhone 模擬器執行） |
 | 簽署、安裝、實機 | 未執行；IPA 未上傳 |
 | 真實資料來源 | 未連線；沒有已驗證可用的來源端點；ATS 對 HTTP 私有位址的效果未驗證 |
 
@@ -76,6 +84,6 @@ Python 檢查只驗證 JSON 契約與設定文字，**不是** Swift 程式的�
 
 ## 下一步
 
-1. 在 iPhone 與 iPad 模擬器逐一檢查七種示範情境與自訂來源畫面，包括錯誤與暫停狀態。
-2. 要安裝到手機時，才在 workflow 上傳 IPA（加大小上限、短保留期），由本人簽署安裝。
+1. 要安裝到手機時，才提供 IPA（加大小上限、短保留期），由本人簽署安裝。
+2. 需要時加 iPad 模擬器的 UI 測試與截圖。
 3. 來源端確認可用後，在實機以自訂來源驗證：ATS、本地網路權限、失敗與重連。

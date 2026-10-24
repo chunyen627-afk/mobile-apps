@@ -61,7 +61,7 @@ bash scripts/build.sh
 
 ## CI
 
-`.github/workflows/miner-status-ios.yml` 已實際執行通過，最新為 [run 40095550434](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40095550434)。測試數、工具版本與 IPA SHA256 以 `::notice` annotation 公開，不登入也能從 API 讀取。
+`.github/workflows/miner-status-ios.yml` 已實際執行通過，最新為 [run 40102507820](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40102507820)。測試數、工具版本與 IPA SHA256 以 `::notice` annotation 公開，不登入也能從 API 讀取。
 
 - 觸發：只有 `push` 到 `claude/miner-status-ios-demo`，且變更 `apps/miner-status-ios/**` 或 workflow 檔本身時。沒有 `workflow_dispatch`，因為它要求 workflow 檔存在於預設分支，而本 App 不合併 main
 - 條件：`if: github.event.repository.private == false`，標準 `macos-15` runner，`timeout-minutes: 30`，同 ref 取消舊執行

@@ -11,14 +11,14 @@
 | --- | --- |
 | JSON 契約（schema）、合成示範 fixtures | 實作完成；Windows 上以 Python 實際執行契約檢查通過 |
 | 純 Swift 核心 `MinerStatusCore`（模型、狀態引擎、顯示文字、唯讀 HTTP client） | **編譯通過**（macOS CI） |
-| XCTest（80 項） | **模擬器測試通過**：80 項、0 失敗（[run 40095550434](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40095550434)，Xcode 16.4、iPhone 16 Pro 模擬器） |
-| SwiftUI App（示範＋自訂來源） | **編譯通過**；模擬器啟動檢查通過（離線示範 8 秒後仍在執行）；畫面**尚未人工檢視**，未在實機執行 |
+| XCTest（80 項） | **模擬器測試通過**：80 項、0 失敗（[run 40102507820](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40102507820)，Xcode 16.4、iPhone 16 Pro 模擬器） |
+| SwiftUI App（示範＋自訂來源） | **模擬器 UI 測試通過**：11 項、0 失敗，13 張截圖已人工檢視；iPad 與實機未驗證 |
 | Xcode 專案設定（XcodeGen `project.yml`，沿用 album-ios 架構）、建置腳本 `scripts/build.sh` | CI 實際執行通過，含 Release archive 與 bundle 檢查 |
 | Swift 語法剖析、靜態設定檢查 | Windows 上執行通過；只代表可剖析與設定內容相符 |
 | 真實資料來源 | 未連線驗證；沒有已驗證可用的來源端點 |
 | CI workflow、IPA | `miner-status-ios.yml` push 到本分支即觸發；未簽署 IPA 在 runner 內產生（211,736 bytes），**未上傳、未安裝** |
 
-模擬器通過不等於實機通過。畫面人工檢查、iPad 與實機仍待驗證，詳見 [狀態](docs/STATUS.md) 與 [建置](docs/BUILD.md)。
+模擬器通過不等於實機通過。iPad 與實機仍待驗證，詳見 [狀態](docs/STATUS.md) 與 [建置](docs/BUILD.md)。
 
 ## 燈號
 
