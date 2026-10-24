@@ -101,8 +101,14 @@ final class MinerStatusUITests: XCTestCase {
         XCTAssertTrue(summary.waitForExistence(timeout: 5), "earnings summary missing")
         let before = summary.label
         element("earnings-settings").tap()
-        let toggle = app.switches["billed-demo-rig-b"]
-        XCTAssertTrue(toggle.waitForExistence(timeout: 5), "electricity toggle for machine B missing")
+        // Found by its label: inside a Form the identifier can land on the row instead of the switch.
+        let toggle = app.switches.matching(NSPredicate(format: "label CONTAINS %@", "示範礦機 B")).firstMatch
+        if !toggle.waitForExistence(timeout: 5) {
+            snapshot("14-earnings-settings-missing-toggle")
+            let switches = app.switches.allElementsBoundByIndex.map { "\($0.identifier)=\($0.label)" }
+            XCTFail("electricity toggle for machine B missing; switches: \(switches)")
+            return
+        }
         let wasOn = (toggle.value as? String) == "1"
         toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
         XCTAssertTrue(poll(timeout: 3) { ((toggle.value as? String) == "1") != wasOn }, "toggle did not change")
