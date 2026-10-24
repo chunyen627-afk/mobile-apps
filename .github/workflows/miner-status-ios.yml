@@ -1,0 +1,67 @@
+name: Build Miner Status iOS
+# Runs only for this app's demo branch. No workflow_dispatch: that needs the file on main.
+on:
+  push:
+    branches: [claude/miner-status-ios-demo]
+    paths:
+      - 'apps/miner-status-ios/**'
+permissions:
+  contents: read
+concurrency:
+  group: miner-status-ios-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    # Fail closed for private repositories; standard public runners are free.
+    if: github.event.repository.private == false
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      APP_DIR: apps/miner-status-ios
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install project generator
+        run: brew install xcodegen
+      - name: Build, test and launch smoke
+        working-directory: ${{ env.APP_DIR }}
+        env:
+          RUN_SIM_SMOKE: "1"
+        run: bash scripts/build.sh
+      # The IPA stays on the runner: only its size and SHA256 are recorded.
+      - name: Record IPA size and SHA256
+        working-directory: ${{ env.APP_DIR }}/build
+        run: |
+          size=$(stat -f %z MinerStatus-unsigned.ipa)
+          sha=$(cut -d' ' -f1 MinerStatus-unsigned.ipa.sha256)
+          echo "IPA size: $size bytes"
+          echo "IPA SHA256: $sha"
+          {
+            echo "### MinerStatus-unsigned.ipa (not uploaded)"
+            echo "- size: $size bytes"
+            echo "- SHA256: \`$sha\`"
+            grep -E "Executed [0-9]+ tests?, with [0-9]+ failures" swift-test.log | tail -1 | sed 's/^/- XCTest: /'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Collect small reports (1 MB limit)
+        id: collect
+        if: always()
+        working-directory: ${{ env.APP_DIR }}/build
+        run: |
+          mkdir -p reports
+          [ -f swift-test.log ] && cp swift-test.log reports/
+          [ -f screenshots/launch-demo.jpg ] && cp screenshots/launch-demo.jpg reports/
+          ls -l reports
+          total=$(find reports -type f -exec stat -f %z {} + | awk '{s+=$1} END {print s+0}')
+          echo "reports total: $total bytes"
+          if [ "$total" -gt 1048576 ]; then
+            echo "Reports exceed 1 MB; refusing to upload."
+            exit 1
+          fi
+      - name: Save small reports
+        if: always() && steps.collect.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: MinerStatus-reports
+          path: ${{ env.APP_DIR }}/build/reports
+          if-no-files-found: warn
+          retention-days: 1
