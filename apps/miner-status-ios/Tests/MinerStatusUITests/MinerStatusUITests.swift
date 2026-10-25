@@ -307,10 +307,12 @@ final class MinerStatusUITests: XCTestCase {
     }
 
     /// Checks label or value: a picker row keeps its title in the label and the selection in the value.
+    /// Polled directly: on slow runners an NSPredicate expectation timed out on text that was already
+    /// shown (runs 40208126240 and 40210990544: "row says 黃燈…" failed to match 黃燈).
     private func waitFor(_ element: XCUIElement, labelContains text: String, timeout: TimeInterval) -> Bool {
-        let predicate = NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", text, text)
-        let expectation = XCTNSPredicateExpectation(predicate: predicate, object: element)
-        return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
+        poll(timeout: timeout) {
+            element.exists && (element.label.contains(text) || ((element.value as? String)?.contains(text) ?? false))
+        }
     }
 
     /// Scrolls the list down, then back up, until the element is on screen and tappable.
