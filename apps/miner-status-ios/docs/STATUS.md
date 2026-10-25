@@ -108,6 +108,8 @@ UI 測試與截圖找到並修正的畫面問題：
 - App：詳情頁「遠端控制」、設定頁控制密碼（鑰匙圈）、資料格式加選填 `control`（feature `control`）
 - 修正：螢幕關掉幾分鐘再打開 App，會先用舊資料判斷而全部變灰並跳警告；改為回到前景後等第一筆新資料再判斷
 - 尚未實機驗證：手機上的按鈕實際送出（模擬器測試只能驗證到測試伺服器回 501）
+- [run 40208126240](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40208126240)：遠端控制 UI 測試通過，但 test01 的警告文字比對被 NSPredicate 漏看（文字其實正確）；改用 poll 直接讀
+- [run 40209294577](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40209294577)（`fdba969`）：單元測試 `Executed 117 tests, with 0 failures`、UI 測試 `Executed 16 tests, with 0 failures`；截圖確認確認對話框「確定停止挖礦／取消」與送出後的結果訊息。IPA 379,229 bytes（runner 內，未上傳）
 
 ## 實機
 
