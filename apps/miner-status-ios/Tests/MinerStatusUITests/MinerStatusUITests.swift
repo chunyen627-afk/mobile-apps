@@ -71,7 +71,8 @@ final class MinerStatusUITests: XCTestCase {
                       "live row time not formatted: \(rowA.label)")
         XCTAssertTrue(waitFor(banner, labelContains: "示範資料", timeout: 5), "demo-marked source data is not flagged")
         // The fixture's timestamps are old, so both machines are gray: the warning must say so.
-        XCTAssertTrue(waitFor(element("attention-banner"), labelContains: "2 台不是綠燈", timeout: 5),
+        let attention = element("attention-banner")
+        XCTAssertTrue(attention.waitForExistence(timeout: 5) && poll(timeout: 5) { attention.label.contains("2 台不是綠燈") },
                       "attention banner missing in live mode")
         snapshot("11-live-local-feed")
         stopLiveAndCheckDemo()
@@ -255,7 +256,8 @@ final class MinerStatusUITests: XCTestCase {
             XCTAssertFalse(attention.exists, "all-green \(title) must not show the attention banner")
         } else {
             XCTAssertTrue(attention.waitForExistence(timeout: 3), "\(title) must show the attention banner")
-            XCTAssertTrue(waitFor(attention, labelContains: "2 台不是綠燈", timeout: 3),
+            // Polled: an NSPredicate wait once missed text that was already shown (run 40208126240).
+            XCTAssertTrue(poll(timeout: 3) { attention.label.contains("2 台不是綠燈") },
                           "attention banner in \(title) says \(attention.label)")
         }
         snapshot(shot)

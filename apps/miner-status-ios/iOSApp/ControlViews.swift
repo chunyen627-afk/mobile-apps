@@ -27,7 +27,9 @@ struct RemoteControlSection: View {
                         .accessibilityIdentifier("control-start")
                 }
                 if report.canStop {
-                    Button(role: .destructive) { request(.stop) } label: { Label("停止挖礦", systemImage: "stop.fill") }
+                    Button(role: .destructive) { request(.stop) } label: {
+                        Label("停止挖礦", systemImage: "stop.fill").foregroundStyle(.red)  // icon red like the text
+                    }
                         .disabled(model.controlInFlight != nil)
                         .accessibilityIdentifier("control-stop")
                 }
