@@ -315,6 +315,23 @@ def build_cases(base: dict) -> tuple[list, list]:
         ("earnings missing observedAt", [(M + ("earnings",), {k: v for k, v in earnings.items() if k != "observedAt"})]),
     ]
 
+    # Optional tariff extension.
+    tariff = {"name": "台電簡易型時間電價（二段式）", "effectiveDate": "2025-10-01", "summerPeak": 5.16,
+              "summerOffPeak": 2.06, "nonSummerPeak": 4.93, "nonSummerOffPeak": 1.99, "periodsMatch": True,
+              "offPeakDates": ["2026-10-26", "2026-12-25"], "observedAt": "2026-10-24T17:30:00+08:00"}
+    positive += [
+        ("tariff present", [(("tariff",), tariff)]),
+        ("tariff null", [(("tariff",), None)]),
+        ("tariff no holidays, unknown date", [(("tariff",), dict(tariff, offPeakDates=[], effectiveDate=None, periodsMatch=None))]),
+    ]
+    negative += [
+        ("tariff extra key", [(("tariff",), dict(tariff, url="x"))]),
+        ("tariff negative rate", [(("tariff",), dict(tariff, summerPeak=-1))]),
+        ("tariff null rate", [(("tariff",), dict(tariff, nonSummerOffPeak=None))]),
+        ("tariff bad date", [(("tariff",), dict(tariff, offPeakDates=["2026/10/26"]))]),
+        ("tariff too many dates", [(("tariff",), dict(tariff, offPeakDates=["2026-10-26"] * 61))]),
+    ]
+
     # Optional assessment extension.
     assessment = {"light": "green", "title": "挖礦中", "reason": "最後份額 1 分鐘前（平常約 2 分鐘一個）",
                   "observedAt": "2026-10-24T17:30:00+08:00"}

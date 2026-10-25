@@ -9,10 +9,27 @@ struct EarningsSettings: Codable, Equatable {
     static let defaultExtraWatts: Double = 60
 
     var tariff = TouTariff.taipowerSimpleTwoStage
+    /// Use the rates the source published (Taipower open data) instead of `tariff` when available.
+    var useSourceTariff = true
     var billed: [String: Bool] = [:]
     var extraWatts: [String: Double] = [:]
 
     private static let key = "earningsSettings"
+
+    enum CodingKeys: String, CodingKey {
+        case tariff, useSourceTariff, billed, extraWatts
+    }
+
+    init() {}
+
+    /// Keys added in later versions may be missing from what an older version saved.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        tariff = try c.decodeIfPresent(TouTariff.self, forKey: .tariff) ?? .taipowerSimpleTwoStage
+        useSourceTariff = try c.decodeIfPresent(Bool.self, forKey: .useSourceTariff) ?? true
+        billed = try c.decodeIfPresent([String: Bool].self, forKey: .billed) ?? [:]
+        extraWatts = try c.decodeIfPresent([String: Double].self, forKey: .extraWatts) ?? [:]
+    }
 
     static func load() -> EarningsSettings {
         guard let data = UserDefaults.standard.data(forKey: key),
@@ -23,6 +40,20 @@ struct EarningsSettings: Codable, Equatable {
 
     func save() {
         if let data = try? JSONEncoder().encode(self) { UserDefaults.standard.set(data, forKey: Self.key) }
+    }
+}
+
+/// The last tariff the source published, kept so the rates and days off still apply in demo mode
+/// and after a restart.
+enum SourceTariffStore {
+    private static let key = "sourceTariff"
+
+    static func load() -> TariffReport? {
+        UserDefaults.standard.data(forKey: key).flatMap { try? JSONDecoder().decode(TariffReport.self, from: $0) }
+    }
+
+    static func save(_ report: TariffReport) {
+        if let data = try? JSONEncoder().encode(report) { UserDefaults.standard.set(data, forKey: key) }
     }
 }
 
@@ -65,6 +96,7 @@ final class AppModel: ObservableObject {
 
     // Earnings
     @Published private(set) var market: MarketReport?
+    @Published private(set) var sourceTariff: TariffReport? = SourceTariffStore.load()
     @Published var earningsSettings = EarningsSettings.load() {
         didSet { earningsSettings.save() }
     }
@@ -170,7 +202,7 @@ final class AppModel: ObservableObject {
     func earnings(for snapshot: MachineSnapshot) -> MachineEarnings {
         EarningsCalculator.estimate(
             status: snapshot.sample, market: market, billed: isBilled(snapshot),
-            extraWatts: extraWatts(snapshot.machineId), tariff: earningsSettings.tariff,
+            extraWatts: extraWatts(snapshot.machineId), tariff: effectiveTariff,
             day: mode == .demo ? (demoClock?.wall ?? Date()) : Date())
     }
 
@@ -181,9 +213,21 @@ final class AppModel: ObservableObject {
     /// The clock the screen should reason about: the frozen demo clock, or now.
     var displayNow: Date { mode == .demo ? (demoClock?.wall ?? Date()) : Date() }
 
+    /// True when the rates in use are the source's published ones.
+    var usingSourceRates: Bool { earningsSettings.useSourceTariff && sourceTariff != nil }
+
+    /// Rates from the source when chosen and available, otherwise the user's; the source's days
+    /// off apply either way.
+    var effectiveTariff: TouTariff {
+        var tariff = usingSourceRates ? sourceTariff.map(TouTariff.init(report:)) ?? earningsSettings.tariff
+                                      : earningsSettings.tariff
+        tariff.offPeakDates = Set(sourceTariff?.offPeakDates ?? [])
+        return tariff
+    }
+
     /// Current tariff period and the hourly cost of the machines that pay for electricity.
     var currentElectricity: (period: String, rate: Double, perHour: Double?) {
-        let period = earningsSettings.tariff.period(at: displayNow)
+        let period = effectiveTariff.period(at: displayNow)
         let watts = snapshots.filter(isBilled).compactMap { earnings(for: $0).powerW }
         return (period.name, period.rate, watts.isEmpty ? nil : watts.reduce(0, +) / 1000 * period.rate)
     }
@@ -246,6 +290,10 @@ final class AppModel: ObservableObject {
             lastFailure = nil
             sourceSentDemoData = feed.isDemo
             market = feed.market
+            if let tariff = feed.tariff, tariff != sourceTariff {
+                sourceTariff = tariff
+                SourceTariffStore.save(tariff)
+            }
         case .failure(.cancelled):
             break
         case .failure(let failure):

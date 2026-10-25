@@ -30,11 +30,21 @@ struct SourceSettingsView: View {
                 }
 
                 Section {
-                    TextField("http://主機名稱:埠/status", text: $urlText)
-                        .keyboardType(.URL)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .accessibilityIdentifier("source-url")
+                    HStack {
+                        TextField("http://主機名稱:埠/status", text: $urlText)
+                            .keyboardType(.URL)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .accessibilityIdentifier("source-url")
+                        if !urlText.isEmpty {
+                            Button { urlText = "" } label: {
+                                Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.borderless)
+                            .accessibilityLabel("清除網址")
+                            .accessibilityIdentifier("source-url-clear")
+                        }
+                    }
                     switch validation {
                     case .success(let endpoint):
                         if endpoint.usesPlainHTTP {

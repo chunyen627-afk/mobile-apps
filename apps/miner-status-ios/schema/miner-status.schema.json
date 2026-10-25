@@ -29,6 +29,10 @@
     "market": {
       "description": "OPTIONAL extension, the only keys that may be absent: sent only to clients that ask for earnings (header X-Miner-Status-Features: earnings), so older apps keep receiving the base whitelist. Null when prices are unavailable.",
       "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/market" }]
+    },
+    "tariff": {
+      "description": "OPTIONAL extension sent with market: the published Taipower simple two-stage time-of-use rates and upcoming weekday days off (billed off-peak all day). Null when never fetched.",
+      "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/tariff" }]
     }
   },
   "allOf": [
@@ -214,6 +218,26 @@
         "coinUsd": { "type": ["number", "null"], "minimum": 0 },
         "btcUsd": { "type": ["number", "null"], "exclusiveMinimum": 0 },
         "usdTwd": { "type": ["number", "null"], "exclusiveMinimum": 0 },
+        "observedAt": { "$ref": "#/$defs/timestampOrNull" }
+      }
+    },
+    "tariff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "effectiveDate", "summerPeak", "summerOffPeak", "nonSummerPeak", "nonSummerOffPeak",
+                   "periodsMatch", "offPeakDates", "observedAt"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "effectiveDate": { "type": ["string", "null"], "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "summerPeak": { "type": "number", "minimum": 0 },
+        "summerOffPeak": { "type": "number", "minimum": 0 },
+        "nonSummerPeak": { "type": "number", "minimum": 0 },
+        "nonSummerOffPeak": { "type": "number", "minimum": 0 },
+        "periodsMatch": { "description": "False when the published time windows differ from the ones the app implements.", "type": ["boolean", "null"] },
+        "offPeakDates": {
+          "type": "array", "maxItems": 60,
+          "items": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" }
+        },
         "observedAt": { "$ref": "#/$defs/timestampOrNull" }
       }
     },

@@ -51,10 +51,16 @@ struct EarningsSummarySection: View {
             }
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier("earnings-summary")
-            Button("收益與電費設定", action: showSettings)
-                .accessibilityIdentifier("earnings-settings")
         } header: {
-            Text("今日估算")
+            // In the header so it stays put however tall the summary grows.
+            HStack {
+                Text("今日估算")
+                Spacer()
+                Button("收益與電費設定", action: showSettings)
+                    .font(.subheadline)
+                    .accessibilityIdentifier("earnings-settings")
+            }
+            .textCase(nil)
         } footer: {
             Text("依礦池近 3 小時平均算力與目前幣價估算，不是實際入帳金額；電費依台電簡易型二段式與目前耗電推算一整天。")
         }
@@ -115,6 +121,8 @@ struct EarningsSettingsView: View {
                     Text("耗電＝顯卡回報的瓦數＋額外耗電（CPU、主機板、電源損耗）。可用插座電表量到的數字調整。")
                 }
 
+                TariffSourceSection(model: model)
+
                 Section {
                     rateField("夏月尖峰", \.summerPeak, id: "tariff-summer-peak")
                     rateField("夏月離峰", \.summerOffPeak, id: "tariff-summer-offpeak")
@@ -122,9 +130,9 @@ struct EarningsSettingsView: View {
                     rateField("非夏月離峰", \.nonSummerOffPeak, id: "tariff-nonsummer-offpeak")
                     Button("恢復台電預設費率") { model.earningsSettings.tariff = .taipowerSimpleTwoStage }
                 } header: {
-                    Text("台電簡易型時間電價（二段式），元／度").textCase(nil)
+                    Text(model.usingSourceRates ? "自己填的費率（目前用台電公告，未使用）" : "自己填的費率，元／度").textCase(nil)
                 } footer: {
-                    Text("夏月 6/1–9/30。平日尖峰：夏月 09:00–24:00；非夏月 06:00–11:00、14:00–24:00；週末全天離峰。國定假日未另計為離峰；每戶 75 元基本電費不分攤到礦機。")
+                    Text("夏月 6/1–9/30。平日尖峰：夏月 09:00–24:00；非夏月 06:00–11:00、14:00–24:00；週末與放假日全天離峰。每戶 75 元基本電費不分攤到礦機。")
                 }
             }
             .navigationTitle("收益與電費設定")

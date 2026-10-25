@@ -78,6 +78,8 @@ struct OverviewList: View {
             EarningsSummarySection(model: model) { showingEarningsSettings = true }
         }
 
+        TodayTariffSection(model: model) { showingEarningsSettings = true }
+
         Section("圖例") {
             ForEach([StatusLight.green, .yellow, .red, .gray], id: \.self) { light in
                 HStack(alignment: .top) {

@@ -57,5 +57,11 @@
         "observedAt": "2026-10-24T17:39:30+08:00"
       }
     }
-  ]
+  ],
+  "tariff": {
+    "name": "表燈簡易型時間電價（二段式）", "effectiveDate": "2025-10-01",
+    "summerPeak": 5.16, "summerOffPeak": 2.06, "nonSummerPeak": 4.93, "nonSummerOffPeak": 1.99,
+    "periodsMatch": true, "offPeakDates": ["2026-10-26", "2026-12-25"],
+    "observedAt": "2026-10-24T17:40:00+08:00"
+  }
 }

@@ -93,18 +93,18 @@ final class MinerStatusUITests: XCTestCase {
         XCTAssertTrue(waitFor(element("machine-demo-rig-b"), labelContains: "電費不計", timeout: 5),
                       "demo machine B should not be billed by default")
         let summary = element("earnings-summary")
-        if !summary.waitForExistence(timeout: 2) { app.swipeUp() }
-        XCTAssertTrue(summary.waitForExistence(timeout: 5), "earnings summary missing")
+        XCTAssertTrue(reveal(summary), "earnings summary missing")
         XCTAssertTrue(waitFor(summary, labelContains: "NT$", timeout: 3), "summary says \(summary.label)")
         snapshot("13-earnings-summary")
     }
 
     func test13ElectricityToggleChangesTotals() throws {
         let summary = element("earnings-summary")
-        if !summary.waitForExistence(timeout: 2) { app.swipeUp() }
-        XCTAssertTrue(summary.waitForExistence(timeout: 5), "earnings summary missing")
+        XCTAssertTrue(reveal(summary), "earnings summary missing")
         let before = summary.label
-        element("earnings-settings").tap()
+        let settings = element("earnings-settings")
+        XCTAssertTrue(reveal(settings), "earnings settings button not reachable")
+        settings.tap()
         // Found by its label: inside a Form the identifier can land on the row instead of the switch.
         let toggle = app.switches.matching(NSPredicate(format: "label CONTAINS %@", "示範礦機 B")).firstMatch
         if !toggle.waitForExistence(timeout: 5) {
@@ -128,11 +128,45 @@ final class MinerStatusUITests: XCTestCase {
         let url = try sourceURL("MINER_UI_ASSESSED_SOURCE_URL")
         startLive(url)
         let row = element("machine-demo-rig-a")
-        XCTAssertTrue(row.waitForExistence(timeout: 20), "assessed feed rows did not appear")
+        guard row.waitForExistence(timeout: 20) else {
+            snapshot("15-live-publisher-missing")
+            let texts = app.staticTexts.allElementsBoundByIndex.prefix(30).map(\.label)
+            XCTFail("assessed feed rows did not appear; banner \(banner.label); texts: \(texts)")
+            return
+        }
         // The fixture's judgment is old, so the app must not show its green: gray "電腦端沒有回應".
         XCTAssertTrue(waitFor(row, labelContains: "電腦端沒有回應", timeout: 5), "row says \(row.label)")
         XCTAssertTrue(waitFor(row, labelContains: "灰燈", timeout: 2), "row says \(row.label)")
         snapshot("15-live-publisher-silent")
+        stopLiveAndCheckDemo()
+    }
+
+    // MARK: - Today's tariff
+
+    func test15TodayTariffAndPublishedRates() throws {
+        let today = element("today-tariff")
+        XCTAssertTrue(reveal(today), "today tariff section missing")
+        XCTAssertTrue(waitFor(today, labelContains: "元／度", timeout: 3), "today tariff says \(today.label)")
+        XCTAssertTrue(today.label.contains("現在尖峰") || today.label.contains("現在離峰"), "no current period: \(today.label)")
+        XCTAssertTrue(today.label.contains("起改為"), "no next change: \(today.label)")
+        snapshot("16-today-tariff")
+
+        // The live fixture carries a published tariff; the settings must show it is in use.
+        startLive(try sourceURL("MINER_UI_SOURCE_URL"))
+        XCTAssertTrue(element("machine-demo-rig-a").waitForExistence(timeout: 20), "live feed rows did not appear")
+        let settings = element("tariff-settings")
+        XCTAssertTrue(reveal(settings), "tariff settings button not reachable")
+        settings.tap()
+        let published = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "2025-10-01 起", "2025-10-01 起")).firstMatch
+        if !published.waitForExistence(timeout: 5) {
+            snapshot("17-tariff-settings-missing")
+            let texts = app.staticTexts.allElementsBoundByIndex.prefix(30).map(\.label)
+            XCTFail("published tariff not shown in settings; texts: \(texts)")
+            return
+        }
+        snapshot("17-tariff-settings")
+        element("earnings-done").tap()
         stopLiveAndCheckDemo()
     }
 
@@ -200,8 +234,7 @@ final class MinerStatusUITests: XCTestCase {
 
     private func stopLiveAndCheckDemo() {
         let stop = element("stop-live")
-        if !stop.exists { app.swipeUp() }
-        XCTAssertTrue(stop.waitForExistence(timeout: 5), "stop button missing in live mode")
+        XCTAssertTrue(reveal(stop), "stop button missing in live mode")
         stop.tap()
         // The stop now asks first, so an accidental tap does nothing.
         let confirm = app.buttons.matching(NSPredicate(format: "label == %@", "停止讀取")).firstMatch
@@ -211,12 +244,15 @@ final class MinerStatusUITests: XCTestCase {
         XCTAssertTrue(waitFor(banner, labelContains: "示範模式", timeout: 10), "did not return to the offline demo")
     }
 
+    /// Clears with the field's own button: tapping a long saved URL puts the cursor mid-text, so
+    /// deleting backwards once left part of the old address in front of the new one.
     private func replaceText(in field: XCUIElement, with text: String) {
+        let clear = element("source-url-clear")
+        if clear.exists { clear.tap() }
         field.tap()
-        if let current = field.value as? String, !current.isEmpty, current != field.placeholderValue {
-            field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: current.count))
-        }
         field.typeText(text)
+        XCTAssertTrue(poll(timeout: 3) { (field.value as? String) == text },
+                      "URL field holds \(field.value ?? "") instead of \(text)")
     }
 
     private func sourceURL(_ key: String) throws -> String {
@@ -229,6 +265,21 @@ final class MinerStatusUITests: XCTestCase {
         let predicate = NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", text, text)
         let expectation = XCTNSPredicateExpectation(predicate: predicate, object: element)
         return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
+    }
+
+    /// Scrolls the list down, then back up, until the element is on screen and tappable.
+    private func reveal(_ element: XCUIElement) -> Bool {
+        let visible = { element.exists && element.isHittable }
+        if poll(timeout: 2, visible) { return true }
+        for _ in 0 ..< 4 {
+            app.swipeUp()
+            if poll(timeout: 1, visible) { return true }
+        }
+        for _ in 0 ..< 8 {
+            app.swipeDown()
+            if poll(timeout: 1, visible) { return true }
+        }
+        return false
     }
 
     private func poll(timeout: TimeInterval, _ condition: () -> Bool) -> Bool {

@@ -6,7 +6,8 @@ import Foundation
 // - Every key is required. A missing key fails decoding; an explicit JSON null decodes to
 //   nil (shown as 無資料). Synthesized Codable would use decodeIfPresent and silently accept
 //   a missing key, so all types decode by hand. The one exception is the optional earnings
-//   extension (`feed.market`, `machine.earnings`), sent only to clients that ask for it.
+//   extensions (`feed.market`, `feed.tariff`, `machine.earnings`, ...), sent only to clients
+//   that ask for them.
 // - Keys outside the whitelist fail decoding instead of being ignored.
 // - The string "unknown" is kept distinct from null via `Reported`.
 // - Encoding writes explicit nulls so a round trip stays schema-valid.
@@ -27,11 +28,13 @@ public struct MinerStatusFeed: Codable, Hashable, Sendable {
     public let machines: [MachineStatus]
     /// Optional extension: nil when absent or null.
     public let market: MarketReport?
+    /// Optional extension: the published electricity tariff; nil when absent or null.
+    public let tariff: TariffReport?
 
     public var isDemo: Bool { dataOrigin == .demo }
 
     enum CodingKeys: String, CodingKey, CaseIterable {
-        case schemaVersion, dataOrigin, demoNotice, publishedAt, machines, market
+        case schemaVersion, dataOrigin, demoNotice, publishedAt, machines, market, tariff
     }
 
     public init(from decoder: Decoder) throws {
@@ -65,6 +68,7 @@ public struct MinerStatusFeed: Codable, Hashable, Sendable {
         publishedAt = try c.decodeNullable(Timestamp.self, forKey: .publishedAt)
         machines = try c.decode([MachineStatus].self, forKey: .machines)
         market = c.contains(.market) ? try c.decodeNullable(MarketReport.self, forKey: .market) : nil
+        tariff = c.contains(.tariff) ? try c.decodeNullable(TariffReport.self, forKey: .tariff) : nil
 
         // Stricter than the schema: duplicate ids would let samples from different
         // machines be compared against each other.
@@ -84,6 +88,7 @@ public struct MinerStatusFeed: Codable, Hashable, Sendable {
         try c.encode(publishedAt, forKey: .publishedAt)
         try c.encode(machines, forKey: .machines)
         try c.encodeIfPresent(market, forKey: .market)
+        try c.encodeIfPresent(tariff, forKey: .tariff)
     }
 }
 
@@ -306,6 +311,82 @@ public struct MarketReport: Codable, Hashable, Sendable {
         try c.encode(btcUsd, forKey: .btcUsd)
         try c.encode(usdTwd, forKey: .usdTwd)
         try c.encode(observedAt, forKey: .observedAt)
+    }
+}
+
+/// Taipower simple two-stage time-of-use rates as published (NT$ per kWh), plus upcoming
+/// weekday days off that are billed off-peak all day.
+public struct TariffReport: Codable, Hashable, Sendable {
+    public let name: String
+    /// "YYYY-MM-DD" the rates took effect.
+    public let effectiveDate: String?
+    public let summerPeak: Double
+    public let summerOffPeak: Double
+    public let nonSummerPeak: Double
+    public let nonSummerOffPeak: Double
+    /// False when the published time windows differ from the ones the app implements.
+    public let periodsMatch: Bool?
+    public let offPeakDates: [String]
+    public let observedAt: Timestamp?
+
+    enum CodingKeys: String, CodingKey, CaseIterable {
+        case name, effectiveDate, summerPeak, summerOffPeak, nonSummerPeak, nonSummerOffPeak
+        case periodsMatch, offPeakDates, observedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownKeys(decoder, allowed: CodingKeys.self)
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decode(String.self, forKey: .name)
+        guard (1 ... 40).contains(name.count) else {
+            throw DecodingError.dataCorruptedError(forKey: .name, in: c, debugDescription: "name length must be 1...40")
+        }
+        effectiveDate = try c.decodeNullable(String.self, forKey: .effectiveDate)
+        if let date = effectiveDate, !Self.isDay(date) {
+            throw DecodingError.dataCorruptedError(forKey: .effectiveDate, in: c, debugDescription: "must be YYYY-MM-DD")
+        }
+        func rate(_ key: CodingKeys) throws -> Double {
+            guard let value = try c.decodeNumber(forKey: key, minimum: 0) else {
+                throw DecodingError.dataCorruptedError(forKey: key, in: c, debugDescription: "rate must be a number")
+            }
+            return value
+        }
+        summerPeak = try rate(.summerPeak)
+        summerOffPeak = try rate(.summerOffPeak)
+        nonSummerPeak = try rate(.nonSummerPeak)
+        nonSummerOffPeak = try rate(.nonSummerOffPeak)
+        periodsMatch = try c.decodeNullable(Bool.self, forKey: .periodsMatch)
+        offPeakDates = try c.decode([String].self, forKey: .offPeakDates)
+        guard offPeakDates.count <= 60, offPeakDates.allSatisfy(Self.isDay) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .offPeakDates, in: c, debugDescription: "at most 60 YYYY-MM-DD dates")
+        }
+        observedAt = try c.decodeNullable(Timestamp.self, forKey: .observedAt)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(name, forKey: .name)
+        try c.encode(effectiveDate, forKey: .effectiveDate)
+        try c.encode(summerPeak, forKey: .summerPeak)
+        try c.encode(summerOffPeak, forKey: .summerOffPeak)
+        try c.encode(nonSummerPeak, forKey: .nonSummerPeak)
+        try c.encode(nonSummerOffPeak, forKey: .nonSummerOffPeak)
+        try c.encode(periodsMatch, forKey: .periodsMatch)
+        try c.encode(offPeakDates, forKey: .offPeakDates)
+        try c.encode(observedAt, forKey: .observedAt)
+    }
+
+    /// Same check as the schema pattern ^\d{4}-\d{2}-\d{2}$.
+    static func isDay(_ value: String) -> Bool {
+        let scalars = Array(value.unicodeScalars)
+        let digits: ClosedRange<Unicode.Scalar> = "0" ... "9"
+        guard scalars.count == 10 else { return false }
+        for (index, scalar) in scalars.enumerated() {
+            let ok = index == 4 || index == 7 ? scalar == "-" : digits.contains(scalar)
+            if !ok { return false }
+        }
+        return true
     }
 }
 

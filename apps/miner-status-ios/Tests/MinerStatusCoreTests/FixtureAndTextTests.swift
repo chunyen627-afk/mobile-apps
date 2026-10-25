@@ -29,6 +29,8 @@ final class FixtureAndTextTests: XCTestCase {
         let feed = try loadFixture("demo-two-machines.json")
         XCTAssertTrue(feed.isDemo)
         XCTAssertTrue(feed.machines.allSatisfy { $0.machineId.hasPrefix("demo-") && $0.displayName.contains("DEMO") })
+        XCTAssertEqual(feed.tariff?.effectiveDate, "2025-10-01")
+        XCTAssertEqual(feed.tariff?.offPeakDates.count, 2)
 
         let result = try snapshots(of: feed, at: "2026-10-24T17:40:00+08:00")
         let a = try XCTUnwrap(result.first { $0.machineId == "demo-rig-a" })
