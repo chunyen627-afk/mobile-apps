@@ -69,13 +69,16 @@ check("INFOPLIST_FILE: iOSApp/Info.plist" in spec, "project.yml: INFOPLIST_FILE 
 check(re.search(r"^packages:", spec, re.MULTILINE) is None, "project.yml: no package dependencies")
 check((ROOT / "fixtures" / "demo-running.json").is_file(), "fixtures/demo-running.json must exist")
 
-# 3. Read-only network surface in shipped code (Sources/ and iOSApp/).
+# 3. Network surface in shipped code (Sources/ and iOSApp/): reading is GET only; the one write
+#    is ControlClient's start/stop POST in StatusClient.swift (checked below).
 shipped = swift_files("Sources", "iOSApp")
 for path in shipped:
     text = path.read_text(encoding="utf-8")
     name = path.relative_to(ROOT)
-    for verb in ("POST", "PUT", "PATCH", "DELETE"):
+    for verb in ("PUT", "PATCH", "DELETE"):
         check(f'"{verb}"' not in text, f"{name}: HTTP {verb} is not allowed")
+    if path.name != "StatusClient.swift":
+        check('"POST"' not in text, f"{name}: HTTP POST is only allowed for ControlClient in StatusClient.swift")
     for api in ("BGTaskScheduler", "beginBackgroundTask", "UIApplication.shared.open", "WKWebView",
                 "NWListener", "URLSessionWebSocketTask", "httpBody"):
         check(api not in text, f"{name}: {api} is not allowed")
@@ -88,6 +91,11 @@ for path in shipped:
 
 client = (ROOT / "Sources" / "MinerStatusCore" / "StatusClient.swift").read_text(encoding="utf-8")
 check('request.httpMethod = "GET"' in client, "StatusClient.swift: request must be GET")
+check(client.count('"POST"') == 1, "StatusClient.swift: exactly one POST (ControlClient)")
+control = client[client.index("public struct ControlClient"):]
+check('components.path = "/control/' in control, "ControlClient: POST must go to /control/<machineId>/<action>")
+check('forHTTPHeaderField: "Authorization"' in control, "ControlClient: POST must carry the user's token")
+check("origin" in control, "ControlClient: replies must come from the configured origin")
 settings = (ROOT / "iOSApp" / "SourceSettingsView.swift").read_text(encoding="utf-8")
 check('@AppStorage("sourceURL") private var urlText = ""' in settings, "settings: source URL must default to empty")
 model = (ROOT / "iOSApp" / "AppModel.swift").read_text(encoding="utf-8")

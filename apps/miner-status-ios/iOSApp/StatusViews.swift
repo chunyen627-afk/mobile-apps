@@ -128,7 +128,7 @@ struct OverviewList: View {
         } header: {
             Text("自訂來源（唯讀）")
         } footer: {
-            Text("只送出 GET 讀取請求；沒有任何控制礦機的功能。App 離開前景即停止讀取。")
+            Text("讀取只送出 GET；開始／停止挖礦只在電腦端允許的機器、輸入控制密碼並再確認後才送出。App 離開前景即停止讀取。")
         }
     }
 
@@ -188,16 +188,32 @@ struct StatusDot: View {
 struct MachineDetailView: View {
     @ObservedObject var model: AppModel
     let machineId: String
+    /// Owned here, not by a row, so the confirmation survives list updates.
+    @State private var pendingControl: ControlAction?
 
     var body: some View {
         Group {
             if let snapshot = model.snapshots.first(where: { $0.machineId == machineId }) {
                 DetailContent(snapshot: snapshot,
                               earnings: model.hasEarnings ? model.earnings(for: snapshot) : nil,
-                              market: model.market, now: model.displayNow)
+                              market: model.market, now: model.displayNow,
+                              control: model.mode == .live ? RemoteControl(model: model, request: { pendingControl = $0 }) : nil)
             } else {
                 Text("目前沒有這台機器的資料").foregroundStyle(.secondary)
             }
+        }
+        .confirmationDialog(pendingControl == .stop ? "停止這台的挖礦？" : "開始這台的挖礦？",
+                            isPresented: Binding(get: { pendingControl != nil }, set: { if !$0 { pendingControl = nil } }),
+                            titleVisibility: .visible) {
+            if let action = pendingControl {
+                Button(action == .stop ? "確定停止挖礦" : "確定開始挖礦", role: action == .stop ? .destructive : nil) {
+                    Task { await model.sendControl(action, to: machineId) }
+                }
+                .accessibilityIdentifier("confirm-control")
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text(pendingControl == .stop ? "電腦端的保護程式會停止礦工並還原時脈。" : "電腦端的保護程式會先檢查溫度與電源，不安全時會拒絕。")
         }
         .navigationTitle(model.mode == .demo ? "詳情（示範）" : "詳情")
         .navigationBarTitleDisplayMode(.inline)
@@ -209,6 +225,7 @@ struct DetailContent: View {
     var earnings: MachineEarnings?
     var market: MarketReport?
     var now = Date()
+    var control: RemoteControl?
 
     var body: some View {
         List {
@@ -224,6 +241,11 @@ struct DetailContent: View {
                     Label("歷史資料：以下數值未確認為目前狀態", systemImage: "clock.arrow.circlepath")
                         .foregroundStyle(.orange)
                 }
+            }
+
+            if let control, let report = snapshot.sample?.control {
+                RemoteControlSection(model: control.model, machineId: snapshot.machineId, report: report,
+                                     request: control.request)
             }
 
             if let health = snapshot.sample?.health {

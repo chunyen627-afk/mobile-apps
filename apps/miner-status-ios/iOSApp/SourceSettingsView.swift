@@ -10,6 +10,7 @@ struct SourceSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("sourceURL") private var urlText = ""
     @AppStorage("pollIntervalSeconds") private var pollSeconds = 30
+    @State private var tokenText = ""
 
     private var validation: Result<SourceEndpoint, SourceEndpointError> {
         do {
@@ -25,7 +26,7 @@ struct SourceSettingsView: View {
         NavigationStack {
             Form {
                 Section {
-                    Text("每次開啟 App 都是離線示範。只有按下「開始讀取」才會連到下方網址；App 只送出 GET 讀取請求，不傳送帳密、不控制礦機。")
+                    Text("每次開啟 App 都是離線示範。只有按下「開始讀取」才會連到下方網址；讀取只送出 GET 請求。設定控制密碼後，可在詳情頁開始或停止電腦端允許的機器，每次都要再確認。")
                         .font(.footnote)
                 }
 
@@ -74,6 +75,30 @@ struct SourceSettingsView: View {
                 } header: {
                     // Without textCase(nil) the grouped header uppercases "App" to "APP".
                     Text("讀取間隔（僅在 App 位於前景時）").textCase(nil)
+                }
+
+                Section {
+                    SecureField(model.hasControlToken ? "已設定；輸入新密碼可更換" : "控制密碼", text: $tokenText)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .accessibilityIdentifier("control-token")
+                    Button("儲存控制密碼") {
+                        model.setControlToken(tokenText)
+                        tokenText = ""
+                    }
+                    .disabled(tokenText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .accessibilityIdentifier("control-token-save")
+                    if model.hasControlToken {
+                        Label("已設定控制密碼", systemImage: "key.fill").accessibilityIdentifier("control-token-set")
+                        if !model.controlTokenPersisted {
+                            Text("無法存入鑰匙圈，只在這次開啟期間有效。").font(.caption).foregroundStyle(.orange)
+                        }
+                        Button("清除控制密碼", role: .destructive) { model.setControlToken("") }
+                    }
+                } header: {
+                    Text("控制密碼（選填）")
+                } footer: {
+                    Text("只用於電腦端允許的機器的「開始／停止挖礦」。密碼只存在這支 iPhone 的鑰匙圈，不會出現在畫面或備份裡。")
                 }
 
                 Section {

@@ -332,6 +332,18 @@ def build_cases(base: dict) -> tuple[list, list]:
         ("tariff too many dates", [(("tariff",), dict(tariff, offPeakDates=["2026-10-26"] * 61))]),
     ]
 
+    # Optional control extension.
+    control = {"canStart": False, "canStop": True}
+    positive += [
+        ("control present", [(M + ("control",), control)]),
+        ("control null", [(M + ("control",), None)]),
+    ]
+    negative += [
+        ("control extra key", [(M + ("control",), dict(control, token="x"))]),
+        ("control missing canStop", [(M + ("control",), {"canStart": True})]),
+        ("control not boolean", [(M + ("control",), dict(control, canStart="yes"))]),
+    ]
+
     # Optional assessment extension.
     assessment = {"light": "green", "title": "挖礦中", "reason": "最後份額 1 分鐘前（平常約 2 分鐘一個）",
                   "observedAt": "2026-10-24T17:30:00+08:00"}

@@ -11,7 +11,7 @@
 <key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
 <key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
 <key>LSRequiresIPhoneOS</key><true/>
-<key>NSLocalNetworkUsageDescription</key><string>讀取您在「資料來源」中指定的礦機狀態網址（僅讀取，不控制礦機）。</string>
+<key>NSLocalNetworkUsageDescription</key><string>讀取您在「資料來源」中指定的礦機狀態網址；只有在您輸入控制密碼並確認後，才會送出開始或停止挖礦的指令。</string>
 <key>NSAppTransportSecurity</key><dict>
 <key>NSAllowsLocalNetworking</key><true/>
 </dict>

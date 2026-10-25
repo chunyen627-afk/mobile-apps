@@ -95,7 +95,8 @@ Swift 解碼器比 schema 多兩條規則：重複 `machineId` 拒收；閏秒 `
   - 停止或切換來源後才抵達的回應會被丟棄。
   - 來源若回傳 `demo` 資料，橫幅與各列會標示為示範資料。
 - 網址與間隔只存在裝置的 UserDefaults。
-- 沒有任何控制礦機、背景讀取或通知功能。
+- 唯一的寫入：來源標示 `control` 的機器，使用者輸入控制密碼並再確認後送出開始／停止（`ControlClient`，見 README）。沒有背景讀取，通知由電腦端 ntfy 發送。
+- 回到前景時先讀一次，拿到回應後才重新判斷燈號與警告（舊資料不會被判成「電腦端沒有回應」而誤報）。
 - iPhone 用 `NavigationStack`；iPad 等寬版用 `NavigationSplitView`，未驗證。
 
 ## 尚未決定

@@ -123,11 +123,13 @@ public struct MachineStatus: Codable, Hashable, Sendable {
     public let earnings: EarningsReport?
     public let assessment: AssessmentReport?
     public let health: HealthReport?
+    /// Present only for machines the source lets this app start and stop.
+    public let control: ControlReport?
 
     enum CodingKeys: String, CodingKey, CaseIterable {
         case machineId, displayName, worker, sourceStatus, sourceCheckedAt, sessionId,
              sampleSequence, observedAt, expectedRunning, minerRunning, hashrate, gpus,
-             shares, stop, earnings, assessment, health
+             shares, stop, earnings, assessment, health, control
     }
 
     public init(from decoder: Decoder) throws {
@@ -164,6 +166,7 @@ public struct MachineStatus: Codable, Hashable, Sendable {
         earnings = c.contains(.earnings) ? try c.decodeNullable(EarningsReport.self, forKey: .earnings) : nil
         assessment = c.contains(.assessment) ? try c.decodeNullable(AssessmentReport.self, forKey: .assessment) : nil
         health = c.contains(.health) ? try c.decodeNullable(HealthReport.self, forKey: .health) : nil
+        control = c.contains(.control) ? try c.decodeNullable(ControlReport.self, forKey: .control) : nil
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -185,6 +188,32 @@ public struct MachineStatus: Codable, Hashable, Sendable {
         try c.encodeIfPresent(earnings, forKey: .earnings)
         try c.encodeIfPresent(assessment, forKey: .assessment)
         try c.encodeIfPresent(health, forKey: .health)
+        try c.encodeIfPresent(control, forKey: .control)
+    }
+}
+
+// MARK: - Control extension
+
+/// Which remote buttons fit the machine's reported state (feature `control`).
+public struct ControlReport: Codable, Hashable, Sendable {
+    public let canStart: Bool
+    public let canStop: Bool
+
+    enum CodingKeys: String, CodingKey, CaseIterable {
+        case canStart, canStop
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownKeys(decoder, allowed: CodingKeys.self)
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        canStart = try c.decode(Bool.self, forKey: .canStart)
+        canStop = try c.decode(Bool.self, forKey: .canStop)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(canStart, forKey: .canStart)
+        try c.encode(canStop, forKey: .canStop)
     }
 }
 

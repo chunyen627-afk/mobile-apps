@@ -205,7 +205,20 @@
         "health": {
           "description": "OPTIONAL extension (feature `assessment`): supporting details for the judgment.",
           "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/health" }]
+        },
+        "control": {
+          "description": "OPTIONAL extension (feature `control`): present only for machines the source lets the app start and stop (POST /control/<machineId>/<start|stop> with a token the user enters). Which buttons fit the reported miner state.",
+          "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/control" }]
         }
+      }
+    },
+    "control": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["canStart", "canStop"],
+      "properties": {
+        "canStart": { "type": "boolean" },
+        "canStop": { "type": "boolean" }
       }
     },
     "market": {

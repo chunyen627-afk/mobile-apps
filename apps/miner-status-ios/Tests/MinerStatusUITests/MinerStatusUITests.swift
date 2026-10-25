@@ -176,6 +176,44 @@ final class MinerStatusUITests: XCTestCase {
         stopLiveAndCheckDemo()
     }
 
+    // MARK: - Remote control
+
+    func test16RemoteControlNeedsTokenAndConfirmation() throws {
+        openSettings()
+        let token = app.secureTextFields["control-token"]
+        XCTAssertTrue(reveal(token), "control password field missing")
+        token.tap()
+        token.typeText("ui-test-token")
+        let save = element("control-token-save")
+        XCTAssertTrue(reveal(save), "save password button missing")
+        save.tap()
+        XCTAssertTrue(element("control-token-set").waitForExistence(timeout: 5), "password not marked as set")
+        let field = app.textFields["source-url"]
+        XCTAssertTrue(reveal(field), "URL field missing")
+        replaceText(in: field, with: try sourceURL("MINER_UI_SOURCE_URL"))
+        let start = app.buttons["start-live"]
+        XCTAssertTrue(reveal(start), "start button missing")
+        start.tap()
+
+        let row = element("machine-demo-rig-a")
+        XCTAssertTrue(row.waitForExistence(timeout: 20), "live feed rows did not appear")
+        row.tap()
+        let stop = element("control-stop")
+        XCTAssertTrue(reveal(stop), "stop button missing for a controllable machine")
+        XCTAssertFalse(element("control-start").exists, "start shown although the source says it is running")
+        stop.tap()
+        // Asks first; nothing is sent until confirmed.
+        let confirm = app.buttons.matching(NSPredicate(format: "label == %@", "確定停止挖礦")).firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), "no confirmation")
+        snapshot("18-control-confirm")
+        confirm.tap()
+        // The test server answers POST with 501, so the app must show that failure.
+        let result = element("control-result")
+        XCTAssertTrue(waitFor(result, labelContains: "501", timeout: 15), "result says \(result.label)")
+        snapshot("19-control-result")
+    }
+
+    // MARK: - Helpers
     // MARK: - Helpers
 
     private var banner: XCUIElement { element("mode-banner") }

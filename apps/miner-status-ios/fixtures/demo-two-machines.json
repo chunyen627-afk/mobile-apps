@@ -27,7 +27,8 @@
         "observedAt": "2026-10-24T17:40:00+08:00",
         "lastAcceptedAt": "2026-10-24T17:39:50+08:00"
       },
-      "stop": { "reason": null, "sessionId": null, "observedAt": null }
+      "stop": { "reason": null, "sessionId": null, "observedAt": null },
+      "control": { "canStart": false, "canStop": true }
     },
     {
       "machineId": "demo-rig-b",

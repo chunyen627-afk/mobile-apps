@@ -57,6 +57,12 @@ enum SourceTariffStore {
     }
 }
 
+struct ControlNotice: Equatable {
+    let machineId: String
+    let text: String
+    let succeeded: Bool
+}
+
 enum AppMode: Equatable {
     /// Built-in offline demo. Every launch starts here.
     case demo
@@ -94,6 +100,14 @@ final class AppModel: ObservableObject {
     /// Set when a live machine turns from green to another light; cleared when the user dismisses it.
     @Published private(set) var attentionAlert: String?
 
+    // Control (start/stop for machines the source marks as controllable)
+    @Published private(set) var hasControlToken = false
+    /// False when the Keychain refused the password; it then works only until the app quits.
+    @Published private(set) var controlTokenPersisted = true
+    @Published private(set) var controlInFlight: String?
+    @Published private(set) var controlNotice: ControlNotice?
+    private var controlToken: String?
+
     // Earnings
     @Published private(set) var market: MarketReport?
     @Published private(set) var sourceTariff: TariffReport? = SourceTariffStore.load()
@@ -107,8 +121,14 @@ final class AppModel: ObservableObject {
     private var pollTask: Task<Void, Never>?
     private var isFetching = false
     private var isForeground = true
+    /// Set on returning to the foreground until the first fetch finishes. Judging the old samples
+    /// before then made every machine gray ("電腦端沒有回應") and raised a false alert after the
+    /// screen had been off a few minutes, although all were green a moment later.
+    private var awaitingResumeFetch = false
 
     init() {
+        controlToken = ControlSecret.load()
+        hasControlToken = controlToken != nil
         demo = DemoPlayer.loadBundled()
         demoNotice = demo?.notice ?? ""
         selectDemo(.confirmedMining)
@@ -168,11 +188,39 @@ final class AppModel: ObservableObject {
 
     func stopLiveAndReturnToDemo() {
         attentionAlert = nil
+        controlNotice = nil
         selectDemo(scenario)
     }
 
     func dismissAttentionAlert() {
         attentionAlert = nil
+    }
+
+    // MARK: - Control
+
+    /// Empty removes the password.
+    func setControlToken(_ token: String) {
+        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        controlToken = trimmed.isEmpty ? nil : trimmed
+        hasControlToken = controlToken != nil
+        controlTokenPersisted = ControlSecret.save(trimmed)
+    }
+
+    /// Only after the user confirmed, only in live mode, only to the configured source.
+    func sendControl(_ action: ControlAction, to machineId: String) async {
+        guard mode == .live, let endpoint, let token = controlToken, controlInFlight == nil else { return }
+        controlInFlight = machineId
+        controlNotice = nil
+        let result = await ControlClient(endpoint: endpoint).send(machineId: machineId, action: action, token: token)
+        controlInFlight = nil
+        guard mode == .live, self.endpoint == endpoint else { return }
+        switch result {
+        case .success(let message): controlNotice = ControlNotice(machineId: machineId, text: message, succeeded: true)
+        case .failure(.cancelled): break
+        case .failure(let failure):
+            controlNotice = ControlNotice(machineId: machineId, text: failure.displayText, succeeded: false)
+        }
+        refreshNow()
     }
 
     // MARK: - Earnings
@@ -242,8 +290,8 @@ final class AppModel: ObservableObject {
         isForeground = foreground
         guard mode == .live else { return }
         if foreground {
-            reevaluate()
-            startPolling()
+            awaitingResumeFetch = true
+            startPolling()  // fetches first; judging waits for that answer
         } else {
             stopPolling()
         }
@@ -284,6 +332,7 @@ final class AppModel: ObservableObject {
         guard mode == .live, self.client?.endpoint == client.endpoint else { return }
         // Receive time is taken after the response arrived.
         engine.apply(result, at: clock.reading())
+        awaitingResumeFetch = false
         switch result {
         case .success(let feed):
             lastSuccessAt = Date()
@@ -303,7 +352,7 @@ final class AppModel: ObservableObject {
     }
 
     private func reevaluate() {
-        guard mode == .live else { return }
+        guard mode == .live, !awaitingResumeFetch else { return }
         let previous = snapshots
         // The source's own judgment wins while fresh; see applyingPublisherAssessment.
         snapshots = engine.snapshots(at: clock.reading()).map { $0.applyingPublisherAssessment() }

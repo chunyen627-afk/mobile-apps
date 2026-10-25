@@ -1,9 +1,11 @@
 import Foundation
 
-// Read-only HTTP client for a status source the user typed in. There is no built-in address:
-// nothing connects until the user supplies a URL and explicitly starts reading.
+// HTTP client for a status source the user typed in. There is no built-in address: nothing
+// connects until the user supplies a URL and explicitly starts reading.
 //
-// - GET only: no body, no credentials, no cookies, no cache. The app has no write or control path.
+// - Reading is GET only: no body, no credentials, no cookies, no cache.
+// - The one write path is `ControlClient` below: start/stop for machines the source marks as
+//   controllable, sent only when the user taps and confirms, with a token the user entered.
 // - Only a 200 response with a JSON content type, from the same origin as the configured URL,
 //   at most `maxResponseBytes`, that passes the whitelist decoder is accepted. Everything else is
 //   a `FetchFailure`, which the engine treats as a failed request (green is removed at once).
@@ -127,7 +129,7 @@ public struct StatusFeedClient: Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         // Asks the source for the optional market/earnings extension; sources that ignore the
         // header send the base feed, which this app also accepts.
-        request.setValue("earnings,assessment", forHTTPHeaderField: "X-Miner-Status-Features")
+        request.setValue("earnings,assessment,control", forHTTPHeaderField: "X-Miner-Status-Features")
         return request
     }
 
@@ -172,6 +174,105 @@ public struct StatusFeedClient: Sendable {
         case .appTransportSecurityRequiresSecureConnection: return .insecureConnectionBlocked
         case .dataLengthExceedsMaximum: return .responseTooLarge
         default: return .transport(code: error.code.rawValue)
+        }
+    }
+}
+
+// MARK: - Control
+
+public enum ControlAction: String, Sendable {
+    case start, stop
+}
+
+public enum ControlFailure: Error, Hashable, Sendable {
+    case cancelled
+    case cannotConnect
+    case timedOut
+    case unauthorized
+    case busy(String?)
+    case rejected(status: Int, message: String?)
+    case invalidResponse
+}
+
+/// Start/stop for one machine: `POST <source origin>/control/<machineId>/<start|stop>` with
+/// `Authorization: Bearer <token>` and no body. Same origin as the configured source, no cookies,
+/// no cache, no redirects to elsewhere.
+public struct ControlClient: Sendable {
+    public static let maxResponseBytes = 16 * 1024
+
+    public let endpoint: SourceEndpoint
+    private let transport: any HTTPTransport
+
+    public init(endpoint: SourceEndpoint, transport: any HTTPTransport = URLSessionTransport()) {
+        self.endpoint = endpoint
+        self.transport = transport
+    }
+
+    /// nil when the machine id cannot be a path segment (the decoder already restricts it).
+    public func makeRequest(machineId: String, action: ControlAction, token: String) -> URLRequest? {
+        guard !machineId.isEmpty, machineId.unicodeScalars.allSatisfy({ $0.isASCII && (CharacterSet.alphanumerics.contains($0) || "._-".unicodeScalars.contains($0)) }),
+              var components = URLComponents(url: endpoint.url, resolvingAgainstBaseURL: false)
+        else { return nil }
+        components.path = "/control/\(machineId)/\(action.rawValue)"
+        components.query = nil
+        guard let url = components.url else { return nil }
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData,
+                                 timeoutInterval: StatusFeedClient.requestTimeout + 20)
+        request.httpMethod = "POST"
+        request.httpShouldHandleCookies = false
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        return request
+    }
+
+    private struct Reply: Decodable {
+        let ok: Bool?
+        let message: String?
+    }
+
+    /// The source's message on success.
+    public func send(machineId: String, action: ControlAction, token: String) async -> Result<String, ControlFailure> {
+        guard let request = makeRequest(machineId: machineId, action: action, token: token) else {
+            return .failure(.invalidResponse)
+        }
+        let received: (Data, URLResponse)
+        do {
+            received = try await transport.send(request)
+        } catch let error as URLError {
+            switch StatusFeedClient.failure(for: error) {
+            case .cancelled: return .failure(.cancelled)
+            case .timedOut: return .failure(.timedOut)
+            default: return .failure(.cannotConnect)
+            }
+        } catch {
+            return .failure(.cannotConnect)
+        }
+        let (data, response) = received
+        guard let http = response as? HTTPURLResponse,
+              SourceEndpoint.origin(of: http.url ?? endpoint.url) == endpoint.origin,
+              data.count <= Self.maxResponseBytes
+        else { return .failure(.invalidResponse) }
+        let reply = try? JSONDecoder().decode(Reply.self, from: data)
+        switch http.statusCode {
+        case 200 where reply?.ok == true: return .success(reply?.message ?? "已送出")
+        case 200: return .failure(.rejected(status: 200, message: reply?.message))
+        case 401: return .failure(.unauthorized)
+        case 429: return .failure(.busy(reply?.message))
+        default: return .failure(.rejected(status: http.statusCode, message: reply?.message))
+        }
+    }
+}
+
+public extension ControlFailure {
+    var displayText: String {
+        switch self {
+        case .cancelled: return "已取消"
+        case .cannotConnect: return "連不到電腦端"
+        case .timedOut: return "電腦端沒有回應（逾時）"
+        case .unauthorized: return "控制密碼不正確"
+        case .busy(let message): return message ?? "請稍等幾秒再試"
+        case .rejected(let status, let message): return message ?? "控制失敗（HTTP \(status)）"
+        case .invalidResponse: return "電腦端的回應無法辨識"
         }
     }
 }
