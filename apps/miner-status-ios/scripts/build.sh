@@ -121,24 +121,29 @@ if [[ "${RUN_SIM_SMOKE:-0}" == "1" ]]; then
   CURRENT_LOG=build/launch-smoke.log
   SIM_APP=build/DerivedData/Build/Products/Debug-iphonesimulator/MinerStatus.app
   mkdir -p build/screenshots
-  {
-    echo "== boot"; xcrun simctl boot "$SIMULATOR_ID" 2>&1 || true
-    echo "== bootstatus"; xcrun simctl bootstatus "$SIMULATOR_ID" -b 2>&1
-    echo "== install"; xcrun simctl install "$SIMULATOR_ID" "$SIM_APP" 2>&1
-    echo "== launch"; xcrun simctl launch "$SIMULATOR_ID" "$BUNDLE_ID" 2>&1
-  } > "$CURRENT_LOG"
+  # One redirect per command: a failure inside a redirected { } group would run the EXIT trap
+  # with its output going to the log instead of the annotations.
+  : > "$CURRENT_LOG"
+  xcrun simctl boot "$SIMULATOR_ID" >> "$CURRENT_LOG" 2>&1 || true
+  xcrun simctl bootstatus "$SIMULATOR_ID" -b >> "$CURRENT_LOG" 2>&1
+  xcrun simctl install "$SIMULATOR_ID" "$SIM_APP" >> "$CURRENT_LOG" 2>&1
+  xcrun simctl launch "$SIMULATOR_ID" "$BUNDLE_ID" >> "$CURRENT_LOG" 2>&1
   sleep 8
   xcrun simctl io "$SIMULATOR_ID" screenshot --type=jpeg build/screenshots/launch-demo.jpg >> "$CURRENT_LOG" 2>&1
-  if ! xcrun simctl spawn "$SIMULATOR_ID" launchctl list | grep -q "$BUNDLE_ID"; then
+  # Read the list first: `launchctl list | grep -q` under pipefail failed whenever grep matched
+  # early and launchctl got SIGPIPE, reporting a running app as not running.
+  RUNNING=$(xcrun simctl spawn "$SIMULATOR_ID" launchctl list 2>&1 || true)
+  if ! grep -q "$BUNDLE_ID" <<<"$RUNNING"; then
+    # The exit stays outside this redirect, or the EXIT trap's annotations land in the log file.
     {
       echo 'error: App is not running 8 seconds after launch.'
       echo "== launchctl entries for the app"
-      xcrun simctl spawn "$SIMULATOR_ID" launchctl list | grep -i minerstatus || echo "(none)"
+      grep -i minerstatus <<<"$RUNNING" || echo "(none)"
       echo "== newest crash reports"
-      ls -t ~/Library/Logs/DiagnosticReports 2>/dev/null | grep -i minerstatus | head -n 3 | while read -r report; do
+      for report in $(ls -t ~/Library/Logs/DiagnosticReports 2>/dev/null | grep -i minerstatus | head -n 3); do
         echo "-- $report"; head -n 40 ~/Library/Logs/DiagnosticReports/"$report"
       done
-    } >> "$CURRENT_LOG" 2>&1
+    } >> "$CURRENT_LOG" 2>&1 || true
     exit 1
   fi
   xcrun simctl terminate "$SIMULATOR_ID" "$BUNDLE_ID" || true
