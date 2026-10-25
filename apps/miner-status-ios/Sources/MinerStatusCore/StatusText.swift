@@ -48,6 +48,8 @@ public extension StatusLight {
 
 public extension MachineSnapshot {
     var statusTitle: String {
+        if case .publisherAssessment(let title, _) = reason { return title }
+        if reason == .publisherSilent { return "電腦端沒有回應" }
         switch light {
         case .green: return "挖礦中（已確認）"
         case .yellow: return "無法確認挖礦"
@@ -78,6 +80,8 @@ public extension StatusReason {
         case .stopReportConflict: return "本工作已有停止紀錄，但仍回報運行中。"
         case .awaitingShareEvidence: return "尚未在同一工作的兩筆新資料之間看到接受份額增加。"
         case .miningConfirmed: return "同一工作的兩筆新資料之間接受份額增加，且 miner 運行中。"
+        case .publisherAssessment(_, let detail): return detail
+        case .publisherSilent: return "電腦端超過 2 分鐘沒有更新，畫面上的狀態可能已過時（不一定代表停機）。"
         }
     }
 }

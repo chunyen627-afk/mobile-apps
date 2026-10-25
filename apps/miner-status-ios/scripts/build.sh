@@ -4,8 +4,8 @@
 # this script installs nothing.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-EXPECTED_TESTS="${EXPECTED_TESTS:-95}"
-EXPECTED_UI_TESTS="${EXPECTED_UI_TESTS:-13}"
+EXPECTED_TESTS="${EXPECTED_TESTS:-101}"
+EXPECTED_UI_TESTS="${EXPECTED_UI_TESTS:-14}"
 # Local feed for the custom-source UI tests: fixtures served on the build Mac's loopback, plus a
 # port nothing listens on for the failure case. The simulator shares the Mac's network.
 UI_FEED_PORT="${UI_FEED_PORT:-8765}"
@@ -85,6 +85,7 @@ if [[ "${RUN_TESTS:-1}" == "1" ]]; then
   sleep 1
   TEST_RUNNER_MINER_UI_SOURCE_URL="http://127.0.0.1:${UI_FEED_PORT}/demo-two-machines.json" \
   TEST_RUNNER_MINER_UI_FAILING_SOURCE_URL="http://127.0.0.1:${UI_FAILING_PORT}/status" \
+  TEST_RUNNER_MINER_UI_ASSESSED_SOURCE_URL="http://127.0.0.1:${UI_FEED_PORT}/demo-assessed.json" \
   xcodebuild test -project MinerStatus.xcodeproj -scheme MinerStatus \
     -parallel-testing-enabled NO \
     -destination "platform=iOS Simulator,id=$SIMULATOR_ID" -derivedDataPath build/DerivedData \

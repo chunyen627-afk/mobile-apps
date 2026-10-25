@@ -196,6 +196,13 @@ struct DemoPlayer {
             for gpu in gpus.indices { gpus[gpu]["observedAt"] = stamp }
             machine["gpus"] = gpus
         }
+        // Fictional health details (no assessment: the demo keeps the app's own light rules).
+        machine["health"] = [
+            "uptimeSeconds": index == 0 ? 34_200 : 12_600, "lastShareAt": demoTimestamp(time.addingTimeInterval(-8)),
+            "expectedShareSeconds": index == 0 ? 120 : 240, "poolHashrate": index == 0 ? 6.8e13 : 3.4e13,
+            "poolOnline": true, "validSharePercent": 99.6, "maxGpuTemperatureC": index == 0 ? 66 : 64,
+            "temperatureLimitC": index == 0 ? 82 : 70, "observedAt": stamp,
+        ] as [String: Any]
         // Fictional pool estimate: A pays for electricity by default, B does not.
         machine["earnings"] = [
             "coinPerDay": index == 0 ? 1.6 : 0.8, "poolHashrate": index == 0 ? 7.0e13 : 3.5e13,

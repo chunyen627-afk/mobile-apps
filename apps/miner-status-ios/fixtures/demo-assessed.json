@@ -1,0 +1,131 @@
+{
+  "schemaVersion": 1,
+  "dataOrigin": "demo",
+  "demoNotice": "示範資料（人工編寫）：兩台虛構機器，非真實礦機連線，數值與時間皆為虛構。",
+  "publishedAt": "2026-10-24T17:40:01+08:00",
+  "machines": [
+    {
+      "machineId": "demo-rig-a",
+      "displayName": "示範礦機 A（DEMO）",
+      "worker": "demo-worker-a",
+      "sourceStatus": "ok",
+      "sourceCheckedAt": "2026-10-24T17:40:01+08:00",
+      "sessionId": "demo-session-0001",
+      "sampleSequence": 7,
+      "observedAt": "2026-10-24T17:40:00+08:00",
+      "expectedRunning": true,
+      "minerRunning": {
+        "state": "running",
+        "observedAt": "2026-10-24T17:40:00+08:00"
+      },
+      "hashrate": {
+        "value": 70.0,
+        "unit": "TH/s",
+        "observedAt": "2026-10-24T17:39:58+08:00"
+      },
+      "gpus": [
+        {
+          "index": 0,
+          "temperatureC": 65,
+          "fanPercent": 80,
+          "powerW": 110.0,
+          "observedAt": "2026-10-24T17:40:00+08:00"
+        },
+        {
+          "index": 1,
+          "temperatureC": 66,
+          "fanPercent": 82,
+          "powerW": 105.0,
+          "observedAt": "2026-10-24T17:40:00+08:00"
+        }
+      ],
+      "shares": {
+        "accepted": 12,
+        "stale": 0,
+        "rejected": 0,
+        "observedAt": "2026-10-24T17:40:00+08:00",
+        "lastAcceptedAt": "2026-10-24T17:39:50+08:00"
+      },
+      "stop": {
+        "reason": null,
+        "sessionId": null,
+        "observedAt": null
+      },
+      "assessment": {
+        "light": "green",
+        "title": "挖礦中",
+        "reason": "最後份額 1 分鐘前（平常約 2 分鐘一個）（示範）",
+        "observedAt": "2026-10-24T17:40:00+08:00"
+      },
+      "health": {
+        "uptimeSeconds": 34200,
+        "lastShareAt": "2026-10-24T17:40:00+08:00",
+        "expectedShareSeconds": 120,
+        "poolHashrate": 65000000000000.0,
+        "poolOnline": true,
+        "validSharePercent": 99.6,
+        "maxGpuTemperatureC": 66,
+        "temperatureLimitC": 82,
+        "observedAt": "2026-10-24T17:40:00+08:00"
+      }
+    },
+    {
+      "machineId": "demo-rig-b",
+      "displayName": "示範礦機 B（DEMO）",
+      "worker": null,
+      "sourceStatus": "ok",
+      "sourceCheckedAt": "2026-10-24T17:40:01+08:00",
+      "sessionId": "demo-session-b-0003",
+      "sampleSequence": 120,
+      "observedAt": "2026-10-24T17:40:00+08:00",
+      "expectedRunning": "unknown",
+      "minerRunning": {
+        "state": "stopped",
+        "observedAt": "2026-10-24T17:40:00+08:00"
+      },
+      "hashrate": {
+        "value": null,
+        "unit": null,
+        "observedAt": null
+      },
+      "gpus": [
+        {
+          "index": 0,
+          "temperatureC": null,
+          "fanPercent": 30,
+          "powerW": 15.0,
+          "observedAt": "2026-10-24T17:40:00+08:00"
+        }
+      ],
+      "shares": {
+        "accepted": 55,
+        "stale": null,
+        "rejected": null,
+        "observedAt": "2026-10-24T17:38:00+08:00",
+        "lastAcceptedAt": null
+      },
+      "stop": {
+        "reason": "userRequested",
+        "sessionId": "demo-session-b-0003",
+        "observedAt": "2026-10-24T17:39:30+08:00"
+      },
+      "assessment": {
+        "light": "green",
+        "title": "挖礦中",
+        "reason": "最後份額 1 分鐘前（平常約 2 分鐘一個）（示範）",
+        "observedAt": "2026-10-24T17:40:00+08:00"
+      },
+      "health": {
+        "uptimeSeconds": 34800,
+        "lastShareAt": "2026-10-24T17:40:00+08:00",
+        "expectedShareSeconds": 120,
+        "poolHashrate": 65000000000000.0,
+        "poolOnline": true,
+        "validSharePercent": 99.6,
+        "maxGpuTemperatureC": 66,
+        "temperatureLimitC": 82,
+        "observedAt": "2026-10-24T17:40:00+08:00"
+      }
+    }
+  ]
+}

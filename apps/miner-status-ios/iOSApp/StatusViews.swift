@@ -10,12 +10,21 @@ struct OverviewList: View {
     var selection: Binding<String?>?
     let showSettings: () -> Void
     @State private var showingEarningsSettings = false
+    @State private var confirmingStop = false
 
     var body: some View {
         Group {
             if let selection { List(selection: selection) { content } } else { List { content } }
         }
         .sheet(isPresented: $showingEarningsSettings) { EarningsSettingsView(model: model) }
+        // Owned by the list (not the row) and confirmed, because the button was easy to hit by accident.
+        .confirmationDialog("停止讀取並回到離線示範？", isPresented: $confirmingStop, titleVisibility: .visible) {
+            Button("停止讀取", role: .destructive) { model.stopLiveAndReturnToDemo() }
+                .accessibilityIdentifier("confirm-stop-live")
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("會停止讀取電腦端的資料，改顯示內建的示範資料。")
+        }
         .navigationTitle(model.mode == .demo ? "礦機狀態（示範）" : "礦機狀態")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
@@ -57,6 +66,7 @@ struct OverviewList: View {
             ForEach(model.snapshots, id: \.machineId) { snapshot in
                 NavigationLink(value: snapshot.machineId) {
                     MachineRow(snapshot: snapshot,
+                               healthLine: snapshot.sample?.health.flatMap { HealthText.rowLine($0, now: model.displayNow) },
                                earningsLine: model.hasEarnings ? EarningsText.rowLine(model.earnings(for: snapshot)) : nil)
                 }
                     .accessibilityIdentifier("machine-\(snapshot.machineId)")
@@ -111,7 +121,7 @@ struct OverviewList: View {
             }
             Button("立即讀取一次") { model.refreshNow() }
                 .disabled(!model.isPolling)
-            Button("停止讀取並回到離線示範") { model.stopLiveAndReturnToDemo() }
+            Button("停止讀取並回到離線示範", role: .destructive) { confirmingStop = true }
                 .accessibilityIdentifier("stop-live")
         } header: {
             Text("自訂來源（唯讀）")
@@ -127,6 +137,7 @@ struct OverviewList: View {
 
 struct MachineRow: View {
     let snapshot: MachineSnapshot
+    var healthLine: String?
     var earningsLine: String?
 
     var body: some View {
@@ -142,6 +153,9 @@ struct MachineRow: View {
                     .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 if snapshot.isHistorical {
                     Text("歷史資料（未確認為目前狀態）").font(.caption.bold()).foregroundStyle(.orange)
+                }
+                if let healthLine {
+                    Text(healthLine).font(.caption.monospacedDigit())
                 }
                 if let earningsLine {
                     Text(earningsLine).font(.caption.monospacedDigit())
@@ -177,7 +191,7 @@ struct MachineDetailView: View {
             if let snapshot = model.snapshots.first(where: { $0.machineId == machineId }) {
                 DetailContent(snapshot: snapshot,
                               earnings: model.hasEarnings ? model.earnings(for: snapshot) : nil,
-                              market: model.market)
+                              market: model.market, now: model.displayNow)
             } else {
                 Text("目前沒有這台機器的資料").foregroundStyle(.secondary)
             }
@@ -191,6 +205,7 @@ struct DetailContent: View {
     let snapshot: MachineSnapshot
     var earnings: MachineEarnings?
     var market: MarketReport?
+    var now = Date()
 
     var body: some View {
         List {
@@ -206,6 +221,10 @@ struct DetailContent: View {
                     Label("歷史資料：以下數值未確認為目前狀態", systemImage: "clock.arrow.circlepath")
                         .foregroundStyle(.orange)
                 }
+            }
+
+            if let health = snapshot.sample?.health {
+                HealthDetailSection(health: health, localHashrate: snapshot.sample?.hashrate.hashesPerSecond, now: now)
             }
 
             if let earnings {

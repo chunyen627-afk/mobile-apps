@@ -41,6 +41,13 @@ struct EarningsSummarySection: View {
                 LabeledContent("收益（估算）", value: "\(EarningsText.twd(total.revenue))/天")
                 LabeledContent("電費（有勾選的機器）", value: "\(EarningsText.twd(total.electricity))/天")
                 LabeledContent("淨收益", value: "\(EarningsText.twd(total.net))/天").font(.headline)
+                let now = model.currentElectricity
+                LabeledContent("目前電價", value: "\(now.period) \(now.rate.formatted(.number.precision(.fractionLength(2)))) 元／度")
+                    .font(.caption)
+                if let perHour = now.perHour {
+                    LabeledContent("目前每小時電費", value: "約 NT$\(perHour.formatted(.number.precision(.fractionLength(1))))")
+                        .font(.caption)
+                }
             }
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier("earnings-summary")

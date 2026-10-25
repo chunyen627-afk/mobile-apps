@@ -314,6 +314,28 @@ def build_cases(base: dict) -> tuple[list, list]:
         ("earnings billed as string", [(M + ("earnings",), dict(earnings, electricityBilled="yes"))]),
         ("earnings missing observedAt", [(M + ("earnings",), {k: v for k, v in earnings.items() if k != "observedAt"})]),
     ]
+
+    # Optional assessment extension.
+    assessment = {"light": "green", "title": "挖礦中", "reason": "最後份額 1 分鐘前（平常約 2 分鐘一個）",
+                  "observedAt": "2026-10-24T17:30:00+08:00"}
+    health = {"uptimeSeconds": 34200, "lastShareAt": "2026-10-24T17:29:00+08:00", "expectedShareSeconds": 120,
+              "poolHashrate": 1.5e14, "poolOnline": True, "validSharePercent": 99.6, "maxGpuTemperatureC": 60,
+              "temperatureLimitC": 70, "observedAt": "2026-10-24T17:30:00+08:00"}
+    positive += [
+        ("assessment and health present", [(M + ("assessment",), assessment), (M + ("health",), health)]),
+        ("assessment and health null", [(M + ("assessment",), None), (M + ("health",), None)]),
+        ("health fields null", [(M + ("health",), dict.fromkeys(health))]),
+    ]
+    negative += [
+        ("assessment unknown light", [(M + ("assessment",), dict(assessment, light="blue"))]),
+        ("assessment empty reason", [(M + ("assessment",), dict(assessment, reason=""))]),
+        ("assessment reason too long", [(M + ("assessment",), dict(assessment, reason="x" * 201))]),
+        ("assessment extra key", [(M + ("assessment",), dict(assessment, token="x"))]),
+        ("health extra key", [(M + ("health",), dict(health, pid=1))]),
+        ("health percent over 100", [(M + ("health",), dict(health, validSharePercent=101))]),
+        ("health zero share interval", [(M + ("health",), dict(health, expectedShareSeconds=0))]),
+        ("health missing poolOnline", [(M + ("health",), {k: v for k, v in health.items() if k != "poolOnline"})]),
+    ]
     return negative, positive
 
 

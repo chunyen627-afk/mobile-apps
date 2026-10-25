@@ -35,8 +35,11 @@ final class MinerStatusUITests: XCTestCase {
         // LabeledContent merges title and value into one element, so match either.
         let machineId = app.descendants(matching: .any)
             .matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "demo-rig-a", "demo-rig-a")).firstMatch
-        if !machineId.waitForExistence(timeout: 3) {
-            app.swipeUp()  // The earnings section above can push the machine section below the fold.
+        XCTAssertTrue(app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "運轉時間", "運轉時間")).firstMatch
+            .waitForExistence(timeout: 5), "health section missing on detail")
+        for _ in 0 ..< 3 where !machineId.waitForExistence(timeout: 2) {
+            app.swipeUp()  // Health and earnings sections push the machine section below the fold.
         }
         if !machineId.waitForExistence(timeout: 5) {
             let texts = app.staticTexts.allElementsBoundByIndex.prefix(30).map { "\($0.label)=\($0.value ?? "")" }
@@ -86,6 +89,7 @@ final class MinerStatusUITests: XCTestCase {
         let rowA = element("machine-demo-rig-a")
         XCTAssertTrue(rowA.waitForExistence(timeout: 5), "machine row A missing")
         XCTAssertTrue(waitFor(rowA, labelContains: "收益 ≈ NT$", timeout: 5), "row A has no earnings: \(rowA.label)")
+        XCTAssertTrue(waitFor(rowA, labelContains: "最後份額", timeout: 5), "row A has no health line: \(rowA.label)")
         XCTAssertTrue(waitFor(element("machine-demo-rig-b"), labelContains: "電費不計", timeout: 5),
                       "demo machine B should not be billed by default")
         let summary = element("earnings-summary")
@@ -116,6 +120,20 @@ final class MinerStatusUITests: XCTestCase {
         element("earnings-done").tap()
         XCTAssertTrue(summary.waitForExistence(timeout: 5), "earnings summary missing after settings")
         XCTAssertTrue(poll(timeout: 5) { summary.label != before }, "totals did not change: \(summary.label)")
+    }
+
+    // MARK: - Publisher judgment
+
+    func test14StalePublisherJudgmentShowsComputerSilent() throws {
+        let url = try sourceURL("MINER_UI_ASSESSED_SOURCE_URL")
+        startLive(url)
+        let row = element("machine-demo-rig-a")
+        XCTAssertTrue(row.waitForExistence(timeout: 20), "assessed feed rows did not appear")
+        // The fixture's judgment is old, so the app must not show its green: gray "電腦端沒有回應".
+        XCTAssertTrue(waitFor(row, labelContains: "電腦端沒有回應", timeout: 5), "row says \(row.label)")
+        XCTAssertTrue(waitFor(row, labelContains: "灰燈", timeout: 2), "row says \(row.label)")
+        snapshot("15-live-publisher-silent")
+        stopLiveAndCheckDemo()
     }
 
     // MARK: - Helpers
@@ -185,6 +203,11 @@ final class MinerStatusUITests: XCTestCase {
         if !stop.exists { app.swipeUp() }
         XCTAssertTrue(stop.waitForExistence(timeout: 5), "stop button missing in live mode")
         stop.tap()
+        // The stop now asks first, so an accidental tap does nothing.
+        let confirm = app.buttons.matching(NSPredicate(format: "label == %@", "停止讀取")).firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), "stop confirmation did not appear")
+        XCTAssertTrue(waitFor(banner, labelContains: "自訂來源", timeout: 2), "stopped before confirming")
+        confirm.tap()
         XCTAssertTrue(waitFor(banner, labelContains: "示範模式", timeout: 10), "did not return to the offline demo")
     }
 

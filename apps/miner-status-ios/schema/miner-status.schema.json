@@ -193,6 +193,14 @@
         "earnings": {
           "description": "OPTIONAL extension sent with feed.market (see there). Null when this machine has no pool estimate.",
           "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/earnings" }]
+        },
+        "assessment": {
+          "description": "OPTIONAL extension (feature `assessment`): the publisher's own judgment, shown by the app while this sample is fresh. Null when the publisher has no judgment.",
+          "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/assessment" }]
+        },
+        "health": {
+          "description": "OPTIONAL extension (feature `assessment`): supporting details for the judgment.",
+          "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/health" }]
         }
       }
     },
@@ -218,6 +226,35 @@
         "coinPerDay": { "type": ["number", "null"], "minimum": 0 },
         "poolHashrate": { "description": "H/s, the pool's recent average for this worker.", "type": ["number", "null"], "minimum": 0 },
         "electricityBilled": { "description": "Publisher's default for whether this machine's electricity costs money; the app lets the user override it.", "type": ["boolean", "null"] },
+        "observedAt": { "$ref": "#/$defs/timestampOrNull" }
+      }
+    },
+    "assessment": {
+      "description": "Light, short title and plain-language reason decided by the publisher.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["light", "title", "reason", "observedAt"],
+      "properties": {
+        "light": { "enum": ["green", "yellow", "red", "gray"] },
+        "title": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "observedAt": { "$ref": "#/$defs/timestampOrNull" }
+      }
+    },
+    "health": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["uptimeSeconds", "lastShareAt", "expectedShareSeconds", "poolHashrate", "poolOnline",
+                   "validSharePercent", "maxGpuTemperatureC", "temperatureLimitC", "observedAt"],
+      "properties": {
+        "uptimeSeconds": { "type": ["number", "null"], "minimum": 0 },
+        "lastShareAt": { "$ref": "#/$defs/timestampOrNull" },
+        "expectedShareSeconds": { "description": "Usual time between accepted shares.", "type": ["number", "null"], "exclusiveMinimum": 0 },
+        "poolHashrate": { "description": "H/s, the pool's recent (30 min) average for this worker.", "type": ["number", "null"], "minimum": 0 },
+        "poolOnline": { "type": ["boolean", "null"] },
+        "validSharePercent": { "type": ["number", "null"], "minimum": 0, "maximum": 100 },
+        "maxGpuTemperatureC": { "type": ["number", "null"], "minimum": -40, "maximum": 150 },
+        "temperatureLimitC": { "description": "The miner's own protective cutoff, if known.", "type": ["number", "null"], "minimum": 0, "maximum": 150 },
         "observedAt": { "$ref": "#/$defs/timestampOrNull" }
       }
     },

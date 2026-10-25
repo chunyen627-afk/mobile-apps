@@ -23,17 +23,24 @@ public struct TouTariff: Codable, Hashable, Sendable {
     /// otherwise 06:00–11:00 and 14:00–24:00. Saturdays and Sundays are off-peak all day.
     /// National holidays (also off-peak) are not known here and are billed as weekdays.
     public func rate(at date: Date, calendar: Calendar = .taipei) -> Double {
+        period(at: date, calendar: calendar).rate
+    }
+
+    /// "非夏月離峰" and its rate, for showing the current price.
+    public func period(at date: Date, calendar: Calendar = .taipei) -> (name: String, rate: Double) {
         let parts = calendar.dateComponents([.month, .weekday, .hour], from: date)
         let summer = (6 ... 9).contains(parts.month ?? 0)
         let weekend = parts.weekday == 1 || parts.weekday == 7
         let hour = parts.hour ?? 0
         let peak = !weekend && (summer ? hour >= 9 : (6 ..< 11).contains(hour) || hour >= 14)
+        let rate: Double
         switch (summer, peak) {
-        case (true, true): return summerPeak
-        case (true, false): return summerOffPeak
-        case (false, true): return nonSummerPeak
-        case (false, false): return nonSummerOffPeak
+        case (true, true): rate = summerPeak
+        case (true, false): rate = summerOffPeak
+        case (false, true): rate = nonSummerPeak
+        case (false, false): rate = nonSummerOffPeak
         }
+        return ("\(summer ? "夏月" : "非夏月")\(peak ? "尖峰" : "離峰")", rate)
     }
 
     /// Cost of a constant load over the calendar day containing `day`, hour by hour.

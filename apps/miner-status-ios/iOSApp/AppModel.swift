@@ -178,6 +178,16 @@ final class AppModel: ObservableObject {
         EarningsCalculator.total(snapshots.map(earnings(for:)))
     }
 
+    /// The clock the screen should reason about: the frozen demo clock, or now.
+    var displayNow: Date { mode == .demo ? (demoClock?.wall ?? Date()) : Date() }
+
+    /// Current tariff period and the hourly cost of the machines that pay for electricity.
+    var currentElectricity: (period: String, rate: Double, perHour: Double?) {
+        let period = earningsSettings.tariff.period(at: displayNow)
+        let watts = snapshots.filter(isBilled).compactMap { earnings(for: $0).powerW }
+        return (period.name, period.rate, watts.isEmpty ? nil : watts.reduce(0, +) / 1000 * period.rate)
+    }
+
     func refreshNow() {
         guard mode == .live, isForeground else { return }
         Task { await fetchOnce() }
@@ -247,7 +257,8 @@ final class AppModel: ObservableObject {
     private func reevaluate() {
         guard mode == .live else { return }
         let previous = snapshots
-        snapshots = engine.snapshots(at: clock.reading())
+        // The source's own judgment wins while fresh; see applyingPublisherAssessment.
+        snapshots = engine.snapshots(at: clock.reading()).map { $0.applyingPublisherAssessment() }
         feedProblem = engine.feedProblem
         let degraded = StatusAlerts.newlyDegraded(from: previous, to: snapshots)
         if !degraded.isEmpty {

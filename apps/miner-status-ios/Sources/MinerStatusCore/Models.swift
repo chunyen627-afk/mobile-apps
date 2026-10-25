@@ -114,13 +114,15 @@ public struct MachineStatus: Codable, Hashable, Sendable {
     public let gpus: [GPUStatus]?
     public let shares: SharesReport
     public let stop: StopReport
-    /// Optional extension: nil when absent or null.
+    /// Optional extensions: nil when absent or null.
     public let earnings: EarningsReport?
+    public let assessment: AssessmentReport?
+    public let health: HealthReport?
 
     enum CodingKeys: String, CodingKey, CaseIterable {
         case machineId, displayName, worker, sourceStatus, sourceCheckedAt, sessionId,
              sampleSequence, observedAt, expectedRunning, minerRunning, hashrate, gpus,
-             shares, stop, earnings
+             shares, stop, earnings, assessment, health
     }
 
     public init(from decoder: Decoder) throws {
@@ -155,6 +157,8 @@ public struct MachineStatus: Codable, Hashable, Sendable {
         shares = try c.decode(SharesReport.self, forKey: .shares)
         stop = try c.decode(StopReport.self, forKey: .stop)
         earnings = c.contains(.earnings) ? try c.decodeNullable(EarningsReport.self, forKey: .earnings) : nil
+        assessment = c.contains(.assessment) ? try c.decodeNullable(AssessmentReport.self, forKey: .assessment) : nil
+        health = c.contains(.health) ? try c.decodeNullable(HealthReport.self, forKey: .health) : nil
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -174,6 +178,94 @@ public struct MachineStatus: Codable, Hashable, Sendable {
         try c.encode(shares, forKey: .shares)
         try c.encode(stop, forKey: .stop)
         try c.encodeIfPresent(earnings, forKey: .earnings)
+        try c.encodeIfPresent(assessment, forKey: .assessment)
+        try c.encodeIfPresent(health, forKey: .health)
+    }
+}
+
+// MARK: - Assessment extension
+
+/// The source's own light, short title and plain-language reason.
+public struct AssessmentReport: Codable, Hashable, Sendable {
+    public let light: StatusLight
+    public let title: String
+    public let reason: String
+    public let observedAt: Timestamp?
+
+    enum CodingKeys: String, CodingKey, CaseIterable {
+        case light, title, reason, observedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownKeys(decoder, allowed: CodingKeys.self)
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let lightName = try c.decode(String.self, forKey: .light)
+        guard let decodedLight = StatusLight(rawValue: lightName) else {
+            throw DecodingError.dataCorruptedError(forKey: .light, in: c, debugDescription: "unknown light \(lightName)")
+        }
+        light = decodedLight
+        title = try c.decode(String.self, forKey: .title)
+        reason = try c.decode(String.self, forKey: .reason)
+        guard (1 ... 40).contains(title.count), (1 ... 200).contains(reason.count) else {
+            throw DecodingError.dataCorruptedError(forKey: .reason, in: c, debugDescription: "title 1–40, reason 1–200 characters")
+        }
+        observedAt = try c.decodeNullable(Timestamp.self, forKey: .observedAt)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(light.rawValue, forKey: .light)
+        try c.encode(title, forKey: .title)
+        try c.encode(reason, forKey: .reason)
+        try c.encode(observedAt, forKey: .observedAt)
+    }
+}
+
+/// Supporting details for the source's judgment.
+public struct HealthReport: Codable, Hashable, Sendable {
+    public let uptimeSeconds: Double?
+    public let lastShareAt: Timestamp?
+    /// Usual time between accepted shares.
+    public let expectedShareSeconds: Double?
+    /// H/s, the pool's 30 minute average.
+    public let poolHashrate: Double?
+    public let poolOnline: Bool?
+    public let validSharePercent: Double?
+    public let maxGpuTemperatureC: Double?
+    /// The miner's own protective cutoff, if known.
+    public let temperatureLimitC: Double?
+    public let observedAt: Timestamp?
+
+    enum CodingKeys: String, CodingKey, CaseIterable {
+        case uptimeSeconds, lastShareAt, expectedShareSeconds, poolHashrate, poolOnline,
+             validSharePercent, maxGpuTemperatureC, temperatureLimitC, observedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownKeys(decoder, allowed: CodingKeys.self)
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        uptimeSeconds = try c.decodeNumber(forKey: .uptimeSeconds, minimum: 0)
+        lastShareAt = try c.decodeNullable(Timestamp.self, forKey: .lastShareAt)
+        expectedShareSeconds = try c.decodeNumber(forKey: .expectedShareSeconds, minimum: 0, exclusiveMinimum: true)
+        poolHashrate = try c.decodeNumber(forKey: .poolHashrate, minimum: 0)
+        poolOnline = try c.decodeNullable(Bool.self, forKey: .poolOnline)
+        validSharePercent = try c.decodeNumber(forKey: .validSharePercent, minimum: 0, maximum: 100)
+        maxGpuTemperatureC = try c.decodeNumber(forKey: .maxGpuTemperatureC, minimum: -40, maximum: 150)
+        temperatureLimitC = try c.decodeNumber(forKey: .temperatureLimitC, minimum: 0, maximum: 150)
+        observedAt = try c.decodeNullable(Timestamp.self, forKey: .observedAt)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(uptimeSeconds, forKey: .uptimeSeconds)
+        try c.encode(lastShareAt, forKey: .lastShareAt)
+        try c.encode(expectedShareSeconds, forKey: .expectedShareSeconds)
+        try c.encode(poolHashrate, forKey: .poolHashrate)
+        try c.encode(poolOnline, forKey: .poolOnline)
+        try c.encode(validSharePercent, forKey: .validSharePercent)
+        try c.encode(maxGpuTemperatureC, forKey: .maxGpuTemperatureC)
+        try c.encode(temperatureLimitC, forKey: .temperatureLimitC)
+        try c.encode(observedAt, forKey: .observedAt)
     }
 }
 

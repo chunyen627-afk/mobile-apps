@@ -97,6 +97,11 @@ public enum StatusReason: Hashable, Sendable {
     case awaitingShareEvidence
     // green
     case miningConfirmed
+    // publisher
+    /// The source's own judgment, shown while its sample is fresh (any light).
+    case publisherAssessment(title: String, detail: String)
+    /// The source sends judgments but its latest sample is too old to show one (gray).
+    case publisherSilent
 }
 
 /// Most recent problem since the last accepted sample; cleared by the next accepted sample.
