@@ -65,7 +65,7 @@ struct OverviewList: View {
             }
             ForEach(model.snapshots, id: \.machineId) { snapshot in
                 NavigationLink(value: snapshot.machineId) {
-                    MachineRow(snapshot: snapshot,
+                    MachineRow(snapshot: snapshot, now: model.displayNow,
                                healthLine: snapshot.sample?.health.flatMap { HealthText.rowLine($0, now: model.displayNow) },
                                earningsLine: model.hasEarnings ? EarningsText.rowLine(model.earnings(for: snapshot)) : nil)
                 }
@@ -139,6 +139,7 @@ struct OverviewList: View {
 
 struct MachineRow: View {
     let snapshot: MachineSnapshot
+    var now = Date()
     var healthLine: String?
     var earningsLine: String?
 
@@ -151,7 +152,7 @@ struct MachineRow: View {
                 if let problem = snapshot.problem {
                     Text("最近問題：\(problem.displayText)").font(.caption).foregroundStyle(.orange)
                 }
-                Text("資料時間：\(snapshot.sample?.observedAt?.rfc3339 ?? DisplayText.noData)")
+                Text("資料時間：\(DisplayText.clock(snapshot.sample?.observedAt, now: now) ?? DisplayText.noData)")
                     .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                 if snapshot.isHistorical {
                     Text("歷史資料（未確認為目前狀態）").font(.caption.bold()).foregroundStyle(.orange)
@@ -230,7 +231,7 @@ struct DetailContent: View {
             }
 
             if let earnings {
-                EarningsDetailSection(earnings: earnings, market: market)
+                EarningsDetailSection(earnings: earnings, market: market, now: now)
             }
 
             if let sample = snapshot.sample {
@@ -255,7 +256,7 @@ struct DetailContent: View {
             LabeledContent("Worker", value: sample.worker ?? DisplayText.noData)
             LabeledContent("工作代號", value: sample.sessionId ?? DisplayText.noData)
             LabeledContent("序號", value: sample.sampleSequence.map(String.init) ?? DisplayText.noData)
-            LabeledContent("資料時間", value: sample.observedAt?.rfc3339 ?? DisplayText.noData)
+            LabeledContent("資料時間", value: DisplayText.clock(sample.observedAt, now: now) ?? DisplayText.noData)
         }
 
         Section("運行") {
@@ -289,9 +290,9 @@ struct DetailContent: View {
             LabeledContent("接受", value: sample.shares.accepted.map(String.init) ?? DisplayText.noData)
             LabeledContent("過期", value: sample.shares.stale.map(String.init) ?? DisplayText.noData)
             LabeledContent("拒絕", value: sample.shares.rejected.map(String.init) ?? DisplayText.noData)
-            MetricRow(title: "份額資料時間", value: sample.shares.observedAt?.rfc3339 ?? DisplayText.noData,
+            MetricRow(title: "份額資料時間", value: DisplayText.clock(sample.shares.observedAt, now: now) ?? DisplayText.noData,
                       freshness: freshness?.shares, historical: historical)
-            MetricRow(title: "最後接受份額", value: sample.shares.lastAcceptedAt?.rfc3339 ?? DisplayText.noData,
+            MetricRow(title: "最後接受份額", value: DisplayText.clock(sample.shares.lastAcceptedAt, now: now) ?? DisplayText.noData,
                       freshness: freshness?.lastAcceptedShare, historical: historical)
         }
     }

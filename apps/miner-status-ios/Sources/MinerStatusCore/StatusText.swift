@@ -13,6 +13,37 @@ public enum DisplayText {
         let total = max(0, Int(seconds.rounded(.down)))
         return total < 60 ? "\(total) 秒" : "\(total / 60) 分 \(total % 60) 秒"
     }
+
+    /// "3 秒前", "5 分鐘前", "2 小時 5 分前", "3 天前"; a time ahead of the phone reads "4 秒後".
+    public static func ago(_ seconds: TimeInterval) -> String {
+        let total = Int(seconds.rounded(.down))
+        // Up to a second ahead is ordinary clock jitter between the PC and the phone.
+        if total < -1 { return "\(span(-total))後" }
+        return "\(span(max(0, total)))前"
+    }
+
+    /// Taiwan time without the raw RFC 3339 text: "10:12:57（3 秒前）". Another day adds the date:
+    /// "10/24 17:40:00（16 小時 32 分前）". nil when there is no timestamp.
+    public static func clock(_ timestamp: Timestamp?, now: Date, calendar: Calendar = .taipei) -> String? {
+        guard let timestamp else { return nil }
+        let parts = calendar.dateComponents([.month, .day, .hour, .minute, .second], from: timestamp.date)
+        var text = String(format: "%02d:%02d:%02d", parts.hour ?? 0, parts.minute ?? 0, parts.second ?? 0)
+        if !calendar.isDate(timestamp.date, inSameDayAs: now) {
+            text = "\(parts.month ?? 0)/\(parts.day ?? 0) \(text)"
+        }
+        return "\(text)（\(ago(now.timeIntervalSince(timestamp.date)))）"
+    }
+
+    private static func span(_ seconds: Int) -> String {
+        switch seconds {
+        case ..<60: return "\(seconds) 秒"
+        case ..<3600: return "\(seconds / 60) 分鐘"
+        case ..<86400:
+            let minutes = seconds / 60
+            return minutes % 60 == 0 ? "\(minutes / 60) 小時" : "\(minutes / 60) 小時 \(minutes % 60) 分"
+        default: return "\(seconds / 86400) 天"
+        }
+    }
 }
 
 public extension Reported {

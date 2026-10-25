@@ -66,6 +66,9 @@ final class MinerStatusUITests: XCTestCase {
         XCTAssertTrue(waitFor(banner, labelContains: "自訂來源（唯讀）", timeout: 10), "banner did not switch to live mode")
         XCTAssertTrue(element("machine-demo-rig-a").waitForExistence(timeout: 20), "live feed rows did not appear")
         XCTAssertTrue(element("machine-demo-rig-b").exists, "second live machine missing")
+        let rowA = element("machine-demo-rig-a")
+        XCTAssertTrue(waitFor(rowA, labelContains: "前）", timeout: 5) && !rowA.label.contains("+08:00"),
+                      "live row time not formatted: \(rowA.label)")
         XCTAssertTrue(waitFor(banner, labelContains: "示範資料", timeout: 5), "demo-marked source data is not flagged")
         // The fixture's timestamps are old, so both machines are gray: the warning must say so.
         XCTAssertTrue(waitFor(element("attention-banner"), labelContains: "2 台不是綠燈", timeout: 5),
@@ -90,6 +93,9 @@ final class MinerStatusUITests: XCTestCase {
         XCTAssertTrue(rowA.waitForExistence(timeout: 5), "machine row A missing")
         XCTAssertTrue(waitFor(rowA, labelContains: "收益 ≈ NT$", timeout: 5), "row A has no earnings: \(rowA.label)")
         XCTAssertTrue(waitFor(rowA, labelContains: "最後份額", timeout: 5), "row A has no health line: \(rowA.label)")
+        // Taiwan clock plus age against the frozen demo clock (17:30:35), not the raw RFC 3339 text.
+        XCTAssertTrue(waitFor(rowA, labelContains: "資料時間：17:30:30（5 秒前）", timeout: 5), "row A time: \(rowA.label)")
+        XCTAssertFalse(rowA.label.contains("+08:00"), "raw timestamp still shown: \(rowA.label)")
         XCTAssertTrue(waitFor(element("machine-demo-rig-b"), labelContains: "電費不計", timeout: 5),
                       "demo machine B should not be billed by default")
         let summary = element("earnings-summary")

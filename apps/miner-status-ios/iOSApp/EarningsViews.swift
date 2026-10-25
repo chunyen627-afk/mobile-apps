@@ -71,6 +71,7 @@ struct EarningsSummarySection: View {
 struct EarningsDetailSection: View {
     let earnings: MachineEarnings
     let market: MarketReport?
+    var now = Date()
 
     var body: some View {
         Section("收益（估算，每天）") {
@@ -86,7 +87,7 @@ struct EarningsDetailSection: View {
                 LabeledContent(market.coin, value: EarningsText.usd(market.coinUsd))
                 LabeledContent("BTC", value: EarningsText.usd(market.btcUsd))
                 LabeledContent("美元兌台幣", value: market.usdTwd.map { $0.formatted(.number.precision(.fractionLength(2))) } ?? DisplayText.noData)
-                LabeledContent("價格時間", value: market.observedAt?.rfc3339 ?? DisplayText.noData)
+                LabeledContent("價格時間", value: DisplayText.clock(market.observedAt, now: now) ?? DisplayText.noData)
             }
         }
     }

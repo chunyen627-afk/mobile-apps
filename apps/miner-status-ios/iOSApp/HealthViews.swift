@@ -32,7 +32,7 @@ struct HealthDetailSection: View {
     var body: some View {
         Section("健康") {
             LabeledContent("運轉時間", value: health.uptimeSeconds.map(HealthText.duration) ?? DisplayText.noData)
-            LabeledContent("最後份額", value: HealthText.ago(health.lastShareAt, now: now) ?? DisplayText.noData)
+            LabeledContent("最後份額", value: DisplayText.clock(health.lastShareAt, now: now) ?? DisplayText.noData)
             LabeledContent("平常份額間隔", value: health.expectedShareSeconds.map { "約 \(HealthText.duration($0))一個" } ?? DisplayText.noData)
             LabeledContent("礦池認列算力", value: poolText)
             LabeledContent("份額有效率", value: health.validSharePercent.map { "\($0.formatted(.number.precision(.fractionLength(0 ... 2))))%" } ?? DisplayText.noData)
