@@ -98,6 +98,8 @@ UI 測試與截圖找到並修正的畫面問題：
 - 使用者回報「礦機時間跟真實時間對不上」：資料其實只延遲約 1 秒，是電腦端送 UTC（`…Z`），App 又把時間字串原樣顯示，看起來慢 8 小時
 - 電腦端已改送 `+08:00`（2026-10-25 起，手機不用重裝）；App 改顯示「10:12:57（3 秒前）」，不是今天的加上日期「10/24 17:40:00（16 小時 32 分前）」，不論來源送哪個時區都換算成台灣時間
 - 套用在清單的資料時間、詳情的資料時間／份額資料時間／最後接受份額／最後份額、幣價時間
+- [run 40154597025](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40154597025)：單元測試「4.2 秒後」被取整成 5 秒（改往零取整）；之後兩輪測試全過，但啟動冒煙檢查誤判 App 沒在跑——`launchctl list | grep -q` 在 pipefail 下 grep 提早結束讓前一個指令收到 SIGPIPE；另外失敗時 `exit` 在導向區塊內，錯誤提示被寫進 log 而沒出現在公開紀錄。兩者都已修正
+- [run 40156528972](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40156528972)（`e43b455`）：單元測試 `Executed 111 tests, with 0 failures`、UI 測試 `Executed 15 tests, with 0 failures`、啟動冒煙通過；截圖確認清單與詳情顯示「17:30:30（5 秒前）」。IPA 349,158 bytes，SHA256 `5b7317e2…5103d363`（runner 內，未上傳）
 
 ## 實機
 
