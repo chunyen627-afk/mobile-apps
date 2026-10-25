@@ -16,7 +16,8 @@ public enum DisplayText {
 
     /// "3 秒前", "5 分鐘前", "2 小時 5 分前", "3 天前"; a time ahead of the phone reads "4 秒後".
     public static func ago(_ seconds: TimeInterval) -> String {
-        let total = Int(seconds.rounded(.down))
+        // Toward zero, so 4.2 s ahead reads "4 秒後" like 4.2 s ago reads "4 秒前".
+        let total = Int(seconds.rounded(.towardZero))
         // Up to a second ahead is ordinary clock jitter between the PC and the phone.
         if total < -1 { return "\(span(-total))後" }
         return "\(span(max(0, total)))前"
