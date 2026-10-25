@@ -74,6 +74,15 @@ UI 測試與截圖找到並修正的畫面問題：
 2. [run 40094798800](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40094798800)：首次實際編譯，`StatusEngine.swift` 修改 `trackers` 時同時讀 `self.policy`，觸發重疊存取錯誤；改用區域常數
 3. [run 40095024930](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40095024930)：全部通過；之後補上公開 notice，讓測試數與 IPA SHA256 不登入也能查證
 
+## 0.2.0（build 3）：收益、電費與警告
+
+[run 40117533077](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40117533077)，來源 `4e5200e`：單元測試 `Executed 95 tests, with 0 failures`、UI 測試 `Executed 13 tests, with 0 failures`；15 張截圖已人工檢視。IPA 275,378 bytes，SHA256 `659acae1…4554b51`（runner 內，未上傳）。
+
+- 新增：每台與總計的估算收益（幣量、BTC、台幣）、依台電簡易型二段式推算的電費、可勾選哪幾台算電費、額外耗電與費率設定；「N 台不是綠燈」警告區塊，以及即時模式下從綠燈變壞時的提示與震動
+- 示範資料的收益數字已手算核對（1.6 PRL × US$1.85 × 32.5 ≈ NT$96；390 W × 24 h × 1.99 ≈ NT$19）
+- UI 測試與截圖這輪抓到並修正：警告區塊被 VoiceOver 只讀成圖示名稱「警告」；收益設定頁掛在清單區塊上，捲動回收時會自己關掉
+- 收益是估算，不是實際入帳；電費假設目前耗電持續一整天，國定假日未計為離峰
+
 ## 實機
 
 | 項目 | 結果 |

@@ -11,8 +11,8 @@
 | --- | --- |
 | JSON 契約（schema）、合成示範 fixtures | 實作完成；Windows 上以 Python 實際執行契約檢查通過 |
 | 純 Swift 核心 `MinerStatusCore`（模型、狀態引擎、顯示文字、唯讀 HTTP client） | **編譯通過**（macOS CI） |
-| XCTest（80 項） | **模擬器測試通過**：80 項、0 失敗（[run 40102507820](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40102507820)，Xcode 16.4、iPhone 16 Pro 模擬器） |
-| SwiftUI App（示範＋自訂來源） | **模擬器 UI 測試通過**：11 項、0 失敗，13 張截圖已人工檢視；iPad 與實機未驗證 |
+| XCTest（95 項） | **模擬器測試通過**：95 項、0 失敗（[run 40117533077](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40117533077)，Xcode 16.4、iPhone 16 Pro 模擬器） |
+| SwiftUI App（示範＋自訂來源＋收益與警告） | **模擬器 UI 測試通過**：13 項、0 失敗，15 張截圖已人工檢視；0.2.0 的收益與警告尚未實機驗證，iPad 未驗證 |
 | Xcode 專案設定（XcodeGen `project.yml`，沿用 album-ios 架構）、建置腳本 `scripts/build.sh` | CI 實際執行通過，含 Release archive 與 bundle 檢查 |
 | Swift 語法剖析、靜態設定檢查 | Windows 上執行通過；只代表可剖析與設定內容相符 |
 | 真實資料來源 | **實機通過**（2026-10-25）：手機經私人虛擬網路讀電腦端唯讀彙整服務，兩台礦機都亮綠燈；電腦端程式與位址只在本機 |

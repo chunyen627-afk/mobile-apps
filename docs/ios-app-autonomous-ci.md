@@ -119,6 +119,9 @@ jobs:
 | 報告超過 1 MB | 截圖改 JPEG；不要上傳完整的 xcodebuild log 或 xcresult |
 | API 回應缺欄位（例如 `KeyError: 'jobs'`） | 公開 API 每小時 60 次用完了；等 `rate_limit` 的 reset 時間，輪詢間隔拉長 |
 | SideStore 安裝失敗：`An invalid value '<中文名>' was provided for the parameter 'appIdName'` | 中文 `CFBundleDisplayName` 被當成 App ID 名稱；改英文，中文名稱用語系檔（見第一節）。用 Sideloadly 裝過的 App 不會遇到，所以舊 App 看起來沒問題 |
+| 畫面上看得到的區塊，VoiceOver／UI 測試只讀到「警告」之類的圖示名稱 | `Label` 加 `.accessibilityElement(children: .ignore)` 與 `.accessibilityLabel(整行文字)` |
+| 設定頁開了又自己關掉 | `.sheet` 掛在 List 裡的區塊上，區塊捲出畫面被回收時 sheet 跟著關；改由整個清單畫面持有 sheet |
+| 新欄位讓舊版 App 整份拒收 | 嚴格白名單的 App 會拒收未知鍵；新欄位做成選填，並由新版 App 用請求標頭要求，來源只對有要求的請求附上 |
 | 產物要下載到本機備份 | Artifact 下載要登入；請使用者下載，放到使用者指定的本機備份位置（私人路徑，只記在本機，不寫進倉庫） |
 
 ## 實戰日記
