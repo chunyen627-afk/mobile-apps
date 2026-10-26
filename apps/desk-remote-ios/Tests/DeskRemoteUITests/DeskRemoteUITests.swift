@@ -246,6 +246,7 @@ final class DeskRemoteUITests: XCTestCase {
         openChat("claude", claudeQuestion)
         let card = element("question-card")
         XCTAssertTrue(card.waitForExistence(timeout: 10), "question card missing")
+        XCTAssertFalse(element("chat-working").exists, "a conversation waiting on the person is not 'working'")
         snapshot("16a-question-card")
         let submit = element("question-submit")
         XCTAssertTrue(reveal(submit), "submit button missing")

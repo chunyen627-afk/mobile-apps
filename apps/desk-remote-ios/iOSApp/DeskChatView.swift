@@ -60,7 +60,7 @@ struct DeskChatView: View {
                         }
                         .id("question-\(question.questionId)")
                     }
-                    if log.prompt == nil, let working = DeskText.working(app, status: log.status) {
+                    if log.prompt == nil, log.question == nil, let working = DeskText.working(app, status: log.status) {
                         Label(working, systemImage: "ellipsis.bubble")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
