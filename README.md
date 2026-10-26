@@ -7,7 +7,7 @@
 | App | 平台 | 用途 | 驗證狀態 |
 | --- | --- | --- | --- |
 | [光盒相簿](apps/album-ios) | iPhone / iOS 17+ | SMB 相簿、資料夾索引、照片預載、影片播放與診斷匯出 | 0.3.1 的 39 項測試、畫面檢查及封裝通過；已覆蓋安裝並讀回確認 build 4，新版功能回歸與偶發退出問題待實機驗證 |
-| [礦機狀態](https://github.com/chunyen627-afk/mobile-apps/tree/claude/miner-status-ios-demo/apps/miner-status-ios) | iPhone / iOS 16+ | 以燈號與詳情顯示礦機挖礦狀態；預設離線示範，可設定唯讀來源（僅前景） | 80 項單元、11 項模擬器 UI 測試 0 失敗，截圖已人工檢視（[run 40102507820](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40102507820)）；IPA 以公開 [prerelease](https://github.com/chunyen627-afk/mobile-apps/releases) 發布；實機待確認。程式在 `claude/miner-status-ios-demo` 分支，尚未合併 main |
+| [礦機狀態](https://github.com/chunyen627-afk/mobile-apps/tree/claude/miner-status-ios-demo/apps/miner-status-ios) | iPhone / iOS 16+ | 以燈號與詳情顯示礦機挖礦狀態、估算收益與電費、今日電價、開挖建議；需控制密碼的遠端開始／停止與遠端開機；預設離線示範，可設定來源（僅前景） | 0.6.0 build 8：121 項單元、18 項模擬器 UI 測試 0 失敗，截圖已人工檢視（[run 40297327812](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40297327812)）；IPA 在公開 [Release miner-status-0.6.0-build8](https://github.com/chunyen627-afk/mobile-apps/releases/tag/miner-status-0.6.0-build8)。build 2 實機通過並讀到真實資料；0.6.0 的遠端開機按鈕實機待確認。程式在 `claude/miner-status-ios-demo` 分支，尚未合併 main |
 
 ## 目錄
 
