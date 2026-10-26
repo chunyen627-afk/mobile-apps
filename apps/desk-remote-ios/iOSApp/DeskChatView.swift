@@ -35,7 +35,7 @@ struct DeskChatView: View {
                     if let prompt = log.prompt {
                         DeskPromptCard(app: app, prompt: prompt).id("prompt")
                     }
-                    if let working = DeskText.working(app, status: log.status) {
+                    if log.prompt == nil, let working = DeskText.working(app, status: log.status) {
                         Label(working, systemImage: "ellipsis.bubble")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
@@ -207,13 +207,18 @@ struct DeskToolRow: View {
                         .textSelection(.enabled)
                 }
                 if let result {
-                    Text(fullText ?? (result.text.isEmpty ? "（沒有輸出）" : result.text))
-                        .font(.system(.caption2, design: .monospaced))
-                        .textSelection(.enabled)
-                        .padding(6)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 6))
-                        .accessibilityIdentifier("tool-output")
+                    // Long output scrolls inside a box instead of filling the whole chat.
+                    ScrollView {
+                        Text(fullText ?? (result.text.isEmpty ? "（沒有輸出）" : result.text))
+                            .font(.system(.caption2, design: .monospaced))
+                            .textSelection(.enabled)
+                            .padding(6)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .accessibilityIdentifier("tool-output")
+                    }
+                    .frame(maxHeight: 280)
+                    .fixedSize(horizontal: false, vertical: (fullText ?? result.text).count < 600)
+                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 6))
                     if result.truncated == true, fullText == nil, let itemId = result.itemId {
                         Button("載入完整輸出") { loadFull(itemId) }
                             .font(.caption)

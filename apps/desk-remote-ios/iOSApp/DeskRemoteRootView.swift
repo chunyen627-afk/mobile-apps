@@ -60,8 +60,10 @@ struct DeskNotice: View {
     var tint: Color = .orange
 
     var body: some View {
+        // Combined so the caller's identifier lands on one element holding the text, not the icon.
         Label(text, systemImage: systemImage)
             .font(.footnote)
             .foregroundStyle(tint)
+            .accessibilityElement(children: .combine)
     }
 }

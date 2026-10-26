@@ -76,14 +76,17 @@ final class DeskRemoteUITests: XCTestCase {
         openSessions("claude")
         let a = element("session-row-\(claudeA)"), b = element("session-row-\(claudeB)"), c = element("session-row-\(claudeC)")
         XCTAssertTrue(a.waitForExistence(timeout: 10), "conversation A missing")
+        snapshot("05-claude-sessions")
         XCTAssertTrue(b.exists && c.exists, "conversations B or C missing")
         XCTAssertFalse(element("session-row-\(claudeArchived)").exists, "archived conversation must be hidden")
         XCTAssertTrue(a.frame.minY < b.frame.minY && b.frame.minY < c.frame.minY, "not newest first")
         XCTAssertTrue(waitFor(a, labelContains: "最近有更新", timeout: 5), "A says \(a.label)")
         XCTAssertTrue(a.label.contains("demo-app"), "folder missing: \(a.label)")
         XCTAssertTrue(waitFor(b, labelContains: "需要處理", timeout: 5), "B says \(b.label)")
-        XCTAssertTrue(waitFor(element("sessions-warning"), labelContains: "1 個檔案無法解析", timeout: 5), "warning missing")
-        snapshot("05-claude-sessions")
+        let warning = element("sessions-warning")
+        XCTAssertTrue(waitFor(warning, labelContains: "1 個檔案無法解析", timeout: 5),
+                      "warning missing: exists=\(warning.exists) label=\(warning.label); texts: "
+                      + app.staticTexts.allElementsBoundByIndex.prefix(12).map(\.label).joined(separator: " | "))
     }
 
     func test06ChatShowsTranscriptAndLiveEvents() throws {

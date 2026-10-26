@@ -820,13 +820,16 @@ def handler_for(hub, gate, networks):
 
         def send_json(self, code, obj):
             body = json.dumps(obj, ensure_ascii=False, allow_nan=False).encode('utf-8')
-            self.send_response(code)
-            self.send_header('Content-Type', 'application/json; charset=utf-8')
-            self.send_header('Content-Length', str(len(body)))
-            self.send_header('Cache-Control', 'no-store')
-            self.send_header('X-Content-Type-Options', 'nosniff')
-            self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.send_response(code)
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.send_header('Content-Length', str(len(body)))
+                self.send_header('Cache-Control', 'no-store')
+                self.send_header('X-Content-Type-Options', 'nosniff')
+                self.end_headers()
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # The phone left (for example a long-poll cancelled when the app went to the background).
 
         def allowed(self):
             try:
