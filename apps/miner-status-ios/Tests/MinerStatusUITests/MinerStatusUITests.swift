@@ -234,6 +234,39 @@ final class MinerStatusUITests: XCTestCase {
         XCTAssertFalse(element("advice-demo-laptop").exists, "advice must not carry over into the demo")
     }
 
+    func test18RemoteWakeForSwitchedOffMachine() throws {
+        openSettings()
+        let token = app.secureTextFields["control-token"]
+        XCTAssertTrue(reveal(token), "control password field missing")
+        token.tap()
+        token.typeText("ui-test-token")
+        let save = element("control-token-save")
+        XCTAssertTrue(reveal(save), "save password button missing")
+        save.tap()
+        XCTAssertTrue(element("control-token-set").waitForExistence(timeout: 5), "password not marked as set")
+        let field = app.textFields["source-url"]
+        XCTAssertTrue(reveal(field), "URL field missing")
+        replaceText(in: field, with: try sourceURL("MINER_UI_SOURCE_URL"))
+        let start = app.buttons["start-live"]
+        XCTAssertTrue(reveal(start), "start button missing")
+        start.tap()
+        XCTAssertTrue(element("machine-demo-rig-a").waitForExistence(timeout: 20), "live feed rows did not appear")
+
+        // Only the machine the source says it can wake gets the button.
+        let wake = element("wake-demo-laptop")
+        XCTAssertTrue(reveal(wake), "wake button missing for the switched-off machine")
+        XCTAssertFalse(element("wake-demo-rig-b").exists, "wake offered although canWake is false")
+        wake.tap()
+        let confirm = app.buttons.matching(NSPredicate(format: "label == %@", "確定遠端開機")).firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), "no confirmation before waking")
+        snapshot("21-wake-confirm")
+        confirm.tap()
+        // The test server answers POST with 501, so the app must show that failure.
+        let result = element("wake-result")
+        XCTAssertTrue(reveal(result) && waitFor(result, labelContains: "501", timeout: 15), "wake result says \(result.label)")
+        snapshot("22-wake-result")
+    }
+
     // MARK: - Helpers
     // MARK: - Helpers
 

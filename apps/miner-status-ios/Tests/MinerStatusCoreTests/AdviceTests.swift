@@ -35,6 +35,9 @@ final class AdviceTests: XCTestCase {
         XCTAssertEqual(items[1].monthlyNetTwd, -20.5, "a net loss is negative and must decode")
         XCTAssertNotNil(items[1].since)
         XCTAssertNil(try feed(advice: [with("monthlyNetTwd", NSNull())]).advice?.first?.monthlyNetTwd)
+        XCTAssertNil(items[0].canWake, "older sources send no canWake")
+        XCTAssertEqual(try feed(advice: [with("canWake", true)]).advice?.first?.canWake, true)
+        XCTAssertEqual(try feed(advice: [with("canWake", false)]).advice?.first?.canWake, false)
     }
 
     func testAdviceIsStrict() {
@@ -50,6 +53,8 @@ final class AdviceTests: XCTestCase {
             [with("displayName", String(repeating: "x", count: 41))],
             [with("startAtTwd", NSNull())],
             [with("monthlyNetTwd", "120")],
+            [with("canWake", NSNull())],
+            [with("canWake", "yes")],
             Array(repeating: item, count: 9),
         ]
         for value in bad {

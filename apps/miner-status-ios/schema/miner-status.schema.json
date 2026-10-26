@@ -273,7 +273,8 @@
         "stopBelowTwd": { "type": "number" },
         "reason": { "type": "string", "minLength": 1, "maxLength": 200 },
         "since": { "description": "When the recommendation last changed; null before the first change.", "$ref": "#/$defs/timestampOrNull" },
-        "observedAt": { "$ref": "#/$defs/timestampOrNull" }
+        "observedAt": { "$ref": "#/$defs/timestampOrNull" },
+        "canWake": { "description": "OPTIONAL, sent only with feature `wake`: true when the machine is switched off and the source can power it on (POST /control/<machineId>/wake).", "type": "boolean" }
       }
     },
     "earnings": {

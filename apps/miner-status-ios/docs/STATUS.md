@@ -120,6 +120,12 @@ UI 測試與截圖找到並修正的畫面問題：
 - App：清單的「開挖建議」區塊、資料格式加選填 `advice`（feature `advice`）
 - [run 40279093799](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40279093799)（`1cd5dc9`）：單元測試 `Executed 121 tests, with 0 failures`、UI 測試 `Executed 17 tests, with 0 failures`；截圖確認「開挖建議」區塊顯示關機中的示範筆電「建議挖礦」（綠）與虧損機器「建議停挖」（橘、NT$-35）。IPA 393,533 bytes（runner 內，未上傳）
 
+## 0.6.0（build 8，待發布）：遠端開機、依電價自動挖礦
+
+- 使用者要求：開挖建議的筆電那列加遠端開機按鈕，開機後自動接回監控與遠端開始挖礦；並讓電腦端自動化：離峰划算就自動開機挖、尖峰只有划算才挖
+- 網路喚醒已實測（2026-10-26）：筆電關機後由同一網路裡的另一台電腦送封包，6 秒後開機、約 40 秒後可遠端連線
+- App：開挖建議的「遠端開機」按鈕與確認、資料格式 `advice` 每列加選填 `canWake`（feature `wake`）
+
 ## 實機
 
 | 項目 | 結果 |

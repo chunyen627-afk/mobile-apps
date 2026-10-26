@@ -344,6 +344,7 @@ def build_cases(base: dict) -> tuple[list, list]:
         ("advice null", [(("advice",), None)]),
         ("advice empty", [(("advice",), [])]),
         ("advice unknown net", [(("advice",), [dict(advice, monthlyNetTwd=None, observedAt=None)])]),
+        ("advice with canWake", [(("advice",), [dict(advice, canWake=True), dict(advice, machineId="demo-rig-b", canWake=False)])]),
     ]
     negative += [
         ("advice not a list", [(("advice",), advice)]),
@@ -354,6 +355,8 @@ def build_cases(base: dict) -> tuple[list, list]:
         ("advice null threshold", [(("advice",), [dict(advice, startAtTwd=None)])]),
         ("advice missing since", [(("advice",), [{k: v for k, v in advice.items() if k != "since"}])]),
         ("advice too many", [(("advice",), [advice] * 9)]),
+        ("advice canWake null", [(("advice",), [dict(advice, canWake=None)])]),
+        ("advice canWake as string", [(("advice",), [dict(advice, canWake="yes")])]),
     ]
 
     # Optional control extension.

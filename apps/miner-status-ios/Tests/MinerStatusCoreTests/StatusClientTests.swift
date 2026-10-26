@@ -89,7 +89,7 @@ final class StatusClientTests: XCTestCase {
         XCTAssertEqual(request.cachePolicy, .reloadIgnoringLocalCacheData)
         XCTAssertEqual(request.timeoutInterval, StatusFeedClient.requestTimeout)
         XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
-        XCTAssertEqual(request.value(forHTTPHeaderField: "X-Miner-Status-Features"), "earnings,assessment,control,advice")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "X-Miner-Status-Features"), "earnings,assessment,control,advice,wake")
         XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
     }
 

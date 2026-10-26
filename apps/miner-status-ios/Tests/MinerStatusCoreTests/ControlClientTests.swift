@@ -32,6 +32,8 @@ final class ControlClientTests: XCTestCase {
         XCTAssertFalse(request.httpShouldHandleCookies)
         XCTAssertEqual(ControlClient(endpoint: endpoint).makeRequest(machineId: "rig-1", action: .stop, token: "t")?.url?.path,
                        "/control/rig-1/stop")
+        XCTAssertEqual(ControlClient(endpoint: endpoint).makeRequest(machineId: "rig-1", action: .wake, token: "t")?.url?.path,
+                       "/control/rig-1/wake")
     }
 
     func testMachineIdMustBeAPlainPathSegment() {

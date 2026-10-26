@@ -219,9 +219,13 @@ public struct AdviceReport: Codable, Hashable, Sendable {
     /// When the recommendation last changed.
     public let since: Timestamp?
     public let observedAt: Timestamp?
+    /// Feature `wake`: true when the machine is switched off and the source can power it on.
+    /// nil when the source did not say (older sources, or the feature was not asked for).
+    public let canWake: Bool?
 
     enum CodingKeys: String, CodingKey, CaseIterable {
-        case machineId, displayName, recommendation, monthlyNetTwd, startAtTwd, stopBelowTwd, reason, since, observedAt
+        case machineId, displayName, recommendation, monthlyNetTwd, startAtTwd, stopBelowTwd, reason, since, observedAt,
+             canWake
     }
 
     public init(from decoder: Decoder) throws {
@@ -257,6 +261,7 @@ public struct AdviceReport: Codable, Hashable, Sendable {
         stopBelowTwd = try threshold(.stopBelowTwd)
         since = try c.decodeNullable(Timestamp.self, forKey: .since)
         observedAt = try c.decodeNullable(Timestamp.self, forKey: .observedAt)
+        canWake = c.contains(.canWake) ? try c.decode(Bool.self, forKey: .canWake) : nil
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -270,6 +275,7 @@ public struct AdviceReport: Codable, Hashable, Sendable {
         try c.encode(reason, forKey: .reason)
         try c.encode(since, forKey: .since)
         try c.encode(observedAt, forKey: .observedAt)
+        try c.encodeIfPresent(canWake, forKey: .canWake)
     }
 }
 

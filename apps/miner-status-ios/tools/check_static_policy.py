@@ -70,7 +70,7 @@ check(re.search(r"^packages:", spec, re.MULTILINE) is None, "project.yml: no pac
 check((ROOT / "fixtures" / "demo-running.json").is_file(), "fixtures/demo-running.json must exist")
 
 # 3. Network surface in shipped code (Sources/ and iOSApp/): reading is GET only; the one write
-#    is ControlClient's start/stop POST in StatusClient.swift (checked below).
+#    is ControlClient's start/stop/wake POST in StatusClient.swift (checked below).
 shipped = swift_files("Sources", "iOSApp")
 for path in shipped:
     text = path.read_text(encoding="utf-8")

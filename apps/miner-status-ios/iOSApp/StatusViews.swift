@@ -74,7 +74,7 @@ struct OverviewList: View {
         }
 
         if !model.advice.isEmpty {
-            AdviceSection(items: model.advice, now: model.displayNow)
+            AdviceSection(model: model, items: model.advice, now: model.displayNow)
         }
 
         // Below the machines so their rows stay on the first screen.

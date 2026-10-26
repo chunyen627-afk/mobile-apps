@@ -70,13 +70,15 @@
       "machineId": "demo-laptop", "displayName": "示範筆電", "recommendation": "mine",
       "monthlyNetTwd": 342.5, "startAtTwd": 300, "stopBelowTwd": 250,
       "reason": "估算每月淨收益 NT$342，已連續 6 小時達開挖門檻 NT$300",
-      "since": "2026-10-24T16:00:00+08:00", "observedAt": "2026-10-24T17:40:00+08:00"
+      "since": "2026-10-24T16:00:00+08:00", "observedAt": "2026-10-24T17:40:00+08:00",
+      "canWake": true
     },
     {
       "machineId": "demo-rig-b", "displayName": "示範礦機 B", "recommendation": "rest",
       "monthlyNetTwd": -35.0, "startAtTwd": 300, "stopBelowTwd": 0,
       "reason": "估算每月淨收益 NT$-35，連續 6 小時低於 NT$0，挖了不划算",
-      "since": "2026-10-24T15:00:00+08:00", "observedAt": "2026-10-24T17:40:00+08:00"
+      "since": "2026-10-24T15:00:00+08:00", "observedAt": "2026-10-24T17:40:00+08:00",
+      "canWake": false
     }
   ]
 }
