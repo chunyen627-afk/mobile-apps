@@ -132,7 +132,8 @@ class CodexTests(FakeEnvironment):
         rows = self.sources['codex'].list_sessions(50)
         self.assertEqual([r['id'] for r in rows], [X, Y])
         self.assertEqual(rows[0]['title'], '回覆 A1')  # the sidebar name, not the first message
-        self.assertEqual(rows[0]['permission'], '代我核准')
+        self.assertIsNone(rows[0]['permission'])  # the stored approval mode would mislead
+        self.assertEqual(rows[0]['folder'], 'demo-app')
         self.assertIsNone(self.sources['codex'].warning)
 
     def test_index_fallback_when_database_is_missing(self):

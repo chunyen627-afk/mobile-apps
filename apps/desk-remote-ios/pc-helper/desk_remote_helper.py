@@ -51,7 +51,7 @@ ITEM_ID = re.compile(r'^i[0-9]{1,9}$')
 NOISE_PREFIXES = ('<command-name>', '<command-message>', '<local-command-', '<system-reminder>',
                   '<task-notification>', '<side-sessions-event>', '<ci-monitor-event>',
                   '# AGENTS.md instructions', '<environment_context>', '<user_instructions>',
-                  '<external_codex', '<turn_aborted>')
+                  '<external_codex', '<turn_aborted>', '<heartbeat>')
 
 
 def iso(value):
@@ -231,8 +231,8 @@ class CodexParser:
             text = flatten(item.get('content'))
             return [{'kind': 'user', 'text': text, 'ts': ts}] if text.strip() and not is_noise(text) else []
         if itype == 'AgentMessage':
-            text = flatten(item.get('content'))
-            return [{'kind': 'assistant', 'text': text, 'ts': ts}] if text.strip() else []
+            text = flatten(item.get('content'))  # Automation heartbeats are echoed back; hide those too.
+            return [{'kind': 'assistant', 'text': text, 'ts': ts}] if text.strip() and not is_noise(text) else []
         if itype == 'CommandExecution':
             parsed = item.get('parsed_cmd') or []
             command = parsed[0].get('cmd') if parsed and isinstance(parsed[0], dict) else None
@@ -477,10 +477,10 @@ class ClaudeSource:
 class CodexSource:
     """Codex desktop keeps its threads in ~/.codex/state_5.sqlite (`threads`), with
     ~/.codex/session_index.jsonl as an older, simpler index. Sub-threads such as approval
-    reviews (`source` is a JSON subagent description) and `codex exec` runs are not listed."""
+    reviews (`source` is a JSON subagent description) and `codex exec` runs are not listed.
+    No permission label: the stored approval_mode reads "on-request" even under 代我核准, so it
+    would mislead."""
 
-    APPROVAL_LABELS = {'never': '代我核准', 'on-request': '需要時詢問', 'untrusted': '不信任時詢問',
-                       'on-failure': '失敗時詢問'}
     id_pattern = CODEX_ID
     parser = CodexParser
 
@@ -506,10 +506,10 @@ class CodexSource:
             columns = {row[1] for row in connection.execute('PRAGMA table_info(threads)')}
             name = 'COALESCE(NULLIF(name, \'\'), title)' if 'name' in columns else 'title'
             recency = 'COALESCE(recency_at_ms, updated_at_ms)' if 'recency_at_ms' in columns else 'updated_at * 1000'
-            query = (f'SELECT id, {name}, {recency}, rollout_path, cwd, approval_mode, source FROM threads '
+            query = (f'SELECT id, {name}, {recency}, rollout_path, cwd FROM threads '
                      'WHERE archived = 0 AND (source IS NULL OR (source NOT LIKE \'{%\' AND source != \'exec\')) '
                      f'ORDER BY {recency} DESC LIMIT ?')
-            return [{'id': r[0], 'title': r[1], 'ms': r[2], 'rollout': r[3], 'cwd': r[4], 'approval': r[5]}
+            return [{'id': r[0], 'title': r[1], 'ms': r[2], 'rollout': r[3], 'cwd': r[4]}
                     for r in connection.execute(query, (limit,))]
         finally:
             connection.close()
@@ -528,7 +528,7 @@ class CodexSource:
                     and item.get('thread_name') != 'Guardian review':
                 latest[item['id']] = item
         rows = [{'id': i['id'], 'title': i.get('thread_name'), 'ms': i.get('updated_at'), 'rollout': None,
-                 'cwd': None, 'approval': None} for i in latest.values()]
+                 'cwd': None} for i in latest.values()]
         rows.sort(key=lambda r: iso(r['ms']) or '', reverse=True)
         return rows[:limit]
 
@@ -567,8 +567,7 @@ class CodexSource:
             status = 'active' if path is not None and now - _mtime(path) < ACTIVE_SECONDS else 'idle'
             out.append({'id': row['id'], 'title': (row['title'] or '').strip() or '（未命名）',
                         'folder': folder_name(row.get('cwd')), 'updatedAt': iso(row['ms']), 'status': status,
-                        'permission': self.APPROVAL_LABELS.get(row.get('approval'), row.get('approval')),
-                        'hasTranscript': path is not None})
+                        'permission': None, 'hasTranscript': path is not None})
         return out
 
 

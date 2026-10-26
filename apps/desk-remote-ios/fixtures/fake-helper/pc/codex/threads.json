@@ -5,7 +5,6 @@
     "title": "測試：請回覆 A1",
     "minutesAgo": 5,
     "cwd": "C:\\work\\demo-app",
-    "approval": "never",
     "rollout": "2026/10/26/rollout-2026-10-26T10-00-00-0a000000-0000-4000-8000-000000000001.jsonl"
   },
   {
@@ -14,7 +13,6 @@
     "title": "評估 iPhone App 的做法",
     "minutesAgo": 300,
     "cwd": "C:\\work",
-    "approval": "on-request",
     "rollout": "2026/10/26/rollout-2026-10-26T05-00-00-0a000000-0000-4000-8000-000000000002.jsonl"
   },
   {

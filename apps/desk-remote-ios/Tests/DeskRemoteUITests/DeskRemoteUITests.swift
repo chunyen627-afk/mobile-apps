@@ -139,7 +139,7 @@ final class DeskRemoteUITests: XCTestCase {
         XCTAssertTrue(x.waitForExistence(timeout: 10), "Codex thread X missing")
         XCTAssertTrue(element("session-row-\(codexY)").exists, "Codex thread Y missing")
         XCTAssertFalse(element("session-row-\(codexGuardian)").exists, "approval sub-thread must be hidden")
-        XCTAssertTrue(x.label.contains("回覆 A1") && x.label.contains("代我核准"), "X says \(x.label)")
+        XCTAssertTrue(x.label.contains("回覆 A1") && x.label.contains("demo-app"), "X says \(x.label)")
         snapshot("09a-codex-sessions")
         x.tap()
         XCTAssertTrue(text("有 README.md 和 main.c 兩個檔案。").waitForExistence(timeout: 10), "Codex reply missing")

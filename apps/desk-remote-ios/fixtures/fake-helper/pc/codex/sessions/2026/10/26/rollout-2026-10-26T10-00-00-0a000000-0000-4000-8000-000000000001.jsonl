@@ -12,3 +12,5 @@
 {"timestamp": "2026-10-26T10:01:03Z", "type": "event_msg", "payload": {"type": "item_completed", "item": {"type": "CommandExecution", "command": ["pwsh.exe", "-Command", "Get-ChildItem"], "parsed_cmd": [{"type": "unknown", "cmd": "Get-ChildItem -Name"}], "aggregated_output": "README.md\nmain.c\n", "exit_code": 0, "status": "completed"}}}
 {"timestamp": "2026-10-26T10:01:05Z", "type": "event_msg", "payload": {"type": "item_completed", "item": {"type": "AgentMessage", "content": [{"type": "Text", "text": "有 README.md 和 main.c 兩個檔案。"}]}}}
 {"timestamp": "2026-10-26T10:01:05Z", "type": "event_msg", "payload": {"type": "task_complete"}}
+{"timestamp": "2026-10-26T10:02:00Z", "type": "event_msg", "payload": {"type": "item_completed", "item": {"type": "UserMessage", "content": [{"type": "text", "text": "<heartbeat>\n<automation_id>demo</automation_id>\n"}]}}}
+{"timestamp": "2026-10-26T10:02:01Z", "type": "event_msg", "payload": {"type": "item_completed", "item": {"type": "AgentMessage", "content": [{"type": "Text", "text": "<heartbeat>\n<automation_id>demo</automation_id>\n"}]}}}
