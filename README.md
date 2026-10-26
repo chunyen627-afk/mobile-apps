@@ -7,6 +7,7 @@
 | App | 平台 | 用途 | 驗證狀態 |
 | --- | --- | --- | --- |
 | [光盒相簿](apps/album-ios) | iPhone / iOS 17+ | SMB 相簿、資料夾索引、照片預載、影片播放與診斷匯出 | 0.3.1 的 39 項測試、畫面檢查及封裝通過；已覆蓋安裝並讀回確認 build 4，新版功能回歸與偶發退出問題待實機驗證 |
+| [工具箱](apps/toolbox-ios) | iPhone / iOS 17+ | 相簿與礦機狀態合成一個 App，底部分頁切換，只佔 1 個側載名額；沿用相簿的 Bundle ID 覆蓋安裝 | 開發中，等第一次 CI 建置 |
 | [礦機狀態](apps/miner-status-ios) | iPhone / iOS 16+ | 以燈號與白名單詳情顯示礦機狀態；預設離線示範，可手動設定唯讀來源（僅前景） | macOS CI 編譯通過；80 項單元測試、11 項模擬器 UI 測試 0 失敗，截圖已人工檢視（[run 40109294512](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40109294512)）；IPA 以公開 prerelease 發布；**build 2 實機通過**（打得開、畫面正常），接電腦端唯讀服務的真實資料兩台皆綠燈；iPad 未驗證 |
 
 ## 目錄
@@ -15,16 +16,18 @@
 apps/
   album-ios/               光盒相簿（SwiftUI 原生 App）
   miner-status-ios/        礦機狀態（SwiftUI、XcodeGen，沿用相簿架構）
+  toolbox-ios/             工具箱（直接編譯上面兩個 App 的原始碼，不複製）
 .github/workflows/
   album-ios.yml            相簿的 macOS 編譯與測試
   miner-status-ios.yml     礦機的 macOS 編譯與測試（只在開發分支 push 時觸發，不上傳大檔）
+  toolbox-ios.yml          工具箱的 macOS 編譯與測試（相簿或礦機原始碼改動時也會執行）
 docs/
   ios-app-autonomous-ci.md 新 App 的 AI 自主建置流程與實戰日記
 ```
 
 後續新 App 放在 `apps/<名稱>/`，各自建立 README 與必要的 workflow，並依 [AI 自主建置流程](docs/ios-app-autonomous-ci.md) 建置與驗證。
 
-**工具箱整合規劃**：免費 Apple 帳號每台裝置只能同時啟用 3 個側載 App（SideStore 本身佔 1 個），每 7 天最多建立 10 個 App ID。因此各工具最終會整合成一個「工具箱」App，打開後從首頁選要進哪一個工具，只佔 1 個名額、只需續簽一次。流程：每個新工具先做成單獨 App，模擬器測試與截圖檢視通過、實機確認能動，再以同一份模組整合進工具箱；工具箱預計沿用相簿的 Bundle ID，覆蓋安裝時保留相簿資料。目前順序：礦機驗穩（含收益與電費）→ 整合 → 規劃之後的新 App。STM32 板子相關內容留在 [stm32h7s78-project](https://github.com/chunyen627-afk/stm32h7s78-project)。
+**工具箱整合規劃**：免費 Apple 帳號每台裝置只能同時啟用 3 個側載 App（SideStore 本身佔 1 個），每 7 天最多建立 10 個 App ID。因此各工具最終會整合成一個「工具箱」App，打開後從首頁選要進哪一個工具，只佔 1 個名額、只需續簽一次。流程：每個新工具先做成單獨 App，模擬器測試與截圖檢視通過、實機確認能動，再以同一份模組整合進工具箱；工具箱預計沿用相簿的 Bundle ID，覆蓋安裝時保留相簿資料。目前順序：礦機驗穩（含收益與電費，0.6.0 已完成）→ 整合（進行中，[apps/toolbox-ios](apps/toolbox-ios)；首頁改用底部分頁，每個工具一頁）→ 規劃之後的新 App。STM32 板子相關內容留在 [stm32h7s78-project](https://github.com/chunyen627-afk/stm32h7s78-project)。
 
 ## 相簿下載與安裝
 
