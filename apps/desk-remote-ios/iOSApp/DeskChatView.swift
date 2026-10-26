@@ -21,6 +21,8 @@ struct DeskChatView: View {
     @State private var confirm: DeskConfirm?
     @State private var promptBusy: String?
     @State private var openState: String?
+    /// A question was seen here, so the list's "needs action" is no longer news.
+    @State private var sawPrompt = false
     @FocusState private var inputFocused: Bool
 
     var body: some View {
@@ -48,7 +50,7 @@ struct DeskChatView: View {
                         DeskPromptCard(app: app, prompt: prompt, busy: promptBusy,
                                        answer: { allow in Task { await answer(prompt, allow: allow, force: false) } })
                             .id("prompt")
-                    } else if session.status == "needs-action" {
+                    } else if session.status == "needs-action" && log.loaded && !sawPrompt {
                         DeskOpenOnPC(state: openState) { Task { await openOnPC(force: false) } }
                     }
                     if log.prompt == nil, let working = DeskText.working(app, status: log.status) {
@@ -133,7 +135,7 @@ struct DeskChatView: View {
                 let page = try await client.events(app, session: session.id, after: log.cursor, epoch: log.epoch,
                                                    knownPrompt: log.prompt?.promptId, wait: wait)
                 log.apply(page)
-                if log.prompt == nil { promptBusy = nil }
+                if log.prompt == nil { promptBusy = nil } else { sawPrompt = true }
                 pending.removeAll { $0.mark != nil && log.hasUserText($0.text, after: $0.mark ?? 0) }
                 failure = nil
                 wait = 25

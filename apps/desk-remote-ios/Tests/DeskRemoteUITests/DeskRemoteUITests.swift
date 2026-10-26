@@ -183,6 +183,7 @@ final class DeskRemoteUITests: XCTestCase {
         // The question goes away once the PC answered it, and the conversation carries on.
         XCTAssertTrue(text("已補上分號並存檔（示範）").waitForExistence(timeout: 20), "answer did not reach the PC")
         XCTAssertTrue(poll(timeout: 10) { !self.element("prompt-card").exists }, "card stayed after answering")
+        XCTAssertFalse(element("open-on-pc").exists, "an answered conversation must not ask to be opened on the PC")
         snapshot("12-permission-answered")
     }
 
