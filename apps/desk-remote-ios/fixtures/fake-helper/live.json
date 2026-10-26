@@ -1,0 +1,38 @@
+{
+  "claude/local_11111111-1111-4111-8111-111111111111": [
+    {
+      "afterSeconds": 3,
+      "lines": [
+        {
+          "type": "user",
+          "isSidechain": false,
+          "timestamp": "2026-10-26T01:05:00Z",
+          "message": {
+            "role": "user",
+            "content": "再加上解除安裝的步驟。"
+          }
+        }
+      ]
+    },
+    {
+      "afterSeconds": 2,
+      "lines": [
+        {
+          "type": "assistant",
+          "isSidechain": false,
+          "timestamp": "2026-10-26T01:05:04Z",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "已加上解除安裝：執行 uninstall.ps1 即可。"
+              }
+            ],
+            "stop_reason": "end_turn"
+          }
+        }
+      ]
+    }
+  ]
+}

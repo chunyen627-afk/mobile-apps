@@ -1,0 +1,11 @@
+{
+  "pc_name": "辦公室",
+  "bind_ip": "<this PC's ZeroTier address>",
+  "port": 18790,
+  "allowed_networks": ["<ZeroTier network, e.g. 10.x.y.0/24>"],
+  "token": "<install.ps1 writes 43 random characters here>",
+  "notify": {
+    "server": "<ntfy server URL>",
+    "topic": "<your private ntfy topic>"
+  }
+}

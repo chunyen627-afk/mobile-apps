@@ -1,0 +1,17 @@
+{
+  "pc_name": "示範電腦",
+  "bind_ip": "127.0.0.1",
+  "port": 8790,
+  "allowed_networks": [
+    "127.0.0.0/8"
+  ],
+  "token": "ui-test-token-not-a-secret-0123456789",
+  "presence": {
+    "idleSeconds": 420,
+    "locked": false,
+    "windows": {
+      "claude": true,
+      "codex": true
+    }
+  }
+}

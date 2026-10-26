@@ -1,0 +1,5 @@
+{"timestamp": "2026-10-26T05:00:00Z", "type": "session_meta", "payload": {"id": "0a000000-0000-4000-8000-000000000002"}}
+{"timestamp": "2026-10-26T05:00:01Z", "type": "event_msg", "payload": {"type": "user_message", "message": "評估 iPhone App 的做法"}}
+{"timestamp": "2026-10-26T05:00:03Z", "type": "response_item", "payload": {"type": "function_call", "name": "shell", "call_id": "c1", "arguments": "{\"command\": [\"powershell\", \"-c\", \"Get-Date\"]}"}}
+{"timestamp": "2026-10-26T05:00:04Z", "type": "response_item", "payload": {"type": "function_call_output", "call_id": "c1", "output": "2026年10月26日 13:00:04"}}
+{"timestamp": "2026-10-26T05:00:06Z", "type": "event_msg", "payload": {"type": "agent_message", "message": "建議先做模擬器版本，再整合進工具箱。"}}

@@ -1,0 +1,10 @@
+{
+  "sessionId": "local_44444444-4444-4444-8444-444444444444",
+  "cliSessionId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+  "cwd": "C:\\work\\demo-app",
+  "title": "已封存的對話",
+  "_minutesAgo": 10,
+  "isArchived": true,
+  "permissionMode": "auto",
+  "model": "demo-model"
+}

@@ -1,0 +1,92 @@
+name: Build Desk Remote iOS
+# Runs only for this app's development branch. No workflow_dispatch: that needs the file on main.
+# No IPA release step: the phone gets this tool through the toolbox app.
+on:
+  push:
+    branches: [claude/desk-remote]
+    paths:
+      - 'apps/desk-remote-ios/**'
+      - '.github/workflows/desk-remote-ios.yml'
+# Write access is used only to force-push simulator screenshots (demo data) to one dedicated
+# branch, so the screenshots can be reviewed without signing in.
+permissions:
+  contents: write
+concurrency:
+  group: desk-remote-ios-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    # Fail closed for private repositories; standard public runners are free.
+    if: github.event.repository.private == false
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      APP_DIR: apps/desk-remote-ios
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install project generator
+        run: brew install xcodegen
+      - name: Helper tests, app build, unit and UI tests
+        working-directory: ${{ env.APP_DIR }}
+        run: bash scripts/build.sh
+      # The IPA stays on the runner: only its size and SHA256 are recorded.
+      - name: Record IPA size and SHA256
+        working-directory: ${{ env.APP_DIR }}/build
+        run: |
+          size=$(stat -f %z DeskRemote-unsigned.ipa)
+          sha=$(cut -d' ' -f1 DeskRemote-unsigned.ipa.sha256)
+          echo "::notice title=IPA (not uploaded)::size ${size} bytes, SHA256 ${sha}"
+          {
+            echo "### DeskRemote-unsigned.ipa (not uploaded)"
+            echo "- size: $size bytes"
+            echo "- SHA256: \`$sha\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Collect small reports (1 MB limit)
+        id: collect
+        if: always()
+        working-directory: ${{ env.APP_DIR }}/build
+        run: |
+          mkdir -p reports
+          for f in test-summary.txt helper-tests.log fake-helper.log; do [ -f "$f" ] && cp "$f" reports/; done
+          ls -l reports
+          total=$(find reports -type f -exec stat -f %z {} + | awk '{s+=$1} END {print s+0}')
+          echo "reports total: $total bytes"
+          if [ "$total" -gt 1048576 ]; then
+            echo "Reports exceed 1 MB; refusing to upload."
+            exit 1
+          fi
+      # Replaces the branch each run (no history kept). Only fixture-data simulator screens; 5 MB cap.
+      - name: Publish simulator screenshots
+        if: always()
+        working-directory: ${{ env.APP_DIR }}/build
+        env:
+          SHOT_BRANCH: ci-screenshots-desk-remote-ios
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ ! -f screenshots-ui/INDEX.txt ]; then
+            echo "No UI screenshots to publish."
+            exit 0
+          fi
+          total=$(find screenshots-ui -type f -exec stat -f %z {} + | awk '{s+=$1} END {print s+0}')
+          echo "screenshots total: $total bytes"
+          if [ "$total" -gt 5242880 ]; then
+            echo "Screenshots exceed 5 MB; refusing to publish."
+            exit 1
+          fi
+          cd screenshots-ui
+          printf 'run %s\ncommit %s\n' "$GITHUB_RUN_ID" "$GITHUB_SHA" > RUN.txt
+          git init -q -b "$SHOT_BRANCH"
+          git add .
+          git -c user.name=github-actions -c user.email=41898282+github-actions[bot]@users.noreply.github.com \
+            commit -q -m "Simulator screenshots for run $GITHUB_RUN_ID ($GITHUB_SHA)"
+          git push -q --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/${SHOT_BRANCH}"
+          echo "::notice title=Screenshots::$(grep -c . INDEX.txt) screenshots on branch ${SHOT_BRANCH} for run ${GITHUB_RUN_ID}"
+      - name: Save small reports
+        if: always() && steps.collect.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: DeskRemote-reports
+          path: ${{ env.APP_DIR }}/build/reports
+          if-no-files-found: warn
+          retention-days: 1

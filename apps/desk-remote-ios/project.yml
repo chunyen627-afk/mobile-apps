@@ -1,0 +1,70 @@
+# XcodeGen spec, same layout as apps/miner-status-ios: app + UI-free core framework + unit and UI
+# tests on an iOS simulator. Generate on a Mac from this directory with `xcodegen generate`;
+# see scripts/build.sh. The toolbox later compiles iOSApp (minus DeskRemoteApp.swift) and
+# Sources/DeskRemoteCore the same way it does the miner.
+name: DeskRemote
+options:
+  bundleIdPrefix: org.personal.deskremote
+  developmentLanguage: zh-Hant
+  deploymentTarget:
+    iOS: "17.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    SWIFT_STRICT_CONCURRENCY: targeted
+    TARGETED_DEVICE_FAMILY: "1"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  DeskRemote:
+    type: application
+    platform: iOS
+    sources:
+      - path: iOSApp
+        excludes: [Info.plist]
+    dependencies:
+      - target: DeskRemoteCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.personal.deskremote.app
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: iOSApp/Info.plist
+    scheme:
+      gatherCoverageData: false
+      testTargets:
+        - DeskRemoteCoreTests
+        - DeskRemoteUITests
+  # API models, the helper client, transcript merging and display text; no UI.
+  DeskRemoteCore:
+    type: framework
+    platform: iOS
+    sources:
+      - Sources/DeskRemoteCore
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: org.personal.deskremote.core
+  DeskRemoteCoreTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - Tests/DeskRemoteCoreTests
+    dependencies:
+      - target: DeskRemoteCore
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: org.personal.deskremote.tests
+  # Simulator UI tests against the fake helper that scripts/build.sh serves on the Mac's loopback.
+  DeskRemoteUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - Tests/DeskRemoteUITests
+    dependencies:
+      - target: DeskRemote
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: org.personal.deskremote.uitests
+        TEST_TARGET_NAME: DeskRemote

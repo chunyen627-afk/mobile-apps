@@ -1,0 +1,14 @@
+{
+  "sessionId": "local_22222222-2222-4222-8222-222222222222",
+  "cliSessionId": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+  "cwd": "C:\\work\\demo-app",
+  "title": "修正建置錯誤",
+  "_minutesAgo": 30,
+  "isArchived": false,
+  "permissionMode": "default",
+  "model": "demo-model",
+  "postTurnSummary": {
+    "status_category": "needs_action",
+    "needs_action": "等待權限"
+  }
+}

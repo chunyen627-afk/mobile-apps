@@ -1,0 +1,7 @@
+{
+  "claude/local_22222222-2222-4222-8222-222222222222": {
+    "promptId": "demo-prompt-1",
+    "tool": "Edit",
+    "text": "要求權限：編輯 C:\\work\\demo-app\\main.c（第 42 行補上分號）"
+  }
+}
