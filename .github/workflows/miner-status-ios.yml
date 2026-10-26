@@ -1,0 +1,131 @@
+name: Build Miner Status iOS
+# Runs only for this app's demo branch. No workflow_dispatch: that needs the file on main.
+on:
+  push:
+    branches: [claude/miner-status-ios-demo]
+    paths:
+      - 'apps/miner-status-ios/**'
+      - '.github/workflows/miner-status-ios.yml'
+# Write access is used only to force-push simulator screenshots (demo data) to one dedicated
+# branch, so the screenshots can be reviewed without signing in.
+permissions:
+  contents: write
+concurrency:
+  group: miner-status-ios-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    # Fail closed for private repositories; standard public runners are free.
+    if: github.event.repository.private == false
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      APP_DIR: apps/miner-status-ios
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install project generator
+        run: brew install xcodegen
+      - name: Build, test and launch smoke
+        working-directory: ${{ env.APP_DIR }}
+        env:
+          RUN_SIM_SMOKE: "1"
+        run: bash scripts/build.sh
+      # The IPA stays on the runner: only its size and SHA256 are recorded.
+      - name: Record IPA size and SHA256
+        working-directory: ${{ env.APP_DIR }}/build
+        run: |
+          size=$(stat -f %z MinerStatus-unsigned.ipa)
+          sha=$(cut -d' ' -f1 MinerStatus-unsigned.ipa.sha256)
+          echo "IPA size: $size bytes"
+          echo "IPA SHA256: $sha"
+          echo "::notice title=IPA (not uploaded)::size ${size} bytes, SHA256 ${sha}"
+          {
+            echo "### MinerStatus-unsigned.ipa (not uploaded)"
+            echo "- size: $size bytes"
+            echo "- SHA256: \`$sha\`"
+            grep -E "Executed [0-9]+ tests?, with [0-9]+ failures" test-summary.txt | tail -1 | sed 's/^/- XCTest: /'
+          } >> "$GITHUB_STEP_SUMMARY"
+      # Public prerelease of the tested IPA, only when the head commit message contains
+      # [release-ipa]; that marker is added only after the user approves the release. 5 MB cap.
+      - name: Publish IPA release (approved builds only)
+        if: success() && contains(github.event.head_commit.message, '[release-ipa]')
+        working-directory: ${{ env.APP_DIR }}/build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          plist=MinerStatus.xcarchive/Products/Applications/MinerStatus.app/Info.plist
+          version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist")
+          build=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$plist")
+          tag="miner-status-${version}-build${build}"
+          asset="MinerStatus-${version}-build${build}-unsigned.ipa"
+          cp MinerStatus-unsigned.ipa "$asset"
+          size=$(stat -f %z "$asset")
+          if [ "$size" -gt 5242880 ]; then
+            echo "IPA exceeds 5 MB; refusing to publish."
+            exit 1
+          fi
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $tag already exists; raise CURRENT_PROJECT_VERSION before releasing again."
+            exit 1
+          fi
+          sha=$(shasum -a 256 "$asset" | cut -d' ' -f1)
+          notes=$(printf '%s\n' \
+            "未簽署 IPA，需用自己的 Apple 帳號簽署後安裝。只含離線示範資料，不含任何真實位址或帳號。" \
+            "" \
+            "- 來源 commit：${GITHUB_SHA}" \
+            "- 建置與測試：run ${GITHUB_RUN_ID}（單元測試與模擬器 UI 測試皆通過才發布）" \
+            "- 大小：${size} bytes" \
+            "- SHA256：${sha}")
+          gh release create "$tag" "$asset" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --prerelease --title "礦機狀態 ${version}（build ${build}）" --notes "$notes"
+          echo "::notice title=IPA release::${tag} ${asset} size ${size} bytes, SHA256 ${sha}"
+      - name: Collect small reports (1 MB limit)
+        id: collect
+        if: always()
+        working-directory: ${{ env.APP_DIR }}/build
+        run: |
+          mkdir -p reports
+          [ -f test-summary.txt ] && cp test-summary.txt reports/
+          [ -f screenshots/launch-demo.jpg ] && cp screenshots/launch-demo.jpg reports/
+          ls -l reports
+          total=$(find reports -type f -exec stat -f %z {} + | awk '{s+=$1} END {print s+0}')
+          echo "reports total: $total bytes"
+          if [ "$total" -gt 1048576 ]; then
+            echo "Reports exceed 1 MB; refusing to upload."
+            exit 1
+          fi
+      # Replaces the branch each run (no history kept). Only demo-data simulator screens; 5 MB cap.
+      - name: Publish simulator screenshots
+        if: always()
+        working-directory: ${{ env.APP_DIR }}/build
+        env:
+          SHOT_BRANCH: ci-screenshots-miner-status-ios
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ ! -f screenshots-ui/INDEX.txt ]; then
+            echo "No UI screenshots to publish."
+            exit 0
+          fi
+          total=$(find screenshots-ui -type f -exec stat -f %z {} + | awk '{s+=$1} END {print s+0}')
+          echo "screenshots total: $total bytes"
+          if [ "$total" -gt 5242880 ]; then
+            echo "Screenshots exceed 5 MB; refusing to publish."
+            exit 1
+          fi
+          cd screenshots-ui
+          printf 'run %s\ncommit %s\n' "$GITHUB_RUN_ID" "$GITHUB_SHA" > RUN.txt
+          git init -q -b "$SHOT_BRANCH"
+          git add .
+          git -c user.name=github-actions -c user.email=41898282+github-actions[bot]@users.noreply.github.com \
+            commit -q -m "Simulator screenshots for run $GITHUB_RUN_ID ($GITHUB_SHA)"
+          git push -q --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/${SHOT_BRANCH}"
+          echo "::notice title=Screenshots::$(grep -c . INDEX.txt) screenshots on branch ${SHOT_BRANCH} for run ${GITHUB_RUN_ID}"
+      - name: Save small reports
+        if: always() && steps.collect.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: MinerStatus-reports
+          path: ${{ env.APP_DIR }}/build/reports
+          if-no-files-found: warn
+          retention-days: 1

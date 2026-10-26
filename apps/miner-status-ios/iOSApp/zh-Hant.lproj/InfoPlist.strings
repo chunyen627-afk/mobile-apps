@@ -1,0 +1,3 @@
+/* Home-screen name. Info.plist keeps an ASCII CFBundleDisplayName because SideStore uses it as the
+   Apple App ID name, which rejects non-ASCII text ("invalid value for the parameter 'appIdName'"). */
+"CFBundleDisplayName" = "礦機狀態";

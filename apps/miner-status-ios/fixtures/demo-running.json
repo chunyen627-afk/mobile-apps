@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "dataOrigin": "demo",
+  "demoNotice": "示範資料（人工編寫）：非真實礦機連線，數值與時間皆為虛構。",
+  "publishedAt": "2026-10-24T17:30:01+08:00",
+  "machines": [
+    {
+      "machineId": "demo-rig-a",
+      "displayName": "示範礦機 A（DEMO）",
+      "worker": "demo-worker-a",
+      "sourceStatus": "ok",
+      "sourceCheckedAt": "2026-10-24T17:30:01+08:00",
+      "sessionId": "demo-session-0001",
+      "sampleSequence": 42,
+      "observedAt": "2026-10-24T17:30:00+08:00",
+      "expectedRunning": true,
+      "minerRunning": {
+        "state": "running",
+        "observedAt": "2026-10-24T17:30:00+08:00"
+      },
+      "hashrate": {
+        "value": 70.0,
+        "unit": "TH/s",
+        "observedAt": "2026-10-24T17:29:58+08:00"
+      },
+      "gpus": [
+        { "index": 0, "temperatureC": 65, "fanPercent": 80, "powerW": 110.0, "observedAt": "2026-10-24T17:30:00+08:00" },
+        { "index": 1, "temperatureC": 66, "fanPercent": 82, "powerW": 105.0, "observedAt": "2026-10-24T17:30:00+08:00" },
+        { "index": 2, "temperatureC": 64, "fanPercent": 78, "powerW": 115.0, "observedAt": "2026-10-24T17:30:00+08:00" }
+      ],
+      "shares": {
+        "accepted": 40,
+        "stale": 0,
+        "rejected": 0,
+        "observedAt": "2026-10-24T17:30:00+08:00",
+        "lastAcceptedAt": "2026-10-24T17:29:45+08:00"
+      },
+      "stop": {
+        "reason": null,
+        "sessionId": null,
+        "observedAt": null
+      }
+    }
+  ]
+}
