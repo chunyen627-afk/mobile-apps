@@ -42,6 +42,12 @@ public enum HelperFailure: Error, Equatable, Sendable {
     case notFound(String?)
     case forbidden
     case readOnly
+    /// Someone used the PC this many seconds ago; the phone may confirm and send anyway.
+    case busyUser(Int?)
+    case locked
+    case promptChanged
+    case badRequest(String?)
+    case queueFull
     case server(String?)
     case unreachable
     case timeout
@@ -100,10 +106,68 @@ public struct HelperClient: Sendable {
         return body.text
     }
 
+    // MARK: - Actions on the PC's windows (each returns at once; follow the action for its result)
+
+    /// Pastes `text` into the conversation on the PC and presses Enter. `clientMsgId` makes a
+    /// retry safe: the helper sends one message per id.
+    public func send(_ app: DeskApp, session id: String, text: String, clientMsgId: String, force: Bool = false) async throws -> ActionStatus {
+        try await post(["v1", app.rawValue, "sessions", id, "messages"],
+                       ActionRequest(text: text, clientMsgId: clientMsgId, force: force ? true : nil))
+    }
+
+    /// Answers the permission question the PC shows now: allow once or deny, nothing broader.
+    public func answer(_ app: DeskApp, session id: String, promptId: String, allow: Bool, force: Bool = false) async throws -> ActionStatus {
+        try await post(["v1", app.rawValue, "sessions", id, "permission"],
+                       ActionRequest(promptId: promptId, decision: allow ? "allow_once" : "deny", force: force ? true : nil))
+    }
+
+    /// Starts a new conversation with `text` as its first message.
+    public func newSession(_ app: DeskApp, text: String, clientMsgId: String, force: Bool = false) async throws -> ActionStatus {
+        try await post(["v1", app.rawValue, "sessions"],
+                       ActionRequest(text: text, clientMsgId: clientMsgId, force: force ? true : nil))
+    }
+
+    /// Brings the conversation up on the PC (to answer a question it is waiting on).
+    public func openOnPC(_ app: DeskApp, session id: String, force: Bool = false) async throws -> ActionStatus {
+        try await post(["v1", app.rawValue, "sessions", id, "open"], ActionRequest(force: force ? true : nil))
+    }
+
+    public func action(_ id: String) async throws -> ActionStatus {
+        try await get(["v1", "actions", id], timeout: 10)
+    }
+
+    /// Polls an action once a second until it finishes or `timeout` passes, reporting each change.
+    public func follow(_ start: ActionStatus, timeout: TimeInterval = 90,
+                       onUpdate: @MainActor (ActionStatus) -> Void = { _ in }) async throws -> ActionStatus {
+        var current = start
+        let deadline = Date().addingTimeInterval(timeout)
+        while !current.finished && Date() < deadline {
+            try await Task.sleep(nanoseconds: 1_000_000_000)
+            let next = try await action(current.id)
+            if next != current { await onUpdate(next) }
+            current = next
+        }
+        return current
+    }
+
+    private func post<T: Decodable>(_ segments: [String], _ body: ActionRequest) async throws -> T {
+        guard let url = endpoint.url(segments) else { throw HelperFailure.badResponse }
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
+        request.httpMethod = "POST"
+        request.httpBody = try JSONEncoder().encode(body)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        return try await perform(request)
+    }
+
     private func get<T: Decodable>(_ segments: [String], query: [URLQueryItem] = [], timeout: TimeInterval) async throws -> T {
         guard let url = endpoint.url(segments, query: query) else { throw HelperFailure.badResponse }
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: timeout)
         request.httpMethod = "GET"
+        return try await perform(request)
+    }
+
+    private func perform<T: Decodable>(_ original: URLRequest) async throws -> T {
+        var request = original
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         let data: Data
@@ -119,7 +183,7 @@ public struct HelperClient: Sendable {
 
     /// Maps a status and body to the decoded value or a `HelperFailure`. Internal for tests.
     static func decode<T: Decodable>(_ type: T.Type, status: Int, data: Data) throws -> T {
-        if status == 200 {
+        if status == 200 || status == 202 {
             do {
                 return try JSONDecoder().decode(T.self, from: data)
             } catch {
@@ -130,6 +194,11 @@ public struct HelperClient: Sendable {
         switch (status, body?.error) {
         case (401, _): throw HelperFailure.unauthorized
         case (429, "locked-out"): throw HelperFailure.lockedOut
+        case (429, _): throw HelperFailure.queueFull
+        case (409, "busy-user"): throw HelperFailure.busyUser(body?.idleSeconds)
+        case (409, "prompt-changed"): throw HelperFailure.promptChanged
+        case (423, _): throw HelperFailure.locked
+        case (400, _), (413, _): throw HelperFailure.badRequest(body?.message)
         case (403, _): throw HelperFailure.forbidden
         case (404, _): throw HelperFailure.notFound(body?.message)
         case (405, _): throw HelperFailure.readOnly

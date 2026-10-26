@@ -75,6 +75,37 @@ final class DecodingTests: XCTestCase {
         XCTAssertEqual(failure(200, #"{"unexpected":true}"#), .badResponse)
     }
 
+    func testMapsActionErrors() {
+        func failure(_ status: Int, _ body: String) -> HelperFailure? {
+            do {
+                _ = try HelperClient.decode(ActionStatus.self, status: status, data: data(body))
+                return nil
+            } catch {
+                return error as? HelperFailure
+            }
+        }
+        XCTAssertEqual(failure(409, #"{"ok":false,"error":"busy-user","message":"m","idleSeconds":5}"#), .busyUser(5))
+        XCTAssertEqual(failure(409, #"{"ok":false,"error":"prompt-changed"}"#), .promptChanged)
+        XCTAssertEqual(failure(423, #"{"ok":false,"error":"locked"}"#), .locked)
+        XCTAssertEqual(failure(400, #"{"ok":false,"error":"bad-request","message":"訊息是空的"}"#), .badRequest("訊息是空的"))
+        XCTAssertEqual(failure(429, #"{"ok":false,"error":"busy"}"#), .queueFull)
+        XCTAssertEqual(DeskText.failure(.busyUser(5)), "電腦有人在用（5 秒前有操作）")
+    }
+
+    func testDecodesActionStatus() throws {
+        let status = try HelperClient.decode(ActionStatus.self, status: 202, data: data("""
+        {"ok":true,"id":"ab12","kind":"new","app":"codex","sessionId":null,"state":"queued","message":"排隊中",
+         "error":null,"verified":null}
+        """))
+        XCTAssertFalse(status.finished)
+        let done = try HelperClient.decode(ActionStatus.self, status: 200, data: data("""
+        {"ok":true,"id":"ab12","kind":"new","app":"codex","sessionId":"0a0","state":"done","message":"已開新對話",
+         "error":null,"verified":true,"title":"幫我看"}
+        """))
+        XCTAssertTrue(done.finished)
+        XCTAssertEqual(done.title, "幫我看")
+    }
+
     func testMapsTransportErrors() {
         XCTAssertEqual(HelperClient.failure(for: URLError(.timedOut)), .timeout)
         XCTAssertEqual(HelperClient.failure(for: URLError(.cancelled)), .cancelled)
@@ -126,6 +157,18 @@ final class TranscriptLogTests: XCTestCase {
         guard case .tool(let orphanCall, let orphan) = log.rows[3] else { return XCTFail("row 3 is not a tool") }
         XCTAssertNil(orphanCall)
         XCTAssertEqual(orphan?.seq, 6)
+    }
+
+    func testPendingTextMatchesOnlyNewerUserMessages() {
+        var log = TranscriptLog()
+        log.apply(page("a", reset: true, [
+            TranscriptEvent(seq: 1, kind: "user", text: "請再檢查一次"),
+            TranscriptEvent(seq: 2, kind: "assistant", text: "請再檢查一次  好的"),
+            TranscriptEvent(seq: 3, kind: "user", text: "請再\n檢查一次\n"),
+        ]))
+        XCTAssertTrue(log.hasUserText("請再 檢查一次", after: 2))
+        XCTAssertFalse(log.hasUserText("請再檢查一次", after: 3), "only messages after the mark count")
+        XCTAssertFalse(log.hasUserText("別的", after: 0))
     }
 
     func testCapsEventsAndKeepsPrompt() {

@@ -56,6 +56,17 @@ public struct TranscriptLog: Equatable, Sendable {
         return before != after
     }
 
+    /// Whether a user message starting like `text` arrived after event `seq`: a message sent
+    /// from the phone is shown as pending until the transcript itself has it.
+    public func hasUserText(_ text: String, after seq: Int) -> Bool {
+        let want = String(Self.normalized(text).prefix(40))
+        return events.contains { $0.seq > seq && $0.kind == "user" && Self.normalized($0.text).hasPrefix(want) }
+    }
+
+    static func normalized(_ text: String) -> String {
+        text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+    }
+
     /// Events grouped for display: each tool result sits under the first earlier call of the
     /// same tool that has no result yet (calls can run in parallel).
     public var rows: [TranscriptRow] {

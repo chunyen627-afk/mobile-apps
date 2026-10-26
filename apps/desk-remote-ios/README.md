@@ -2,16 +2,17 @@
 
 用 iPhone 原生輸入操作自己 Windows 電腦上的 Claude 桌面版與 Codex 桌面版：看對話清單、打字送出、看回覆、按權限的「允許一次」／「拒絕」，並在手機核准需要管理員權限的指令（`elevate`）。設計見 [DESIGN.md](DESIGN.md)（2026-10-26 核准）。
 
-**目前是 P1 唯讀版**：手機能看電腦清單、Claude／Codex 對話清單與即時逐字稿；送出訊息、權限按鈕、新對話與 `elevate` 在之後的階段。
+**目前到 P2**：P1 唯讀（清單、即時逐字稿）之外，手機可以送出訊息、按「允許一次」／「拒絕」、開新對話、把等待處理的對話在電腦上打開。`elevate` 在 P3。
 
 ## 驗證狀態
 
 | 項目 | 狀態 |
 | --- | --- |
-| 電腦端小幫手 `pc-helper/`（唯讀） | 24 項 Python 單元測試在 Windows 本機與 macOS CI 都通過；另做 9 項變異測試（故意改壞子代理過濾、驗證、網段、Codex 去重與子執行緒過濾、權限詢問等），全部被測試抓到 |
-| 小幫手讀真實資料 | **辦公室電腦本機通過**（2026-10-26）：經 ZeroTier 位址讀到 Claude 與 Codex 的真實對話清單與逐字稿，long-poll 正常；未帶 token 回 401。依結果修掉兩處：隱藏 Codex 自動化 heartbeat、拿掉會誤導的 Codex 權限標籤 |
-| iPhone App（P1 唯讀畫面）、核心 `DeskRemoteCore` | **編譯通過**（macOS CI，Xcode 16.4） |
-| 單元與模擬器 UI 測試 | **通過**：單元 15 項、UI 11 項，皆 0 失敗，14 張截圖已逐張人工檢視（[run 40339664008](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40339664008)，iPhone 16 Pro 模擬器；截圖在 `ci-screenshots-desk-remote-ios` 分支）。未簽署 IPA 200,371 bytes，未上傳 |
+| 小幫手 P1 讀取 | 辦公室電腦讀真實資料通過（2026-10-26）：經 ZeroTier 位址讀到 Claude 與 Codex 的真實對話清單與逐字稿，long-poll 正常；未帶 token 回 401 |
+| 小幫手 P2 操作（`pc-helper/`） | 實作完成；42 項 Python 單元測試在 Windows 本機通過（用假的視窗驅動）；另做 10 項變異測試（拿掉標題比對、有人在用的檢查、鎖定檢查、重送去重、權限詢問比對、同名對話拒絕、通知不含內文、允許一次的前景檢查、扣除自身輸入、送出後確認），全部被測試抓到 |
+| UIA 工作程序 `uia_worker.ps1` | 只做過唯讀檢查：在辦公室電腦讀到兩個桌面版目前開著的對話、權限區塊與輸入框，沒有點擊或輸入。**送出、允許、新對話尚未在真的桌面版上實測**（實測會切換畫面上的對話，要先問使用者） |
+| iPhone App P2 畫面 | 實作完成；**尚未編譯**，等 CI |
+| P1 的 CI 證據 | 單元 15、UI 11 項 0 失敗（[run 40339664008](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40339664008)） |
 | 實機 | 依決定在工具箱第三分頁驗證；尚未進行 |
 | 小幫手常駐安裝 | `install.ps1` 已寫好，**尚未在電腦上執行** |
 
@@ -24,26 +25,47 @@ iOSApp/                    SwiftUI 畫面；DeskRemoteApp.swift 是唯一 @main 
 Sources/DeskRemoteCore/    API 模型、HelperClient、TranscriptLog、DeskText（無 UI）
 Tests/                     DeskRemoteCoreTests（單元）、DeskRemoteUITests（模擬器 UI）
 fixtures/fake-helper/      人工編寫的示範資料：兩個桌面版的對話清單、逐字稿、權限詢問
-pc-helper/                 電腦端小幫手（Python 標準函式庫）、單元測試、安裝腳本、設定範例
+pc-helper/                 電腦端小幫手（Python 標準函式庫）、UIA 工作程序、單元測試、安裝腳本、設定範例
 scripts/build.sh           macOS CI：小幫手測試 → 產生專案 → 模擬器單元與 UI 測試 → Release 封裝
 ```
 
-## 電腦端小幫手（P1 唯讀）
+## 電腦端小幫手
 
 - `desk_remote_helper.py`：只綁設定的 ZeroTier 位址，`/v1/*` 要 `Authorization: Bearer <token>`，錯 5 次鎖 10 分鐘並送 ntfy。
-- 對話清單：Claude 讀桌面版自己的 `claude-code-sessions/*/*/local_*.json`；Codex 讀 `~/.codex/state_5.sqlite`（唯讀），讀不到時改用 `session_index.jsonl`。
+- 對話清單：Claude 讀桌面版自己的 `claude-code-sessions/*/*/local_*.json`；Codex 讀 `~/.codex/state_5.sqlite`（唯讀），讀不到時改用 `session_index.jsonl`。不寫桌面版任何檔案。
 - 逐字稿：Claude `~/.claude/projects/*/<cliSessionId>.jsonl`、Codex rollout 檔，只從檔尾讀新增的完整行；工具輸出太長時只送前段，手機點開再取全文。
-- 不寫桌面版任何檔案，也還不碰視窗。
+- **操作視窗（P2）**：一個常駐的 PowerShell（`uia_worker.ps1`，純 ASCII，控制項名稱從 `ui_strings.json` 傳入）做 UI Automation；判斷能不能做都在 Python 裡，有單元測試。
+  - 每個動作排隊、一次一個；送出、開對話、新對話、Claude 的「允許一次」要電腦閒置 60 秒以上（扣掉小幫手自己的按鍵），否則回「有人在用」，手機確認後才強制。電腦鎖定時一律拒絕。
+  - 送出前先用對話自己的連結（`claude://claude.ai/epitaxy/local_<id>`、`codex://threads/<id>`）打開，等頁面標題完全相符才打字；Codex 連結沒切過去時，只有標題唯一才改按側邊欄。標題不符、視窗切不到前面、剪貼簿無法安全保存時一律中止，不送任何字。
+  - 剪貼簿：保存並還原文字、RTF、HTML、圖片、檔案清單；放入的文字標記為不進剪貼簿歷程與雲端剪貼簿。
+  - 送出後 20 秒內要在該對話的逐字稿看到這段文字，看不到就回報「還沒看到」。同一個 `clientMsgId` 只送一次。
+  - 權限：每 4 秒看一次目前開著的對話有沒有詢問；手機只能按「允許一次」或「拒絕」，送來的 `promptId` 必須等於畫面上的那個詢問。Claude 的「允許一次」先試鍵盤開選單，不行才點一次滑鼠（先確認游標下就是那個按鈕）。
+  - ntfy：每個動作（只有電腦名稱、App、對話標題，不含訊息內文）、出現權限詢問、一輪完成都通知。
+  - 設定 `drive_windows: false` 可回到唯讀；`idle_seconds` 改閒置門檻。
 - 安裝：`install.ps1 -BindIp <ZeroTier 位址> -Network <網段>` 會在 `%LOCALAPPDATA%\DeskRemote\config.json` 產生隨機 token（只有本人可讀），並註冊登入時啟動的排程工作（一般權限）。連線密碼目前要從 config.json 手動輸入到手機；QR 配對在之後的階段。
 - 測試：`cd pc-helper && python -m unittest discover -s tests -v`。
 
-## API（v1，唯讀）
+## API（v1）
 
-`GET /health`、`GET /v1/state`、`GET /v1/{claude|codex}/sessions?limit=50`、`GET /v1/{app}/sessions/{id}/events?after=&epoch=&prompt=&wait=25`（long-poll）、`GET /v1/{app}/sessions/{id}/items/{itemId}`。其他方法回 405。
+| 方法與路徑 | 用途 |
+| --- | --- |
+| `GET /health`、`GET /v1/state` | 健康檢查；電腦狀態、閒置、鎖定、能做的事（`capabilities`） |
+| `GET /v1/{claude\|codex}/sessions?limit=50` | 對話清單 |
+| `GET /v1/{app}/sessions/{id}/events?after=&epoch=&prompt=&wait=25` | 逐字稿事件與目前的權限詢問（long-poll） |
+| `GET /v1/{app}/sessions/{id}/items/{itemId}` | 被截短的工具輸出全文 |
+| `POST /v1/{app}/sessions/{id}/messages` | `{text, clientMsgId, force?}` 送出訊息 |
+| `POST /v1/{app}/sessions/{id}/permission` | `{promptId, decision: allow_once\|deny, force?}` |
+| `POST /v1/{app}/sessions/{id}/open` | 在電腦上打開這個對話 |
+| `POST /v1/{app}/sessions` | `{text, clientMsgId, force?}` 開新對話 |
+| `GET /v1/actions/{id}` | 動作結果：`queued`／`running`／`done`／`failed`，送出是否已在逐字稿確認 |
+
+錯誤：`409 busy-user`（含 `idleSeconds`）、`423 locked`、`409 prompt-changed`、`400`、`413`、`429`。
 
 ## 手機端
 
-- 電腦清單 → 電腦（狀態、Claude／Codex）→ 對話清單（新到舊）→ 聊天畫面。
+- 電腦清單 → 電腦（狀態、Claude／Codex）→ 對話清單（新到舊，右上角開新對話）→ 聊天畫面。
 - 只在前景讀取：電腦清單 30 秒、電腦頁 15 秒、對話清單 10 秒、聊天畫面 long-poll；離開前景即停止。
 - 連線密碼只存在 iPhone 鑰匙圈（本機限定），位址存在 UserDefaults；倉庫裡沒有任何位址或密碼。
-- 工具呼叫收合成一列；權限詢問顯示成卡片（這一版只能看）；輸入框先顯示但停用。
+- 聊天畫面：工具呼叫收合成一列；原生輸入框（多行、聽寫）；送出的訊息先以虛線泡泡顯示進度，逐字稿出現後才換成正式訊息；失敗時可重試或移除。
+- 權限卡片有「允許一次」「拒絕」，沒有「永遠允許」。對話在等待處理但電腦上開著別的對話時，顯示「在電腦上打開這個對話」。
+- 電腦有人在用時跳出確認「仍要送出」，取消就不送。

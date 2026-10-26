@@ -104,7 +104,7 @@ final class DeskRemoteUITests: XCTestCase {
         // a new row scrolls the chat to the bottom.
         XCTAssertTrue(text("已加上解除安裝").waitForExistence(timeout: 25), "live reply did not arrive")
         XCTAssertTrue(reveal(text("再加上解除安裝的步驟。")), "live user line did not arrive")
-        XCTAssertTrue(element("input-bar").exists, "input bar missing")
+        XCTAssertTrue(element("chat-input").exists, "input box missing")
         snapshot("06-chat-live")
     }
 
@@ -130,8 +130,10 @@ final class DeskRemoteUITests: XCTestCase {
         openChat("claude", claudeB)
         let card = element("prompt-card")
         XCTAssertTrue(card.waitForExistence(timeout: 10), "permission card missing")
-        XCTAssertTrue(card.label.contains("要求權限：編輯"), "card says \(card.label)")
-        XCTAssertTrue(card.label.contains("請先在電腦上"), "read-only note missing: \(card.label)")
+        XCTAssertTrue(waitFor(element("prompt-text"), labelContains: "要求權限：編輯", timeout: 5),
+                      "card says \(element("prompt-text").label)")
+        XCTAssertTrue(element("prompt-allow").exists && element("prompt-deny").exists, "answer buttons missing")
+        XCTAssertFalse(text("永遠允許").exists, "the phone must not offer a broader permission")
         snapshot("08-permission-card")
     }
 
@@ -168,6 +170,73 @@ final class DeskRemoteUITests: XCTestCase {
         let row = element("pc-row-關機的電腦")
         XCTAssertTrue(waitFor(row, labelContains: "無法連線", timeout: 20), "row says \(row.label)")
         snapshot("11-unreachable")
+    }
+
+    // MARK: - Driving the PC (fake helper)
+
+    func test12PermissionAllowOnce() throws {
+        try launchWithHelper()
+        openChat("claude", claudeB)
+        let allow = element("prompt-allow")
+        XCTAssertTrue(allow.waitForExistence(timeout: 10), "allow button missing")
+        allow.tap()
+        // The question goes away once the PC answered it, and the conversation carries on.
+        XCTAssertTrue(text("已補上分號並存檔（示範）").waitForExistence(timeout: 20), "answer did not reach the PC")
+        XCTAssertTrue(poll(timeout: 10) { !self.element("prompt-card").exists }, "card stayed after answering")
+        snapshot("12-permission-answered")
+    }
+
+    func test13SendMessage() throws {
+        try launchWithHelper()
+        openChat("claude", claudeA)
+        XCTAssertTrue(text("整理好了，安裝段落改成三步").waitForExistence(timeout: 10), "chat did not load")
+        // A vertical TextField is a text view to XCUITest, so look it up by identifier only.
+        let input = element("chat-input")
+        XCTAssertTrue(input.waitForExistence(timeout: 5), "input box missing")
+        input.tap()
+        input.typeText("please check again")
+        snapshot("13a-typed")
+        app.buttons["chat-send"].tap()
+        XCTAssertTrue(text("（示範）收到：please check again").waitForExistence(timeout: 25), "reply to the sent message missing")
+        XCTAssertTrue(poll(timeout: 10) { !self.element("pending-bubble").exists }, "pending bubble stayed after the transcript had it")
+        XCTAssertTrue(text("please check again").exists, "sent message not in the transcript")
+        snapshot("13-sent")
+    }
+
+    func test14BusyPCAsksBeforeSending() throws {
+        let helper = try helperSettings()
+        let busy = try XCTUnwrap(ProcessInfo.processInfo.environment["DESK_BUSY_PORT"], "DESK_BUSY_PORT not set")
+        launch(pc: "示範電腦|\(helper.host)|\(busy)|\(helper.token)")
+        openChat("claude", claudeA)
+        XCTAssertTrue(text("整理好了，安裝段落改成三步").waitForExistence(timeout: 10), "chat did not load")
+        let input = element("chat-input")
+        input.tap()
+        input.typeText("send while busy")
+        app.buttons["chat-send"].tap()
+        let sendAnyway = app.alerts.buttons["仍要送出"]
+        XCTAssertTrue(sendAnyway.waitForExistence(timeout: 10), "no confirmation while someone uses the PC")
+        XCTAssertTrue(app.alerts.firstMatch.label.contains("電腦有人在用"), "alert says \(app.alerts.firstMatch.label)")
+        snapshot("14a-busy-confirm")
+        sendAnyway.tap()
+        XCTAssertTrue(text("（示範）收到：send while busy").waitForExistence(timeout: 25), "forced send did not arrive")
+        snapshot("14-busy-sent")
+    }
+
+    func test15NewCodexConversation() throws {
+        try launchWithHelper()
+        openSessions("codex")
+        let new = element("new-session")
+        XCTAssertTrue(new.waitForExistence(timeout: 10), "new conversation button missing")
+        new.tap()
+        let field = element("new-session-text")
+        XCTAssertTrue(field.waitForExistence(timeout: 5), "new conversation sheet missing")
+        field.tap()
+        field.typeText("look at README")
+        snapshot("15a-new-session")
+        app.buttons["new-session-send"].tap()
+        XCTAssertTrue(app.navigationBars["look at README"].waitForExistence(timeout: 25), "did not open the new conversation")
+        XCTAssertTrue(text("（示範）新對話收到：look at README").waitForExistence(timeout: 20), "new conversation reply missing")
+        snapshot("15-new-session-chat")
     }
 
     // MARK: - Helpers

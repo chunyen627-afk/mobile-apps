@@ -38,6 +38,35 @@ public struct HelperState: Decodable, Equatable, Sendable {
     public let warnings: [String]
 
     public func app(_ app: DeskApp) -> AppState? { apps[app.rawValue] }
+
+    /// "read", "send", "permission", "new", "open".
+    public func can(_ capability: String) -> Bool { capabilities.contains(capability) }
+}
+
+/// `POST` answers and `GET /v1/actions/{id}`: one action the helper runs on the PC's windows.
+public struct ActionStatus: Decodable, Equatable, Sendable {
+    public let id: String
+    public let kind: String
+    public let app: String
+    public let sessionId: String?
+    /// "queued", "running", "done" or "failed".
+    public let state: String
+    public let message: String
+    public let error: String?
+    /// The sent text (or the new conversation) showed up in the transcript.
+    public let verified: Bool?
+    public let title: String?
+
+    public var finished: Bool { state == "done" || state == "failed" }
+}
+
+struct ActionRequest: Encodable {
+    var text: String?
+    var clientMsgId: String?
+    var promptId: String?
+    var decision: String?
+    var project: String?
+    var force: Bool?
 }
 
 /// One conversation in `GET /v1/{app}/sessions`.
@@ -50,6 +79,17 @@ public struct SessionSummary: Decodable, Equatable, Hashable, Identifiable, Send
     public let status: String
     public let permission: String?
     public let hasTranscript: Bool
+
+    /// A conversation the phone just started, before the next list refresh describes it.
+    public init(id: String, title: String) {
+        self.id = id
+        self.title = title
+        folder = nil
+        updatedAt = nil
+        status = "active"
+        permission = nil
+        hasTranscript = true
+    }
 }
 
 public struct SessionList: Decodable, Equatable, Sendable {
@@ -111,4 +151,5 @@ struct ItemText: Decodable, Sendable {
 struct HelperErrorBody: Decodable, Sendable {
     let error: String
     let message: String?
+    let idleSeconds: Int?
 }

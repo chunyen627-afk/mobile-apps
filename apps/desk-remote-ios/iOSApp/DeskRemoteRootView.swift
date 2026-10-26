@@ -5,16 +5,19 @@ import SwiftUI
 /// The standalone app and the toolbox tab both show this view.
 struct DeskRemoteRootView: View {
     @StateObject private var store = DeskStore()
+    @State private var path: [DeskRoute] = []
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             DeskPCListView(store: store)
                 .navigationDestination(for: DeskRoute.self) { route in
                     switch route {
                     case .pc(let id):
                         DeskPCView(store: store, pcID: id)
                     case .sessions(let id, let app):
-                        DeskSessionListView(store: store, pcID: id, app: app)
+                        DeskSessionListView(store: store, pcID: id, app: app) { session in
+                            path.append(.chat(id, app, session))
+                        }
                     case .chat(let id, let app, let session):
                         DeskChatView(store: store, pcID: id, app: app, session: session)
                     }

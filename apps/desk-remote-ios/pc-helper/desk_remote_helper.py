@@ -1,9 +1,10 @@
-"""Desk remote helper: lets the iPhone app read the Claude and Codex desktop apps on this PC.
+"""Desk remote helper: lets the iPhone app use the Claude and Codex desktop apps on this PC.
 
-Phase 1 is read-only. It lists the desktop apps' conversations from their own files and serves
-each conversation's transcript as events, over HTTP bound to one ZeroTier address only, with a
-Bearer token (five wrong tokens lock it for ten minutes, sent to ntfy). It never writes to the
-desktop apps' files and does not touch their windows yet.
+It lists the desktop apps' conversations from their own files and serves each conversation's
+transcript as events, over HTTP bound to one ZeroTier address only, with a Bearer token (five
+wrong tokens lock it for ten minutes, sent to ntfy). It never writes to the desktop apps' files.
+Sending a message, answering a permission question and starting a conversation go through the
+apps' own windows (UI Automation, uia_worker.ps1), only while nobody is using the PC.
 
 Run at login in the user's interactive session:  pythonw desk_remote_helper.py [--config PATH]
 Simulator tests:  python3 desk_remote_helper.py --fake ../fixtures/fake-helper
@@ -11,6 +12,7 @@ Simulator tests:  python3 desk_remote_helper.py --fake ../fixtures/fake-helper
 import argparse
 import ctypes
 import glob
+import hashlib
 import hmac
 import ipaddress
 import json
@@ -31,7 +33,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-VERSION = '0.1.0'
+VERSION = '0.2.0'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -442,6 +444,18 @@ class ClaudeSource:
         self.paths[cli] = path
         return path
 
+    def info(self, session_id):
+        """Title, deep link and the page title the desktop app shows for this conversation."""
+        folder = self.sessions_dir()
+        if not folder or not CLAUDE_ID.match(session_id):
+            return None
+        data = self.metadata(os.path.join(folder, f'{session_id}.json'))
+        if data is None:
+            return None
+        title = (data.get('title') or '').strip()
+        return {'id': session_id, 'title': title, 'link': f'claude://claude.ai/epitaxy/{session_id}',
+                'doc': f'{title} - Claude Code'}
+
     def list_sessions(self, limit, now=None):
         now = now or time.time()
         folder = self.sessions_dir()
@@ -549,6 +563,16 @@ class CodexSource:
         found = glob.glob(str(self.home / 'sessions' / '*' / '*' / '*' / f'rollout-*-{thread_id}.jsonl'))
         return Path(found[0]) if found else None
 
+    def info(self, thread_id):
+        """Title (the sidebar name, which is also the page title) and deep link of one thread."""
+        if not CODEX_ID.match(thread_id):
+            return None
+        for row in self.list_sessions(100):
+            if row['id'] == thread_id:
+                return {'id': thread_id, 'title': row['title'], 'link': f'codex://threads/{thread_id}',
+                        'doc': row['title']}
+        return None
+
     def list_sessions(self, limit, now=None):
         now = now or time.time()
         self.warning = None
@@ -583,18 +607,41 @@ def _mtime(path):
 
 
 class WindowsPresence:
+    """Idle time leaves out the helper's own keystrokes and clicks: input that lands between
+    begin_own() and shortly after end_own() is not a person at the keyboard."""
+
     def __init__(self):
         self.cache, self.cached_at = None, 0.0
+        self.own = None          # (start tick, end tick or None while acting)
+        self.real_before = None  # the last real input tick before the helper acted
 
     @staticmethod
-    def idle_seconds():
+    def ticks():
+        return ctypes.windll.kernel32.GetTickCount() & 0xFFFFFFFF
+
+    @staticmethod
+    def last_input():
         class LastInput(ctypes.Structure):
             _fields_ = [('cbSize', ctypes.c_uint), ('dwTime', ctypes.c_uint)]
         info = LastInput()
         info.cbSize = ctypes.sizeof(info)
         if not ctypes.windll.user32.GetLastInputInfo(ctypes.byref(info)):
             return None
-        return max(0, (ctypes.windll.kernel32.GetTickCount() - info.dwTime) & 0xFFFFFFFF) // 1000
+        return info.dwTime
+
+    def idle_seconds(self):
+        last, now = self.last_input(), self.ticks()
+        if last is None:
+            return None
+        return own_adjusted_idle(last, now, self.own, self.real_before)
+
+    def begin_own(self):
+        self.real_before = self.last_input()
+        self.own = (self.ticks(), None)
+
+    def end_own(self):
+        if self.own:
+            self.own = (self.own[0], self.ticks())
 
     @staticmethod
     def locked():
@@ -649,9 +696,22 @@ class WindowsPresence:
                 windows = self.app_windows()
             except OSError:
                 windows = {'claude': None, 'codex': None}
-            self.cache, self.cached_at = {'idleSeconds': self.idle_seconds(), 'locked': self.locked(),
-                                          'windows': windows}, now
-        return self.cache
+            self.cache, self.cached_at = {'windows': windows}, now
+        return {'idleSeconds': self.idle_seconds(), 'locked': self.locked(), 'windows': self.cache['windows']}
+
+
+def own_adjusted_idle(last, now, own, real_before, grace_ms=1500):
+    """Idle seconds from tick counts (32-bit, wrapping). Input inside the helper's own window
+    [start, end + grace] counts from the real input before it instead."""
+    def since(tick):
+        return ((now - tick) & 0xFFFFFFFF)
+    if own and real_before is not None:
+        start, end = own
+        after_start = since(start) >= since(last)                   # last input is not before start
+        before_end = end is None or since(last) + grace_ms >= since(end)  # not later than end + grace
+        if after_start and before_end:
+            last = real_before
+    return since(last) // 1000
 
 
 class FixedPresence:
@@ -660,6 +720,12 @@ class FixedPresence:
 
     def snapshot(self):
         return self.values
+
+    def begin_own(self):
+        pass
+
+    def end_own(self):
+        pass
 
 
 # ---------------------------------------------------------------------------------------------
@@ -738,6 +804,8 @@ class Hub:
         self.prompts = prompts or (lambda app, session_id: None)
         self.on_events = on_events or (lambda app, session_id: None)
         self.transcripts = {}             # (app, id) -> Transcript, most recently used last
+        self.info_cache = {}
+        self.capabilities = ['read']      # plus send, permission, new and open once windows can be driven
         self.lock = threading.Lock()
 
     def state(self):
@@ -749,7 +817,7 @@ class Hub:
         skipped = sum(t.skipped for t in list(self.transcripts.values()))
         if skipped:
             warnings.append(f'逐字稿有 {skipped} 行無法解析，已略過')
-        return {'ok': True, 'pc': {'name': self.pc_name, 'helperVersion': VERSION}, 'capabilities': ['read'],
+        return {'ok': True, 'pc': {'name': self.pc_name, 'helperVersion': VERSION}, 'capabilities': self.capabilities,
                 'apps': apps, 'presence': {'idleSeconds': presence.get('idleSeconds'), 'locked': presence.get('locked')},
                 'warnings': warnings}
 
@@ -800,12 +868,516 @@ class Hub:
         transcript = self.transcript(app, session_id)
         return transcript.item(item_id) if transcript is not None and ITEM_ID.match(item_id) else None
 
+    def info(self, app, session_id):
+        """Title, link and expected page title, cached for a few seconds (long-polls ask often)."""
+        key = (app, session_id)
+        now = time.monotonic()
+        cached = self.info_cache.get(key)
+        if cached and now - cached[0] < 10:
+            return cached[1]
+        value = self.sources[app].info(session_id)
+        self.info_cache[key] = (now, value)
+        return value
+
+
+# ---------------------------------------------------------------------------------------------
+# Driving the desktop apps' windows (phase 2). The PowerShell worker does the UI Automation;
+# everything that decides what is safe to do stays here, where it is unit tested.
+
+
+class ActionError(Exception):
+    def __init__(self, code, message=''):
+        super().__init__(f'{code}: {message}')
+        self.code, self.message = code, message
+
+
+def load_strings(path=None):
+    path = Path(path or Path(__file__).with_name('ui_strings.json'))
+    return json.loads(path.read_text(encoding='utf-8'))
+
+
+class UiaWorker:
+    """One long-lived `uia_worker.ps1`. Requests are serialized; a timeout or crash restarts it."""
+
+    def __init__(self, script=None):
+        self.script = Path(script or Path(__file__).with_name('uia_worker.ps1'))
+        self.lock = threading.Lock()
+        self.process = None
+        self.lines = None
+
+    def start(self):
+        import queue
+        import subprocess
+        self.process = subprocess.Popen(
+            ['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-STA', '-File', str(self.script)],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        self.lines = queue.Queue()
+        out = self.process.stdout
+
+        def pump():
+            for raw in iter(out.readline, b''):
+                self.lines.put(raw)
+            self.lines.put(None)
+        threading.Thread(target=pump, daemon=True).start()
+
+    def stop(self):
+        if self.process is not None:
+            try:
+                self.process.kill()
+            except OSError:
+                pass
+        self.process = None
+
+    def request(self, command, timeout=25):
+        import queue
+        with self.lock:
+            if self.process is None or self.process.poll() is not None:
+                self.start()
+            try:
+                self.process.stdin.write((json.dumps(command, ensure_ascii=True) + '\n').encode('ascii'))
+                self.process.stdin.flush()
+                raw = self.lines.get(timeout=timeout)
+            except (OSError, queue.Empty):
+                self.stop()
+                raise ActionError('timeout', '畫面操作逾時')
+            if raw is None:
+                self.stop()
+                raise ActionError('worker-error', '畫面操作程式結束了')
+            answer = json.loads(raw.decode('ascii'))
+        if not answer.get('ok'):
+            raise ActionError(answer.get('error') or 'worker-error', answer.get('message') or '')
+        return answer
+
+
+class WindowsDriver:
+    """The real desktop apps, through the worker. `doc` is the page title that must be open."""
+
+    def __init__(self, strings, worker=None):
+        self.strings = strings
+        self.worker = worker or UiaWorker()
+
+    def ask(self, app, **command):
+        command['app'] = app
+        command['strings'] = self.strings[app]
+        return self.worker.request(command)
+
+    def inspect(self, app):
+        return self.ask(app, cmd='inspect')
+
+    def docs(self, app):
+        answer = self.ask(app, cmd='docs')
+        return answer.get('docs') or [] if answer.get('window') else None
+
+    def open(self, app, info):
+        os.startfile(info['link'])  # Each desktop app opens its own conversation link.
+
+    def invoke(self, app, name, doc=None):
+        self.ask(app, cmd='invoke', name=name, doc=doc)
+
+    def send(self, app, doc, text):
+        self.ask(app, cmd='send', doc=doc, text=text)
+
+    def new_send(self, app, button, text):
+        self.ask(app, cmd='new_send', name=button, text=text)
+
+    def answer(self, app, doc, decision, expect):
+        return self.ask(app, cmd='answer', doc=doc, decision=decision, expect=expect).get('how')
+
+
+def prompt_id(app, doc, text):
+    return hashlib.sha256(f'{app}\n{doc}\n{text}'.encode('utf-8')).hexdigest()[:16]
+
+
+class UiWatcher:
+    """Looks at each desktop app every few seconds: which conversation is open and whether it is
+    asking for permission. Sends ntfy when a question appears and when a turn finishes."""
+
+    def __init__(self, hub, driver, notify=None, pc_name='', interval=4):
+        self.hub, self.driver, self.notify, self.pc_name, self.interval = hub, driver, notify, pc_name, interval
+        self.state = {}         # app -> {'docs': [...], 'prompt': {...} or None}
+        self.turns = {}         # (app, id) -> last parser status
+        self.last_turn_check = 0.0
+        self.lock = threading.Lock()
+
+    def look(self, app):
+        try:
+            answer = self.driver.inspect(app)
+        except ActionError:
+            return
+        prompt = None
+        docs = answer.get('docs') or []
+        raw = answer.get('prompt')
+        if raw and raw.get('text') and len(docs) == 1:
+            prompt = {'promptId': prompt_id(app, docs[0], raw['text']), 'text': raw['text'], 'tool': None,
+                      'doc': docs[0]}
+        with self.lock:
+            old = (self.state.get(app) or {}).get('prompt')
+            self.state[app] = {'docs': docs, 'prompt': prompt, 'window': answer.get('window')}
+        if prompt and (not old or old['promptId'] != prompt['promptId']):
+            title = prompt['doc'].removesuffix(' - Claude Code')
+            self.send(f'🔔 {APP_NAMES[app]} 在等你核准', f'{self.pc_name}・「{title}」：{prompt["text"][:120]}', 4, ['bell'])
+
+    def prompt_for(self, app, session_id):
+        info = self.hub.info(app, session_id)
+        with self.lock:
+            prompt = (self.state.get(app) or {}).get('prompt')
+        if not prompt or not info or prompt['doc'] != info['doc']:
+            return None
+        return {k: prompt[k] for k in ('promptId', 'text', 'tool')}
+
+    def current(self, app):
+        with self.lock:
+            return dict(self.state.get(app) or {})
+
+    def check_turns(self):
+        """A conversation that was working and is now idle has finished a turn."""
+        for app, source in self.hub.sources.items():
+            for row in source.list_sessions(15):
+                key = (app, row['id'])
+                if row['status'] != 'active' and key not in self.turns:
+                    continue
+                transcript = self.hub.transcript(app, row['id'])
+                if transcript is None:
+                    continue
+                transcript.refresh()
+                status = transcript.parser.status
+                if self.turns.get(key) == 'working' and status == 'idle':
+                    self.send(f'✅ {APP_NAMES[app]} 完成一輪', f'{self.pc_name}・「{row["title"]}」', 3, ['white_check_mark'])
+                self.turns[key] = status
+
+    def send(self, title, message, priority, tags):
+        if self.notify:
+            try:
+                self.notify(title, message, priority, tags)
+            except OSError:
+                logging.exception('notification failed')
+
+    def tick(self):
+        for app in APPS:
+            self.look(app)
+        if time.monotonic() - self.last_turn_check > 15:
+            self.last_turn_check = time.monotonic()
+            self.check_turns()
+
+    def run_forever(self):
+        while True:
+            try:
+                self.tick()
+            except Exception:
+                logging.exception('watcher failed')
+            time.sleep(self.interval)
+
+
+APP_NAMES = {'claude': 'Claude', 'codex': 'Codex'}
+
+
+def normalized(text):
+    return re.sub(r'\s+', ' ', text or '').strip()
+
+
+class ActionRunner:
+    """Every action that touches a window runs here, one at a time.
+
+    Before anything that needs the foreground (sending, opening, a new conversation, Claude's
+    allow-once dropdown) the PC must be unlocked and idle for `idle_seconds`, unless the phone
+    confirmed "send anyway". The conversation is opened through its own link and its page title
+    checked before any keystroke; afterwards the sent text must show up in that conversation's
+    transcript. Each action is logged and sent to ntfy (titles only, never the message text).
+    """
+
+    KEEP = 1800        # seconds an action's result stays readable
+    MAX_QUEUED = 5
+    MAX_TEXT = 20000
+
+    def __init__(self, hub, driver, presence, watcher, notify=None, pc_name='', strings=None,
+                 idle_seconds=60, verify_seconds=20, doc_wait=8, clock=time.monotonic):
+        self.hub, self.driver, self.presence, self.watcher = hub, driver, presence, watcher
+        self.notify, self.pc_name, self.strings = notify, pc_name, strings or {}
+        self.idle_seconds, self.verify_seconds, self.doc_wait, self.clock = idle_seconds, verify_seconds, doc_wait, clock
+        self.actions = {}
+        self.client_ids = {}
+        self.queue = []
+        self.lock = threading.Condition()
+
+    # -- submitting (HTTP thread) --------------------------------------------------------------
+
+    def gate(self, force, needs_front=True):
+        """None when the PC may be driven now, else (status, body)."""
+        presence = self.presence.snapshot()
+        if presence.get('locked'):
+            return 423, error('locked', '電腦已鎖定，請先解鎖（可用 Google 遠端桌面）')
+        idle = presence.get('idleSeconds')
+        if needs_front and not force and idle is not None and idle < self.idle_seconds:
+            body = error('busy-user', f'電腦有人在用（{idle} 秒前有操作）')
+            body['idleSeconds'] = idle
+            return 409, body
+        return None
+
+    def submit(self, kind, app, session_id, payload):
+        force = bool(payload.get('force'))
+        text = payload.get('text')
+        if kind in ('send', 'new'):
+            if not isinstance(text, str) or not text.strip():
+                return 400, error('bad-request', '訊息是空的')
+            if len(text) > self.MAX_TEXT:
+                return 400, error('bad-request', f'訊息太長（上限 {self.MAX_TEXT} 字）')
+        info = None
+        if kind in ('send', 'open', 'permission'):
+            info = self.hub.info(app, session_id)
+            if info is None:
+                return 404, error('not-found', '找不到這個對話')
+        if kind == 'permission':
+            decision = payload.get('decision')
+            if decision not in ('allow_once', 'deny'):
+                return 400, error('bad-request', '只能選允許一次或拒絕')
+            current = self.watcher.prompt_for(app, session_id)
+            if not current or current['promptId'] != payload.get('promptId'):
+                return 409, error('prompt-changed', '電腦上的權限詢問已經不一樣了，請重新整理')
+            needs_front = app == 'claude' and decision == 'allow_once'
+        else:
+            needs_front = True
+        denied = self.gate(force, needs_front)
+        if denied:
+            return denied
+        with self.lock:
+            client_id = payload.get('clientMsgId')
+            if isinstance(client_id, str) and client_id in self.client_ids:
+                existing = self.actions.get(self.client_ids[client_id])
+                if existing:
+                    return 202, self.public(existing)
+            if len(self.queue) >= self.MAX_QUEUED:
+                return 429, error('busy', '電腦端還有動作在排隊，請稍後再試')
+            action = {'id': secrets.token_hex(6), 'kind': kind, 'app': app, 'sessionId': session_id, 'info': info,
+                      'text': text, 'decision': payload.get('decision'), 'promptId': payload.get('promptId'),
+                      'project': payload.get('project'), 'force': force, 'state': 'queued', 'message': '排隊中',
+                      'error': None, 'verified': None, 'created': self.clock()}
+            self.actions[action['id']] = action
+            if isinstance(client_id, str) and len(client_id) <= 100:
+                self.client_ids[client_id] = action['id']
+            self.queue.append(action['id'])
+            self.prune()
+            self.lock.notify()
+        return 202, self.public(action)
+
+    def prune(self):
+        now = self.clock()
+        for action_id in [k for k, v in self.actions.items() if now - v['created'] > self.KEEP]:
+            self.actions.pop(action_id, None)
+        self.client_ids = {k: v for k, v in self.client_ids.items() if v in self.actions}
+
+    @staticmethod
+    def public(action):
+        keys = ('id', 'kind', 'app', 'sessionId', 'state', 'message', 'error', 'verified')
+        out = {k: action[k] for k in keys}
+        out['ok'] = action['state'] != 'failed'
+        if action.get('title'):
+            out['title'] = action['title']
+        return out
+
+    def status(self, action_id):
+        with self.lock:
+            action = self.actions.get(action_id)
+            return self.public(action) if action else None
+
+    # -- running (one worker thread) -----------------------------------------------------------
+
+    def run_forever(self):
+        while True:
+            with self.lock:
+                while not self.queue:
+                    self.lock.wait()
+                action = self.actions.get(self.queue[0])
+            if action is not None:
+                self.run(action)
+            with self.lock:
+                self.queue.pop(0)
+
+    def update(self, action, **fields):
+        with self.lock:
+            action.update(fields)
+
+    def run(self, action):
+        self.update(action, state='running', message='處理中')
+        handler = {'send': self.do_send, 'permission': self.do_permission, 'new': self.do_new,
+                   'open': self.do_open}[action['kind']]
+        try:
+            handler(action)
+        except ActionError as exc:
+            logging.warning('%s %s failed: %s %s', action['kind'], action['app'], exc.code, exc.message)
+            self.update(action, state='failed', error=exc.code, message=FAILURE_TEXT.get(exc.code, exc.message or exc.code))
+            self.tell(action, failed=True)
+        except Exception:
+            logging.exception('action failed')
+            self.update(action, state='failed', error='internal', message='電腦端發生錯誤')
+            self.tell(action, failed=True)
+        else:
+            self.tell(action)
+        finally:
+            self.presence.end_own()
+
+    def tell(self, action, failed=False):
+        if not self.notify:
+            return
+        verb = {'send': '送出訊息', 'permission': '回覆權限', 'new': '開新對話', 'open': '打開對話'}[action['kind']]
+        if action['kind'] == 'permission' and not failed:
+            verb = '允許一次' if action['decision'] == 'allow_once' else '拒絕'
+        title = (action.get('info') or {}).get('title') or action.get('title') or ''
+        head = f"{'⚠️ 手機' + verb + '失敗' if failed else '📱 手機' + verb}：{APP_NAMES[action['app']]}"
+        body = f"{self.pc_name}・「{title}」" + (f"：{action['message']}" if failed else '')
+        try:
+            self.notify(head, body, 4 if failed else 3, ['iphone'])
+        except OSError:
+            logging.exception('action notification failed')
+
+    def recheck(self, action, needs_front=True):
+        denied = self.gate(action['force'], needs_front)
+        if denied:
+            raise ActionError(denied[1]['error'], denied[1]['message'])
+
+    def wait_doc(self, app, doc):
+        deadline = self.clock() + self.doc_wait
+        while True:
+            docs = self.driver.docs(app)
+            if docs is None:
+                raise ActionError('app-not-running', '')
+            if docs.count(doc) == 1:
+                return True
+            if self.clock() >= deadline:
+                return False
+            time.sleep(0.25)
+
+    def open_conversation(self, action):
+        app, info = action['app'], action['info']
+        docs = self.driver.docs(app)
+        if docs is None:
+            raise ActionError('app-not-running', '')
+        if docs.count(info['doc']) == 1:
+            return
+        self.recheck(action)
+        self.presence.begin_own()
+        self.driver.open(app, info)
+        if self.wait_doc(app, info['doc']):
+            return
+        if app == 'codex':
+            # Fallback: the sidebar button with this title, only when the title is unique.
+            titles = [row['title'] for row in self.hub.sources['codex'].list_sessions(100)]
+            if titles.count(info['title']) != 1:
+                raise ActionError('duplicate-title', '')
+            self.driver.invoke(app, info['title'])
+            if self.wait_doc(app, info['doc']):
+                return
+        raise ActionError('title-mismatch', '')
+
+    def do_open(self, action):
+        self.open_conversation(action)
+        self.update(action, state='done', message='已在電腦上打開')
+
+    def do_send(self, action):
+        app, info, text = action['app'], action['info'], action['text']
+        transcript = self.hub.transcript(app, action['sessionId'])
+        if transcript is not None:
+            transcript.refresh()
+        mark = transcript.seq if transcript is not None else 0
+        self.open_conversation(action)
+        self.recheck(action)
+        self.presence.begin_own()
+        self.driver.send(app, info['doc'], text)
+        self.presence.end_own()
+        self.update(action, message='已送出，確認中')
+        verified = self.verify(transcript, mark, text)
+        self.update(action, state='done', verified=verified,
+                    message='已送出' if verified else f'已送出，但 {self.verify_seconds} 秒內還沒在對話紀錄看到')
+
+    def verify(self, transcript, mark, text):
+        if transcript is None:
+            return False
+        want = normalized(text)[:40]
+        deadline = self.clock() + self.verify_seconds
+        while True:
+            transcript.refresh()
+            with transcript.lock:
+                fresh = [e for e in transcript.events if e['seq'] > mark and e['kind'] == 'user']
+            if any(normalized(e['text']).startswith(want) for e in fresh):
+                return True
+            if self.clock() >= deadline:
+                return False
+            time.sleep(0.5)
+
+    def do_permission(self, action):
+        app, info = action['app'], action['info']
+        current = self.watcher.prompt_for(app, action['sessionId'])
+        if not current or current['promptId'] != action['promptId']:
+            raise ActionError('prompt-changed', '')
+        needs_front = app == 'claude' and action['decision'] == 'allow_once'
+        if needs_front:
+            self.recheck(action)
+            self.presence.begin_own()
+        how = self.driver.answer(app, info['doc'], action['decision'], current['text'])
+        logging.info('permission %s %s answered by %s', action['decision'], app, how)
+        self.presence.end_own()
+        deadline = self.clock() + 8
+        while self.clock() < deadline:
+            self.watcher.look(app)
+            if not self.watcher.prompt_for(app, action['sessionId']):
+                break
+            time.sleep(0.5)
+        self.update(action, state='done', message='已允許一次' if action['decision'] == 'allow_once' else '已拒絕')
+
+    def do_new(self, action):
+        app, text, project = action['app'], action['text'], action.get('project')
+        source = self.hub.sources[app]
+        before = {row['id'] for row in source.list_sessions(50)}
+        strings = self.strings.get(app) or {}
+        button = strings.get('new', '')
+        if project and app == 'codex':
+            button = strings.get('new_in_project', '{project}').format(project=project)
+        self.recheck(action)
+        self.presence.begin_own()
+        self.driver.new_send(app, button, text)
+        self.presence.end_own()
+        self.update(action, message='已送出，等待新對話出現')
+        deadline = self.clock() + self.verify_seconds
+        while True:
+            fresh = [row for row in source.list_sessions(50) if row['id'] not in before]
+            if fresh:
+                row = fresh[0]
+                self.update(action, state='done', verified=True, sessionId=row['id'], title=row['title'],
+                            message='已開新對話')
+                return
+            if self.clock() >= deadline:
+                self.update(action, state='done', verified=False,
+                            message=f'已送出，但 {self.verify_seconds} 秒內清單還沒出現新對話')
+                return
+            time.sleep(0.5)
+
+
+FAILURE_TEXT = {
+    'locked': '電腦已鎖定',
+    'busy-user': '電腦有人在用，已取消',
+    'app-not-running': '桌面版沒有開著',
+    'title-mismatch': '打開的不是這個對話，已中止（沒有送出任何字）',
+    'duplicate-title': '有同名的對話，無法確定是哪一個；請在電腦上改名',
+    'no-prompt-box': '找不到輸入框（可能正在詢問權限）',
+    'focus-failed': '無法把視窗切到前面，已中止（沒有送出任何字）',
+    'clipboard-unsafe': '剪貼簿裡的內容無法安全保存，已中止',
+    'prompt-changed': '權限詢問已經不一樣了',
+    'menu-failed': '打不開「允許一次」選單',
+    'not-found': '畫面上找不到需要的按鈕',
+    'not-invokable': '按鈕按不下去',
+    'timeout': '畫面操作逾時',
+    'worker-error': '畫面操作程式出錯',
+}
+
 
 # ---------------------------------------------------------------------------------------------
 # HTTP.
 
 
-def handler_for(hub, gate, networks):
+MAX_BODY = 64 * 1024
+
+
+def handler_for(hub, gate, networks, runner=None):
     class Handler(BaseHTTPRequestHandler):
         server_version = 'DeskRemoteHelper'
         sys_version = ''
@@ -839,12 +1411,18 @@ def handler_for(hub, gate, networks):
             return any(peer in network for network in networks)
 
         def do_GET(self):
+            self.dispatch(self.route)
+
+        def do_POST(self):
+            self.dispatch(self.route_post)
+
+        def dispatch(self, route):
             if not self.allowed():
                 return self.send_json(403, error('forbidden', '不在允許的網路'))
             url = urllib.parse.urlsplit(self.path)
             query = urllib.parse.parse_qs(url.query)
             parts = [urllib.parse.unquote(p) for p in url.path.strip('/').split('/')]
-            if parts == ['health']:
+            if parts == ['health'] and route == self.route:
                 return self.send_json(200, {'ok': True})
             if not parts or parts[0] != 'v1':
                 return self.send_json(404, error('not-found', '沒有這個路徑'))
@@ -852,10 +1430,43 @@ def handler_for(hub, gate, networks):
             if denied:
                 return self.send_json(*denied)
             try:
-                return self.route(parts[1:], query)
+                return route(parts[1:], query)
             except Exception:
                 logging.exception('request failed')
                 return self.send_json(500, error('internal', '電腦端發生錯誤'))
+
+        def read_body(self):
+            """The JSON object sent with a POST, or None after answering 400/413."""
+            try:
+                length = int(self.headers.get('Content-Length') or 0)
+            except ValueError:
+                length = -1
+            if length < 0 or length > MAX_BODY:
+                self.send_json(413, error('too-large', '內容太大'))
+                return None
+            try:
+                body = json.loads(self.rfile.read(length).decode('utf-8')) if length else {}
+            except (ValueError, UnicodeDecodeError):
+                body = None
+            if not isinstance(body, dict):
+                self.send_json(400, error('bad-request', '內容格式不對'))
+                return None
+            return body
+
+        def route_post(self, parts, query):
+            if runner is None:
+                return self.send_json(405, error('read-only', '這一版只能讀取'))
+            body = self.read_body()
+            if body is None:
+                return None
+            if len(parts) >= 2 and parts[0] in APPS and parts[1] == 'sessions':
+                app = parts[0]
+                if len(parts) == 2:
+                    return self.send_json(*runner.submit('new', app, None, body))
+                kinds = {'messages': 'send', 'permission': 'permission', 'open': 'open'}
+                if len(parts) == 4 and parts[3] in kinds and hub.sources[app].id_pattern.match(parts[2]):
+                    return self.send_json(*runner.submit(kinds[parts[3]], app, parts[2], body))
+            return self.send_json(404, error('not-found', '沒有這個路徑'))
 
         def route(self, parts, query):
             def number(name, default):
@@ -865,6 +1476,11 @@ def handler_for(hub, gate, networks):
                     return default
             if parts == ['state']:
                 return self.send_json(200, hub.state())
+            if len(parts) == 2 and parts[0] == 'actions' and runner is not None:
+                status = runner.status(parts[1])
+                if status is None:
+                    return self.send_json(404, error('not-found', '找不到這個動作（可能已過期）'))
+                return self.send_json(200, status)
             if len(parts) >= 2 and parts[0] in APPS and parts[1] == 'sessions':
                 app = parts[0]
                 if len(parts) == 2:
@@ -883,9 +1499,9 @@ def handler_for(hub, gate, networks):
             return self.send_json(404, error('not-found', '沒有這個路徑'))
 
         def denied(self):
-            self.send_json(405, error('read-only', '這一版只能讀取'))
+            self.send_json(405, error('method-not-allowed', '不支援這個方法'))
 
-        do_POST = do_PUT = do_DELETE = do_PATCH = do_OPTIONS = do_HEAD = denied
+        do_PUT = do_DELETE = do_PATCH = do_OPTIONS = do_HEAD = denied
 
     return Handler
 
@@ -991,6 +1607,31 @@ class FakeSetup:
         return {'claude': ClaudeSource(pc / 'claude-data', pc / 'claude-projects'),
                 'codex': CodexSource(pc / 'codex')}
 
+    def create_session(self, app, title):
+        """A new conversation in each app's own layout; returns (id, transcript path)."""
+        import uuid
+        pc = self.root / 'pc'
+        now_ms = int(time.time() * 1000)
+        if app == 'claude':
+            session_id, cli = f'local_{uuid.uuid4()}', str(uuid.uuid4())
+            folder = next(pc.glob('claude-data/claude_*/claude-code-sessions/*/*'))
+            (folder / f'{session_id}.json').write_text(json.dumps({
+                'sessionId': session_id, 'cliSessionId': cli, 'cwd': 'C:\\work\\demo-app', 'title': title,
+                'lastActivityAt': now_ms, 'isArchived': False, 'permissionMode': 'auto'}, ensure_ascii=False),
+                encoding='utf-8')
+            path = next(pc.glob('claude-projects/*')) / f'{cli}.jsonl'
+        else:
+            session_id = str(uuid.uuid4())
+            path = pc / 'codex' / 'sessions' / '2026' / '10' / '26' / f'rollout-2026-10-26T12-00-00-{session_id}.jsonl'
+            connection = sqlite3.connect(pc / 'codex' / 'state_5.sqlite')
+            connection.execute('INSERT INTO threads VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+                               (session_id, str(path), title, title, now_ms, now_ms, now_ms // 1000, 0,
+                                'C:\\work\\demo-app', None, 'vscode'))
+            connection.commit()
+            connection.close()
+        path.write_text('', encoding='utf-8')
+        return session_id, path
+
     def on_events(self, app, session_id):
         """The first time the app opens a scripted conversation, start appending its lines."""
         key = f'{app}/{session_id}'
@@ -1012,14 +1653,123 @@ class FakeSetup:
             except OSError:
                 return  # The fixture copy was removed (a test finished).
 
-    def prompts(self, app, session_id):
-        return self.prompts_data.get(f'{app}/{session_id}')
+class FakeDriver:
+    """Stands in for the desktop windows in fake mode: one open conversation per app, a
+    permission question from prompts.json while its conversation is open, and transcripts that
+    gain the sent message and a scripted reply, written in each app's own file format."""
+
+    def __init__(self, setup, hub, reply_after=2.0):
+        self.setup, self.hub, self.reply_after = setup, hub, reply_after
+        self.lock = threading.Lock()
+        self.answered = set()
+        self.calls = []
+        self.open_doc = {}
+        for key in setup.prompts_data:
+            app, session_id = key.split('/', 1)
+            info = hub.info(app, session_id)
+            if info and app not in self.open_doc:
+                self.open_doc[app] = info['doc']
+        for app in APPS:
+            if app not in self.open_doc:
+                rows = hub.sources[app].list_sessions(1)
+                if rows:
+                    self.open_doc[app] = hub.info(app, rows[0]['id'])['doc']
+
+    def session_for_doc(self, app, doc):
+        for row in self.hub.sources[app].list_sessions(100):
+            info = self.hub.sources[app].info(row['id'])
+            if info and info['doc'] == doc:
+                return row['id']
+        return None
+
+    def pending_prompt(self, app):
+        session_id = self.session_for_doc(app, self.open_doc.get(app))
+        key = f'{app}/{session_id}'
+        if session_id and key in self.setup.prompts_data and key not in self.answered:
+            return key, self.setup.prompts_data[key]
+        return None, None
+
+    def inspect(self, app):
+        _, prompt = self.pending_prompt(app)
+        return {'ok': True, 'window': True, 'docs': [self.open_doc.get(app)], 'edit': prompt is None,
+                'prompt': {'text': prompt['text'], 'buttons': ['拒絕', '允許一次']} if prompt else None}
+
+    def docs(self, app):
+        return [self.open_doc.get(app)]
+
+    def open(self, app, info):
+        self.calls.append(('open', app, info['id']))
+        self.open_doc[app] = info['doc']
+
+    def invoke(self, app, name, doc=None):
+        self.calls.append(('invoke', app, name))
+        for row in self.hub.sources[app].list_sessions(100):
+            if row['title'] == name:
+                self.open_doc[app] = self.hub.sources[app].info(row['id'])['doc']
+                return
+        raise ActionError('not-found', '')
+
+    def send(self, app, doc, text):
+        self.calls.append(('send', app, doc))
+        if self.open_doc.get(app) != doc:
+            raise ActionError('title-mismatch', '')
+        session_id = self.session_for_doc(app, doc)
+        path = self.hub.sources[app].transcript_path(session_id)
+        self.write(app, path, 'user', text)
+        self.later(app, path, f'（示範）收到：{text[:30]}')
+
+    def new_send(self, app, button, text):
+        self.calls.append(('new_send', app, button))
+        session_id, path = self.setup.create_session(app, text[:24])
+        self.open_doc[app] = self.hub.sources[app].info(session_id)['doc']
+        self.write(app, path, 'user', text)
+        self.later(app, path, f'（示範）新對話收到：{text[:30]}')
+
+    def answer(self, app, doc, decision, expect):
+        self.calls.append(('answer', app, decision))
+        key, prompt = self.pending_prompt(app)
+        if self.open_doc.get(app) != doc or not prompt or prompt['text'] != expect:
+            raise ActionError('prompt-changed', '')
+        self.answered.add(key)
+        path = self.hub.sources[app].transcript_path(key.split('/', 1)[1])
+        self.write(app, path, 'assistant', '已補上分號並存檔（示範）' if decision == 'allow_once' else '好的，先不修改。')
+        return 'fake'
+
+    def later(self, app, path, text):
+        def reply():
+            time.sleep(self.reply_after)
+            self.write(app, path, 'assistant', text)
+        threading.Thread(target=reply, daemon=True).start()
+
+    def write(self, app, path, role, text):
+        ts = datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%S.000Z')
+        if app == 'claude':
+            if role == 'user':
+                lines = [{'type': 'user', 'timestamp': ts, 'message': {'role': 'user', 'content': text}}]
+            else:
+                lines = [{'type': 'assistant', 'timestamp': ts, 'message': {
+                    'role': 'assistant', 'content': [{'type': 'text', 'text': text}], 'stop_reason': 'end_turn'}}]
+        elif role == 'user':
+            lines = [{'timestamp': ts, 'type': 'event_msg', 'payload': {'type': 'task_started'}},
+                     {'timestamp': ts, 'type': 'event_msg', 'payload': {'type': 'item_completed', 'item': {
+                         'type': 'UserMessage', 'content': [{'type': 'text', 'text': text}]}}}]
+        else:
+            lines = [{'timestamp': ts, 'type': 'event_msg', 'payload': {'type': 'item_completed', 'item': {
+                'type': 'AgentMessage', 'content': [{'type': 'Text', 'text': text}]}}},
+                {'timestamp': ts, 'type': 'event_msg', 'payload': {'type': 'task_complete'}}]
+        with self.lock:
+            try:
+                with Path(path).open('a', encoding='utf-8') as handle:
+                    for line in lines:
+                        handle.write(json.dumps(line, ensure_ascii=False) + '\n')
+            except OSError:
+                pass  # The fixture copy was removed (a test finished).
 
 
-def serve(hub, gate, cfg, networks):
+def serve(hub, gate, cfg, networks, runner=None):
     while True:
         try:
-            server = ThreadingHTTPServer((cfg['bind_ip'], cfg['port']), handler_for(hub, gate, networks))
+            server = ThreadingHTTPServer((cfg['bind_ip'], cfg['port']), handler_for(hub, gate, networks, runner))
             break
         except OSError as exc:
             if getattr(exc, 'winerror', None) != 10049:
@@ -1032,31 +1782,55 @@ def serve(hub, gate, cfg, networks):
     server.serve_forever(poll_interval=1)
 
 
+def build_driving(hub, driver, notify, pc_name, cfg, interval, verify_seconds):
+    """Watcher and action runner over `driver`, both on their own threads."""
+    watcher = UiWatcher(hub, driver, notify, pc_name, interval=interval)
+    hub.prompts = watcher.prompt_for
+    runner = ActionRunner(hub, driver, hub.presence, watcher, notify, pc_name, load_strings(),
+                          idle_seconds=int(cfg.get('idle_seconds', 60)), verify_seconds=verify_seconds)
+    hub.capabilities = ['read', 'send', 'permission', 'new', 'open']
+    threading.Thread(target=watcher.run_forever, daemon=True).start()
+    threading.Thread(target=runner.run_forever, daemon=True).start()
+    return runner
+
+
 def main(argv=None):
-    parser = argparse.ArgumentParser(description='Desk remote helper (read-only phase)')
+    parser = argparse.ArgumentParser(description='Desk remote helper')
     parser.add_argument('--config', type=Path, default=None)
     parser.add_argument('--fake', type=Path, default=None, help='serve hand-written fixtures (simulator tests)')
+    parser.add_argument('--fake-port', type=int, default=None, help='fake mode: listen on this port instead')
+    parser.add_argument('--fake-idle', type=int, default=None, help='fake mode: report this many idle seconds')
     args = parser.parse_args(argv)
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
     if args.fake:
         logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
         fake = FakeSetup(args.fake)
-        cfg = fake.cfg
+        cfg = dict(fake.cfg)
+        presence = dict(cfg['presence'])
+        if args.fake_idle is not None:
+            presence['idleSeconds'] = args.fake_idle
+        if args.fake_port:
+            cfg['port'] = args.fake_port
         networks = [ipaddress.ip_network(item) for item in cfg['allowed_networks']]
-        hub = Hub(cfg['pc_name'], fake.sources(), FixedPresence(cfg['presence']), fake.prompts, fake.on_events)
+        hub = Hub(cfg['pc_name'], fake.sources(), FixedPresence(presence), on_events=fake.on_events)
+        runner = build_driving(hub, FakeDriver(fake, hub), None, cfg['pc_name'], cfg, interval=1, verify_seconds=10)
         gate = AuthGate(cfg['token'], None, cfg['pc_name'])
-        return serve(hub, gate, cfg, networks)
+        return serve(hub, gate, cfg, networks, runner)
     path = args.config or default_config_path()
     cfg, networks = load_config(path)
     log = RotatingFileHandler(path.parent / 'helper.log', maxBytes=1048576, backupCount=3, encoding='utf-8')
     log.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s', '%Y-%m-%d %H:%M:%S'))
     logger.addHandler(log)
     notifier = Notifier(cfg)
+    notify = notifier.post if (cfg.get('notify') or {}).get('topic') else None
     pc_name = cfg.get('pc_name') or os.environ.get('COMPUTERNAME', 'PC')
     hub = Hub(pc_name, real_sources(cfg), WindowsPresence())
-    gate = AuthGate(cfg['token'], notifier.post, pc_name)
-    return serve(hub, gate, cfg, networks)
+    runner = None
+    if cfg.get('drive_windows', True):
+        runner = build_driving(hub, WindowsDriver(load_strings()), notify, pc_name, cfg, interval=4, verify_seconds=20)
+    gate = AuthGate(cfg['token'], notify, pc_name)
+    return serve(hub, gate, cfg, networks, runner)
 
 
 if __name__ == '__main__':

@@ -1,0 +1,17 @@
+{
+  "_comment": "Names of the desktop apps' controls as UI Automation reports them (Traditional Chinese UI, Claude 3.6556, Codex 26.1016). Change these, not the code, when an app update renames a control.",
+  "claude": {
+    "edit": "提示詞",
+    "deny": "拒絕",
+    "more_allow": "更多允許選項",
+    "allow_once": "允許一次",
+    "new": "新增"
+  },
+  "codex": {
+    "edit": "與 Codex 協作",
+    "deny": "拒絕",
+    "allow_once": "允許一次",
+    "new": "新對話",
+    "new_in_project": "在 {project} 中開始新對話"
+  }
+}
