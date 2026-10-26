@@ -208,25 +208,50 @@ function Menu-Item($w, $name) {
 # on the dropdown's centre, only when Claude's window is the top window at that point (Chromium
 # reports only unnamed groups there, so the element itself cannot be checked); then the menu
 # item is invoked.
+# One real click on the centre of $e, only when $w is the top window at that point.
+function Click-Element($w, $e, $what) {
+  $r = $e.Current.BoundingRectangle
+  if ($r.IsEmpty -or $r.Width -lt 2) { Fail 'menu-failed' "$what has no position on screen" }
+  $pt = New-Object DeskWin+POINT
+  $pt.X = [int]($r.X + $r.Width / 2); $pt.Y = [int]($r.Y + $r.Height / 2)
+  $top = [DeskWin]::GetAncestor([DeskWin]::WindowFromPoint($pt), 2)  # GA_ROOT
+  if ($top -ne [IntPtr]$w.Current.NativeWindowHandle) { Fail 'focus-failed' "another window covers $what" }
+  [DeskWin]::SetCursorPos($pt.X, $pt.Y) | Out-Null
+  [DeskWin]::mouse_event(2, 0, 0, 0, [UIntPtr]::Zero); [DeskWin]::mouse_event(4, 0, 0, 0, [UIntPtr]::Zero)
+}
+
+# Claude 3.6556 shows "allow once" as a button of its own (checked live 10/27); earlier builds
+# kept it in the "more allow options" dropdown. Prefer the button: Invoke, else one checked click.
+# Without it, open the dropdown with one checked click and invoke its menu item.
+function Prompt-Gone($w, $s, $seconds) {
+  for ($i = 0; $i -lt ($seconds * 4); $i++) {
+    Start-Sleep -Milliseconds 250
+    if (-not (Find-ByName $w $CT::Button $s.deny)) { return $true }
+  }
+  return $false
+}
+
 function Claude-AllowOnce($w, $s) {
+  $direct = Find-ByName $w $CT::Button $s.allow_once
+  # Invoke can report success without doing anything (found live 10/27): only a question that
+  # goes away counts; otherwise fall through to one checked click.
+  if ($direct -and (Invoke-Element $direct) -and (Prompt-Gone $w $s 3)) { return 'invoke' }
+  $direct = Find-ByName $w $CT::Button $s.allow_once
   $more = Find-ByName $w $CT::Button $s.more_allow
-  if (-not $more) { Fail 'prompt-changed' 'the allow menu is not on screen' }
+  if (-not $direct -and -not $more) { Fail 'prompt-changed' 'no allow button is on screen' }
   $before = [DeskWin]::GetForegroundWindow()
   $cursor = New-Object DeskWin+POINT
   [DeskWin]::GetCursorPos([ref]$cursor) | Out-Null
   $how = $null
   try {
     Bring-Front $w
-    $more = Find-ByName $w $CT::Button $s.more_allow  # positions can change when the window moves up
-    $r = $more.Current.BoundingRectangle
-    if ($r.IsEmpty -or $r.Width -lt 2) { Fail 'menu-failed' 'the allow menu has no position on screen' }
-    $pt = New-Object DeskWin+POINT
-    $pt.X = [int]($r.X + $r.Width / 2); $pt.Y = [int]($r.Y + $r.Height / 2)
-    $top = [DeskWin]::GetAncestor([DeskWin]::WindowFromPoint($pt), 2)  # GA_ROOT
-    if ($top -ne [IntPtr]$w.Current.NativeWindowHandle) { Fail 'focus-failed' 'another window covers the allow menu' }
-    [DeskWin]::SetCursorPos($pt.X, $pt.Y) | Out-Null
-    [DeskWin]::mouse_event(2, 0, 0, 0, [UIntPtr]::Zero); [DeskWin]::mouse_event(4, 0, 0, 0, [UIntPtr]::Zero)
-    if (Menu-Item $w $s.allow_once) { $how = 'click' }
+    if ($direct) {
+      Click-Element $w (Find-ByName $w $CT::Button $s.allow_once) 'the allow button'
+      if (-not (Prompt-Gone $w $s 4)) { Fail 'still-asking' 'the question is still on screen after the click' }
+      return 'click'
+    }
+    Click-Element $w (Find-ByName $w $CT::Button $s.more_allow) 'the allow menu'
+    if (Menu-Item $w $s.allow_once) { $how = 'menu click' }
     if (-not $how) {
       $menus = @($w.FindAll($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::MenuItem))) |
         ForEach-Object { $_.Current.Name })

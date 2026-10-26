@@ -1334,11 +1334,15 @@ class ActionRunner:
         how = self.driver.answer(app, info['doc'], action['decision'], current['text'])
         logging.info('permission %s %s answered by %s', action['decision'], app, how)
         self.presence.end_own()
+        # Only a question that goes away counts as answered (a button once reported success live
+        # without doing anything).
         deadline = self.clock() + 8
-        while self.clock() < deadline:
+        while True:
             self.watcher.look(app)
             if not self.watcher.prompt_for(app, action['sessionId']):
                 break
+            if self.clock() >= deadline:
+                raise ActionError('still-asking', '')
             time.sleep(0.5)
         self.update(action, state='done', message='已允許一次' if action['decision'] == 'allow_once' else '已拒絕')
 
@@ -1383,6 +1387,7 @@ FAILURE_TEXT = {
     'paste-failed': '貼上後輸入框沒有出現這段文字，已清掉並中止（沒有送出）',
     'prompt-changed': '權限詢問已經不一樣了',
     'menu-failed': '打不開「允許一次」選單',
+    'still-asking': '按了之後電腦上仍在詢問，可能沒有按到',
     'not-found': '畫面上找不到需要的按鈕',
     'not-invokable': '按鈕按不下去',
     'timeout': '畫面操作逾時',

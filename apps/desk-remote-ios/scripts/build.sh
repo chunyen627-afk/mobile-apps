@@ -4,7 +4,7 @@
 # Requires Xcode 15+, XcodeGen and python3; this script installs nothing.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-EXPECTED_HELPER_TESTS="${EXPECTED_HELPER_TESTS:-43}"
+EXPECTED_HELPER_TESTS="${EXPECTED_HELPER_TESTS:-44}"
 EXPECTED_TESTS="${EXPECTED_TESTS:-18}"
 EXPECTED_UI_TESTS="${EXPECTED_UI_TESTS:-15}"
 FIXTURES=fixtures/fake-helper

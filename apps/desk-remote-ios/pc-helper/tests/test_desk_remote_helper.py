@@ -260,6 +260,17 @@ def drive(fake, presence=None, driver_class=None, notify=None):
     return hub, driver, watcher, runner
 
 
+class FastClock:
+    """A monotonic clock that jumps a second per reading, so timeouts pass without waiting."""
+
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        self.now += 1.0
+        return self.now
+
+
 def run_all(runner):
     while runner.queue:
         runner.run(runner.actions[runner.queue.pop(0)])
@@ -369,6 +380,18 @@ class DrivingTests(FakeEnvironment):
         self.assertEqual(runner.status(body['id'])['message'], '已允許一次')
         self.assertIsNone(watcher.prompt_for('claude', B))
         self.assertIn('已補上分號並存檔（示範）', [e['text'] for e in drain(hub.transcript('claude', B))])
+
+    def test_answer_that_leaves_the_question_on_screen_fails(self):
+        class DeadButtonDriver(h.FakeDriver):
+            def answer(self, app, doc, decision, expect):
+                self.calls.append(('answer', app, decision))
+                return 'invoke'  # reports success, changes nothing
+        _, _, watcher, runner = drive(self.fake, driver_class=DeadButtonDriver)
+        runner.clock = FastClock()
+        prompt = watcher.prompt_for('claude', B)
+        body = runner.submit('permission', 'claude', B, {'promptId': prompt['promptId'], 'decision': 'allow_once'})[1]
+        run_all(runner)
+        self.assertEqual(runner.status(body['id'])['error'], 'still-asking')
 
     def test_deny_works_while_someone_uses_the_pc_but_allow_once_waits(self):
         presence = dict(self.fake.cfg['presence'], idleSeconds=3)

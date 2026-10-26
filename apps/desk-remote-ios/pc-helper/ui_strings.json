@@ -1,5 +1,5 @@
 {
-  "_comment": "Names of the desktop apps' controls as UI Automation reports them (Traditional Chinese UI, Claude 3.6556, Codex 26.1016). Change these, not the code, when an app update renames a control.",
+  "_comment": "Names of the desktop apps' controls as UI Automation reports them (Traditional Chinese UI, Claude 3.6556, Codex 26.1016). Change these, not the code, when an app update renames a control. Claude 3.6556 shows allow_once as its own button; more_allow is the fallback for builds that keep it in the dropdown.",
   "claude": {
     "edit": "提示詞",
     "deny": "拒絕",
