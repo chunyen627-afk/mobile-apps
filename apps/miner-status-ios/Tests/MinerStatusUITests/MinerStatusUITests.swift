@@ -9,6 +9,9 @@ final class MinerStatusUITests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
         app = XCUIApplication()
+        // Each test starts in the demo, whatever source an earlier test left open; test19 checks
+        // the reconnect itself.
+        app.launchArguments = ["-resumeLive", "NO"]
         app.launch()
         XCTAssertTrue(banner.waitForExistence(timeout: 10), "mode banner missing after launch")
     }
@@ -267,7 +270,26 @@ final class MinerStatusUITests: XCTestCase {
         snapshot("22-wake-result")
     }
 
-    // MARK: - Helpers
+    // MARK: - Reconnect after iOS closed the app
+
+    func test19RelaunchReconnectsUntilTheUserStops() throws {
+        startLive(try sourceURL("MINER_UI_SOURCE_URL"))
+        XCTAssertTrue(waitFor(banner, labelContains: "自訂來源（唯讀）", timeout: 10), "banner did not switch to live mode")
+        XCTAssertTrue(element("machine-demo-rig-a").waitForExistence(timeout: 20), "live feed rows did not appear")
+        // A relaunch stands in for iOS ending the app in the background: it must reconnect by itself.
+        app.terminate()
+        app.launchArguments = []
+        app.launch()
+        XCTAssertTrue(waitFor(banner, labelContains: "自訂來源（唯讀）", timeout: 15), "relaunch fell back to the demo: \(banner.label)")
+        XCTAssertTrue(element("machine-demo-rig-a").waitForExistence(timeout: 20), "rows missing after the reconnect")
+        snapshot("23-relaunch-reconnected")
+        // After the user stops reading, the next launch starts in the demo again.
+        stopLiveAndCheckDemo()
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(waitFor(banner, labelContains: "示範模式", timeout: 15), "relaunch after stopping did not start in the demo: \(banner.label)")
+    }
+
     // MARK: - Helpers
 
     private var banner: XCUIElement { element("mode-banner") }
