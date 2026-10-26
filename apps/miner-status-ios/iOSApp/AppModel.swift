@@ -343,6 +343,12 @@ final class AppModel: ObservableObject {
     }
 
     private func pollLoop() async {
+        // A fetch from a just-cancelled loop may still be finishing: wait for it, or this loop's
+        // first fetch is skipped and the screen stays empty for a whole interval. Happened at
+        // launch, when the reconnect's fetch was cancelled by the first foreground event.
+        while isFetching, !Task.isCancelled {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
         while !Task.isCancelled {
             await fetchOnce()
             let deadline = ContinuousClock.now + .seconds(pollInterval)
@@ -363,7 +369,8 @@ final class AppModel: ObservableObject {
         guard mode == .live, self.client?.endpoint == client.endpoint else { return }
         // Receive time is taken after the response arrived.
         engine.apply(result, at: clock.reading())
-        awaitingResumeFetch = false
+        // A cancelled fetch is not the fresh answer that judging waits for.
+        if result != .failure(.cancelled) { awaitingResumeFetch = false }
         switch result {
         case .success(let feed):
             lastSuccessAt = Date()
