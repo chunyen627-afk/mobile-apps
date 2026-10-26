@@ -9,7 +9,7 @@
 | 分頁 | 來源 | 說明 |
 | --- | --- | --- |
 | 相簿 | [apps/album-ios](../album-ios) | SMB 相簿、照片與影片播放，功能同光盒相簿 0.3.2 |
-| 礦機狀態 | [apps/miner-status-ios](../miner-status-ios) | 燈號、收益與電費、今日電價、開挖建議、遠端控制，功能同礦機狀態 0.6.0 |
+| 礦機狀態 | [apps/miner-status-ios](../miner-status-ios) | 燈號、收益與電費、今日電價、開挖建議、遠端控制，功能同礦機狀態 0.6.1（被 iOS 關掉後重開會自動接回來源） |
 
 - **程式只有一份**：工具箱直接編譯兩個 App 資料夾裡的原始碼，只排除它們各自的啟動檔（`LightboxApp.swift`、`MinerStatusApp.swift`）。單獨的相簿與礦機 App 仍可從同一份原始碼建置。
 - **記住上次的工具**：下次打開時回到上次用的分頁。
@@ -51,5 +51,7 @@ bash scripts/build.sh
 
 ## 驗證狀態
 
-- 尚未建置：等 CI 第一次執行
+- [run 40330467762](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40330467762)（`d2a63c9`，第一次建置）：編譯成功，171 項通過。工具箱 test01 在收尾關閉 App 時報 `Failed to terminate …:0`；它的檢查本身都通過，截圖顯示兩個分頁正常。收尾改成先看 App 狀態，提前結束就明確報出來
+- [run 40332751139](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40332751139)（`37f9db4`）：相簿單元 41、礦機單元 121、工具箱 UI 4、相簿 UI 6，全部 0 失敗；IPA 48,096,236 bytes。截圖已人工檢視：相簿頁下方的分頁列不擋畫面；礦機頁、礦機詳情頁在分頁裡正常，有返回鍵
+- 已合併礦機 0.6.1（重開後自動接回來源；修正啟動時第一次讀取被取消、清單空白最多 30 秒），等這次合併後的 CI
 - 實機：尚未安裝
