@@ -8,11 +8,12 @@
 
 | 項目 | 狀態 |
 | --- | --- |
-| 電腦端小幫手 `pc-helper/`（唯讀） | 實作完成；24 項 Python 單元測試在 Windows 本機通過，另做 9 項變異測試（故意改壞標題過濾、驗證、網段、去重等），全部被測試抓到 |
-| iPhone App（P1 唯讀畫面）、核心 `DeskRemoteCore` | 實作完成；**尚未編譯**，等 CI |
-| 模擬器 UI 測試 | 尚未執行 |
-| 小幫手讀真實資料 | 尚未執行 |
+| 電腦端小幫手 `pc-helper/`（唯讀） | 24 項 Python 單元測試在 Windows 本機與 macOS CI 都通過；另做 9 項變異測試（故意改壞子代理過濾、驗證、網段、Codex 去重與子執行緒過濾、權限詢問等），全部被測試抓到 |
+| 小幫手讀真實資料 | **辦公室電腦本機通過**（2026-10-26）：經 ZeroTier 位址讀到 Claude 與 Codex 的真實對話清單與逐字稿，long-poll 正常；未帶 token 回 401。依結果修掉兩處：隱藏 Codex 自動化 heartbeat、拿掉會誤導的 Codex 權限標籤 |
+| iPhone App（P1 唯讀畫面）、核心 `DeskRemoteCore` | **編譯通過**（macOS CI，Xcode 16.4） |
+| 單元與模擬器 UI 測試 | **通過**：單元 15 項、UI 11 項，皆 0 失敗，14 張截圖已逐張人工檢視（[run 40339664008](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40339664008)，iPhone 16 Pro 模擬器；截圖在 `ci-screenshots-desk-remote-ios` 分支）。未簽署 IPA 200,371 bytes，未上傳 |
 | 實機 | 依決定在工具箱第三分頁驗證；尚未進行 |
+| 小幫手常駐安裝 | `install.ps1` 已寫好，**尚未在電腦上執行** |
 
 ## 結構
 
