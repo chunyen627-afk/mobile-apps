@@ -16,7 +16,14 @@ final class ToolboxUITests: XCTestCase {
     }
 
     override func tearDownWithError() throws {
-        app.terminate()
+        // A crash during the test shows up here as "not running", reported as such rather than
+        // as XCUITest's opaque "Failed to terminate" (run 40330467762, test01).
+        switch app.state {
+        case .runningForeground, .runningBackground, .runningBackgroundSuspended:
+            app.terminate()
+        default:
+            XCTFail("the app was no longer running at the end of the test (state \(app.state.rawValue)); it may have crashed")
+        }
     }
 
     private var albumTab: XCUIElement { app.tabBars.buttons["相簿"] }
