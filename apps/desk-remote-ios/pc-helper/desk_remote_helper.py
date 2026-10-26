@@ -133,9 +133,17 @@ class ClaudeParser:
     def __init__(self):
         self.tool_names = {}
         self.status = 'idle'
+        self.queued = []  # messages Claude accepted but holds, e.g. while a question is pending
 
     def feed(self, obj):
         kind = obj.get('type')
+        if kind == 'queue-operation':
+            content = obj.get('content')
+            if obj.get('operation') == 'enqueue' and isinstance(content, str):
+                self.queued.append(content)
+            elif obj.get('operation') in ('dequeue', 'remove') and self.queued:
+                self.queued.pop(0)
+            return []
         if kind not in ('user', 'assistant') or obj.get('isSidechain') or obj.get('isMeta'):
             return []
         message = obj.get('message') or {}
@@ -1091,8 +1099,9 @@ class ActionRunner:
     MAX_TEXT = 20000
 
     def __init__(self, hub, driver, presence, watcher, notify=None, pc_name='', strings=None,
-                 idle_seconds=60, verify_seconds=20, doc_wait=8, clock=time.monotonic):
+                 idle_seconds=60, verify_seconds=20, doc_wait=8, settle_seconds=2.0, clock=time.monotonic):
         self.hub, self.driver, self.presence, self.watcher = hub, driver, presence, watcher
+        self.settle_seconds = settle_seconds
         self.notify, self.pc_name, self.strings = notify, pc_name, strings or {}
         self.idle_seconds, self.verify_seconds, self.doc_wait, self.clock = idle_seconds, verify_seconds, doc_wait, clock
         self.actions = {}
@@ -1258,6 +1267,9 @@ class ActionRunner:
         self.presence.begin_own()
         self.driver.open(app, info)
         if self.wait_doc(app, info['doc']):
+            # The title changes before the new page is ready to type into (found live: a
+            # message sent right after the switch was lost), so let it settle.
+            time.sleep(self.settle_seconds)
             return
         if app == 'codex':
             # Fallback: the sidebar button with this title, only when the title is unique.
@@ -1286,10 +1298,13 @@ class ActionRunner:
         self.presence.end_own()
         self.update(action, message='已送出，確認中')
         verified = self.verify(transcript, mark, text)
-        self.update(action, state='done', verified=verified,
-                    message='已送出' if verified else f'已送出，但 {self.verify_seconds} 秒內還沒在對話紀錄看到')
+        message = {True: '已送出', 'queued': '已送出，排在等待中的權限詢問之後'}.get(
+            verified, f'已送出，但 {self.verify_seconds} 秒內還沒在對話紀錄看到')
+        self.update(action, state='done', verified=bool(verified), message=message)
 
     def verify(self, transcript, mark, text):
+        """True when the transcript has the message, 'queued' when Claude accepted it into its
+        queue (a question is pending; found live), else False after verify_seconds."""
         if transcript is None:
             return False
         want = normalized(text)[:40]
@@ -1298,8 +1313,11 @@ class ActionRunner:
             transcript.refresh()
             with transcript.lock:
                 fresh = [e for e in transcript.events if e['seq'] > mark and e['kind'] == 'user']
+                queued = list(getattr(transcript.parser, 'queued', []))
             if any(normalized(e['text']).startswith(want) for e in fresh):
                 return True
+            if any(normalized(q).startswith(want) for q in queued):
+                return 'queued'
             if self.clock() >= deadline:
                 return False
             time.sleep(0.5)
@@ -1361,6 +1379,8 @@ FAILURE_TEXT = {
     'no-prompt-box': '找不到輸入框（可能正在詢問權限）',
     'focus-failed': '無法把視窗切到前面，已中止（沒有送出任何字）',
     'clipboard-unsafe': '剪貼簿裡的內容無法安全保存，已中止',
+    'box-not-empty': '電腦上的輸入框裡已經有沒送出的字，為免混在一起已中止',
+    'paste-failed': '貼上後輸入框沒有出現這段文字，已清掉並中止（沒有送出）',
     'prompt-changed': '權限詢問已經不一樣了',
     'menu-failed': '打不開「允許一次」選單',
     'not-found': '畫面上找不到需要的按鈕',

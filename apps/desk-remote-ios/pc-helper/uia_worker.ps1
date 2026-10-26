@@ -18,6 +18,8 @@ public static class DeskWin {
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT p);
   [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint x, uint y, uint d, UIntPtr e);
+  [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT p);
+  [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr hWnd, uint flags);
   [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X; public int Y; }
 }
 "@
@@ -62,11 +64,25 @@ function Find-ByName($root, $type, $name) {
   return $root.FindFirst($Tree::Descendants, $cond)
 }
 
+# The one page whose title is $doc; with no title, the window itself.
 function Need-Doc($w, $doc) {
-  if (-not $doc) { return }
-  $names = Get-Docs $w
-  $hits = @($names | Where-Object { $_ -eq $doc })
-  if ($hits.Count -ne 1) { Fail 'title-mismatch' ("open: " + ($names -join ' | ')) }
+  if (-not $doc) { return $w }
+  $cond = New-Object System.Windows.Automation.PropertyCondition($AE::AutomationIdProperty, 'RootWebArea')
+  $hits = @($w.FindAll($Tree::Descendants, $cond) | Where-Object { $_.Current.Name -eq $doc })
+  if ($hits.Count -ne 1) { Fail 'title-mismatch' ("open: " + ((Get-Docs $w) -join ' | ')) }
+  return $hits[0]
+}
+
+# Text in a message box, when the box exposes it; $null when it cannot be read.
+function Box-Text($edit) {
+  $p = $null
+  if ($edit.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$p)) { return $p.Current.Value }
+  if ($edit.TryGetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern, [ref]$p)) { return $p.DocumentRange.GetText(20000) }
+  return $null
+}
+
+function Same-Element($a, $b) {
+  return [System.Windows.Automation.Automation]::Compare($a.GetRuntimeId(), $b.GetRuntimeId())
 }
 
 function Invoke-Element($e) {
@@ -94,14 +110,14 @@ function Get-Prompt($w, $s) {
   return @{ text = ($texts -join "`n"); buttons = $buttons }
 }
 
+# No Alt-key trick here: a lone Alt opens the Electron apps' menu bar, which then swallowed the
+# paste and the click (found live). Opening the conversation link already brings the app up.
 function Bring-Front($w) {
   $hwnd = [IntPtr]$w.Current.NativeWindowHandle
+  if ([DeskWin]::GetForegroundWindow() -eq $hwnd) { return }
   if ([DeskWin]::IsIconic($hwnd)) { [DeskWin]::ShowWindow($hwnd, 9) | Out-Null }  # SW_RESTORE
-  # A tap of Alt lets this background process move the foreground window.
-  [DeskWin]::keybd_event(0x12, 0, 0, [UIntPtr]::Zero)
-  [DeskWin]::keybd_event(0x12, 0, 2, [UIntPtr]::Zero)
   [DeskWin]::SetForegroundWindow($hwnd) | Out-Null
-  Start-Sleep -Milliseconds 250
+  Start-Sleep -Milliseconds 300
   if ([DeskWin]::GetForegroundWindow() -ne $hwnd) { Fail 'focus-failed' 'could not bring the window to the front' }
 }
 
@@ -137,21 +153,39 @@ function Set-PrivateText($text) {
   [System.Windows.Forms.Clipboard]::SetDataObject($obj, $true)
 }
 
-function Paste-Send($w, $editName, $text) {
-  $edit = Find-ByName $w $CT::Edit $editName
+# Pastes into the message box of $scope (the expected page) and presses Enter only after the box
+# reads back the pasted text, when it can be read at all. A box found elsewhere in the window
+# (a page still being replaced after a switch) is never used.
+function Paste-Send($w, $scope, $editName, $text) {
+  $edit = Find-ByName $scope $CT::Edit $editName
   if (-not $edit) { Fail 'no-prompt-box' 'the message box is not on screen (a question may be pending)' }
   $saved = Save-Clipboard
   if ($saved['__unsafe']) { Fail 'clipboard-unsafe' 'the clipboard holds data that cannot be restored' }
   $before = [DeskWin]::GetForegroundWindow()
+  $probe = (($text -replace '\s', '')).Substring(0, [Math]::Min(12, ($text -replace '\s', '').Length))
   try {
     Bring-Front $w
     $edit.SetFocus()
     Start-Sleep -Milliseconds 300
     if (-not $edit.Current.HasKeyboardFocus) { Fail 'focus-failed' 'the message box did not take focus' }
+    $already = Box-Text $edit
+    if ($already -and $already.Trim()) { Fail 'box-not-empty' 'the message box already holds unsent text' }
     Set-PrivateText $text
     [System.Windows.Forms.SendKeys]::SendWait('^v')
     Start-Sleep -Milliseconds 500
     if ([DeskWin]::GetForegroundWindow() -ne [IntPtr]$w.Current.NativeWindowHandle) { Fail 'focus-failed' 'focus moved before sending' }
+    # The page reports the box's text a little later than it shows it: read for up to 2 s.
+    $now = $null
+    for ($i = 0; $i -lt 8; $i++) {
+      $now = Box-Text $edit
+      if ($null -eq $now -or ($now -replace '\s', '').Contains($probe)) { break }
+      Start-Sleep -Milliseconds 250
+    }
+    if ($null -ne $now -and -not (($now -replace '\s', '').Contains($probe))) {
+      [System.Windows.Forms.SendKeys]::SendWait('^a{DEL}')
+      $seen = ($now -replace '\s', ' ')
+      Fail 'paste-failed' ("the box reads " + $seen.Length + " chars: " + $seen.Substring(0, [Math]::Min(30, $seen.Length)))
+    }
     [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
     Start-Sleep -Milliseconds 300
   } finally {
@@ -161,16 +195,19 @@ function Paste-Send($w, $editName, $text) {
 }
 
 function Menu-Item($w, $name) {
-  for ($i = 0; $i -lt 8; $i++) {
-    $item = Find-ByName $AE::RootElement $CT::MenuItem $name
+  for ($i = 0; $i -lt 12; $i++) {
+    Start-Sleep -Milliseconds 250
+    $item = Find-ByName $w $CT::MenuItem $name
     if ($item) { return $item }
-    Start-Sleep -Milliseconds 150
   }
   return $null
 }
 
-# Claude keeps "allow once" in a dropdown that ignores Invoke; open it by keyboard first and only
-# then with one real click on the dropdown's centre, after checking what is under the pointer.
+# Claude keeps "allow once" in a dropdown that only a real click opens (its ExpandCollapse
+# reports success without opening, Invoke is missing, and keys were not reliable). One click
+# on the dropdown's centre, only when Claude's window is the top window at that point (Chromium
+# reports only unnamed groups there, so the element itself cannot be checked); then the menu
+# item is invoked.
 function Claude-AllowOnce($w, $s) {
   $more = Find-ByName $w $CT::Button $s.more_allow
   if (-not $more) { Fail 'prompt-changed' 'the allow menu is not on screen' }
@@ -179,34 +216,23 @@ function Claude-AllowOnce($w, $s) {
   [DeskWin]::GetCursorPos([ref]$cursor) | Out-Null
   $how = $null
   try {
-    $p = $null
-    if ($more.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$p)) {
-      $p.Expand(); if (Menu-Item $w $s.allow_once) { $how = 'expand' }
-    }
+    Bring-Front $w
+    $more = Find-ByName $w $CT::Button $s.more_allow  # positions can change when the window moves up
+    $r = $more.Current.BoundingRectangle
+    if ($r.IsEmpty -or $r.Width -lt 2) { Fail 'menu-failed' 'the allow menu has no position on screen' }
+    $pt = New-Object DeskWin+POINT
+    $pt.X = [int]($r.X + $r.Width / 2); $pt.Y = [int]($r.Y + $r.Height / 2)
+    $top = [DeskWin]::GetAncestor([DeskWin]::WindowFromPoint($pt), 2)  # GA_ROOT
+    if ($top -ne [IntPtr]$w.Current.NativeWindowHandle) { Fail 'focus-failed' 'another window covers the allow menu' }
+    [DeskWin]::SetCursorPos($pt.X, $pt.Y) | Out-Null
+    [DeskWin]::mouse_event(2, 0, 0, 0, [UIntPtr]::Zero); [DeskWin]::mouse_event(4, 0, 0, 0, [UIntPtr]::Zero)
+    if (Menu-Item $w $s.allow_once) { $how = 'click' }
     if (-not $how) {
-      Bring-Front $w
-      foreach ($key in @('{ENTER}', ' ', '%{DOWN}')) {
-        $more.SetFocus(); Start-Sleep -Milliseconds 150
-        [System.Windows.Forms.SendKeys]::SendWait($key)
-        if (Menu-Item $w $s.allow_once) { $how = "key $key"; break }
-        [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
-      }
+      $menus = @($w.FindAll($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::MenuItem))) |
+        ForEach-Object { $_.Current.Name })
+      [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+      Fail 'menu-failed' ("the allow menu did not open; menu items: " + ($menus -join ' | ') + "; fg=" + ([DeskWin]::GetForegroundWindow() -eq [IntPtr]$w.Current.NativeWindowHandle))
     }
-    if (-not $how) {
-      $r = $more.Current.BoundingRectangle
-      $x = [int]($r.X + $r.Width / 2); $y = [int]($r.Y + $r.Height / 2)
-      $hit = $AE::FromPoint((New-Object System.Windows.Point($x, $y)))
-      $onTarget = $hit -and $hit.Current.Name -eq $s.more_allow
-      if ($hit -and -not $onTarget) {
-        $parent = [System.Windows.Automation.TreeWalker]::ControlViewWalker.GetParent($hit)
-        $onTarget = $parent -and $parent.Current.Name -eq $s.more_allow
-      }
-      if (-not $onTarget) { Fail 'focus-failed' 'something covers the allow menu' }
-      [DeskWin]::SetCursorPos($x, $y) | Out-Null
-      [DeskWin]::mouse_event(2, 0, 0, 0, [UIntPtr]::Zero); [DeskWin]::mouse_event(4, 0, 0, 0, [UIntPtr]::Zero)
-      if (Menu-Item $w $s.allow_once) { $how = 'click' }
-    }
-    if (-not $how) { Fail 'menu-failed' 'the allow menu did not open' }
     $item = Menu-Item $w $s.allow_once
     if (-not (Invoke-Element $item)) { Fail 'menu-failed' 'allow once could not be invoked' }
     return $how
@@ -234,7 +260,7 @@ function Run-Command($c) {
     }
     'invoke' {
       $w = Need-Window $c.app
-      Need-Doc $w $c.doc
+      $null = Need-Doc $w $c.doc
       $b = Find-ByName $w $CT::Button $c.name
       if (-not $b) { Fail 'not-found' "button not found" }
       if (-not (Invoke-Element $b)) { Fail 'not-invokable' 'button has no invoke pattern' }
@@ -242,8 +268,8 @@ function Run-Command($c) {
     }
     'send' {
       $w = Need-Window $c.app
-      Need-Doc $w $c.doc
-      Paste-Send $w $s.edit $c.text
+      $page = Need-Doc $w $c.doc
+      Paste-Send $w $page $s.edit $c.text
       return @{ ok = $true }
     }
     'new_send' {
@@ -259,13 +285,13 @@ function Run-Command($c) {
         if (($now -join '|') -ne ($before -join '|')) { $changed = $true; break }
       }
       if (-not $changed) { Fail 'title-mismatch' 'the new conversation did not open' }
-      Start-Sleep -Milliseconds 500
-      Paste-Send $w $s.edit $c.text
+      Start-Sleep -Milliseconds 1500
+      Paste-Send $w $w $s.edit $c.text
       return @{ ok = $true; docs = @(Get-Docs $w) }
     }
     'answer' {
       $w = Need-Window $c.app
-      Need-Doc $w $c.doc
+      $null = Need-Doc $w $c.doc
       $prompt = Get-Prompt $w $s
       if (-not $prompt -or $prompt.text -ne $c.expect) { Fail 'prompt-changed' 'the question on screen changed' }
       if ($c.decision -eq 'deny') {

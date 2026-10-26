@@ -255,7 +255,7 @@ def drive(fake, presence=None, driver_class=None, notify=None):
     watcher = h.UiWatcher(hub, driver, notify, '示範電腦')
     hub.prompts = watcher.prompt_for
     runner = h.ActionRunner(hub, driver, hub.presence, watcher, notify, '示範電腦', h.load_strings(),
-                            verify_seconds=3, doc_wait=1)
+                            verify_seconds=3, doc_wait=1, settle_seconds=0)
     watcher.tick()
     return hub, driver, watcher, runner
 
@@ -329,6 +329,21 @@ class DrivingTests(FakeEnvironment):
         run_all(runner)
         self.assertEqual(runner.status(body['id'])['error'], 'duplicate-title')
         self.assertNotIn('send', [c[0] for c in driver.calls])
+
+    def test_message_queued_behind_a_question_counts_as_delivered(self):
+        class QueueingDriver(h.FakeDriver):
+            def send(self, app, doc, text):
+                self.calls.append(('send', app, doc))
+                path = self.hub.sources[app].transcript_path(self.session_for_doc(app, doc))
+                with Path(path).open('a', encoding='utf-8') as handle:
+                    handle.write(json.dumps({'type': 'queue-operation', 'operation': 'enqueue',
+                                             'content': text}, ensure_ascii=False) + '\n')
+        _, _, _, runner = drive(self.fake, driver_class=QueueingDriver)
+        body = runner.submit('send', 'claude', A, {'text': '排隊的訊息'})[1]
+        run_all(runner)
+        status = runner.status(body['id'])
+        self.assertEqual((status['state'], status['verified']), ('done', True), status)
+        self.assertIn('排在等待中的權限詢問之後', status['message'])
 
     def test_send_that_never_shows_up_is_reported(self):
         class SilentDriver(h.FakeDriver):
