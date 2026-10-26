@@ -267,6 +267,151 @@ function Claude-AllowOnce($w, $s) {
   }
 }
 
+# The card of one option question: the Group whose name starts with the question's text
+# (Claude 3.6556 puts the options, "other", "skip" and "submit" inside it; read live 10/27).
+function Find-QuestionCard($scope, $question) {
+  $prefix = ($question -replace '\s', '')
+  $prefix = $prefix.Substring(0, [Math]::Min(15, $prefix.Length))
+  $groups = $scope.FindAll($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Group)))
+  foreach ($g in $groups) {
+    if (($g.Current.Name -replace '\s', '').StartsWith($prefix)) { return $g }
+  }
+  return $null
+}
+
+# An option button is named "<label> <description>" or just "<label>".
+function Find-Option($card, $label) {
+  $buttons = $card.FindAll($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Button)))
+  foreach ($b in $buttons) {
+    $n = $b.Current.Name
+    if ($n -eq $label -or $n.StartsWith("$label ")) { return $b }
+  }
+  return $null
+}
+
+function Is-On($button) {
+  $p = $null
+  if (-not $button.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern, [ref]$p)) { return $null }
+  return ("" + $p.Current.ToggleState) -eq 'On'
+}
+
+function Wait-State($button, $want, $ms) {
+  for ($i = 0; $i -lt ($ms / 150); $i++) {
+    if ((Is-On $button) -eq $want) { return $true }
+    Start-Sleep -Milliseconds 150
+  }
+  return (Is-On $button) -eq $want
+}
+
+function Scroll-To($e) {
+  $p = $null
+  if ($e.TryGetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern, [ref]$p)) {
+    $p.ScrollIntoView()
+    Start-Sleep -Milliseconds 300
+  }
+}
+
+# Turns a toggle on or off: Toggle() first, then one checked click on the element after it has
+# been scrolled into view (a click from a stale position once turned on the wrong option, 10/27).
+function Set-Toggle($w, $button, $want) {
+  if ($null -eq (Is-On $button)) { Fail 'not-invokable' 'option has no toggle' }
+  if ((Is-On $button) -eq $want) { return 'already' }
+  Scroll-To $button
+  $p = $null
+  $null = $button.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern, [ref]$p)
+  $p.Toggle()
+  if (Wait-State $button $want 1000) { return 'toggle' }
+  Scroll-To $button
+  Click-Element $w $button 'an option'
+  if (Wait-State $button $want 1500) { return 'click' }
+  Fail 'toggle-failed' 'the option did not change'
+}
+
+function Set-On($w, $button) { return Set-Toggle $w $button $true }
+
+# The option buttons of a card (every toggle except "other").
+function Card-Options($card, $s) {
+  $buttons = $card.FindAll($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Button)))
+  return @($buttons | Where-Object { $_.Current.Name -ne $s.other -and $null -ne (Is-On $_) })
+}
+
+# Exactly the chosen options are on (others switched off), or the answer is not sent.
+function Make-Exact($w, $card, $s, $labels) {
+  $hows = @()
+  foreach ($label in $labels) {
+    $option = Find-Option $card $label
+    if (-not $option) { Fail 'not-found' 'option not on screen' }
+    $hows += Set-Toggle $w $option $true
+  }
+  foreach ($b in (Card-Options $card $s)) {
+    $n = $b.Current.Name
+    $chosen = @($labels | Where-Object { $n -eq $_ -or $n.StartsWith("$_ ") }).Count -gt 0
+    if (-not $chosen -and (Is-On $b)) { $hows += ('off:' + (Set-Toggle $w $b $false)) }
+  }
+  foreach ($b in (Card-Options $card $s)) {
+    $n = $b.Current.Name
+    $chosen = @($labels | Where-Object { $n -eq $_ -or $n.StartsWith("$_ ") }).Count -gt 0
+    if ((Is-On $b) -ne $chosen) { Fail 'toggle-failed' 'the options on screen do not match the choice' }
+  }
+  return $hows
+}
+
+function Answer-Questions($w, $page, $s, $questions) {
+  $before = [DeskWin]::GetForegroundWindow()
+  $cursor = New-Object DeskWin+POINT
+  [DeskWin]::GetCursorPos([ref]$cursor) | Out-Null
+  $hows = @()
+  try {
+    Bring-Front $w
+    $count = @($questions).Count
+    for ($qi = 0; $qi -lt $count; $qi++) {
+      $q = @($questions)[$qi]
+      # Several questions are shown one page at a time ("next" between them, "submit" last).
+      $card = $null
+      for ($i = 0; $i -lt 12 -and -not $card; $i++) {
+        $card = Find-QuestionCard $page $q.question
+        if (-not $card) { Start-Sleep -Milliseconds 250 }
+      }
+      if (-not $card) { Fail 'question-changed' 'the question is not on screen' }
+      $labels = @(@($q.labels) | Where-Object { $_ })
+      $hows += Make-Exact $w $card $s $labels
+      if ($q.other) {
+        $hows += Set-On $w (Find-Option $card $s.other)
+        Start-Sleep -Milliseconds 300
+        $edit = $card.FindFirst($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Edit)))
+        if (-not $edit) { Fail 'not-found' 'no text box after choosing other' }
+        Paste-Text $w $edit $q.other
+      }
+      $name = if ($qi -eq $count - 1) { $s.submit } else { $s.next }
+      $button = Find-ByName $card $CT::Button $name
+      if (-not $button) { Fail 'not-found' "no '$name' button on the card" }
+      Scroll-To $button
+      if (-not (Invoke-Element $button)) { Fail 'not-invokable' 'the card button could not be pressed' }
+      Start-Sleep -Milliseconds 600
+    }
+    return ($hows -join ',')
+  } finally {
+    [DeskWin]::SetCursorPos($cursor.X, $cursor.Y) | Out-Null
+    if ($before -ne [IntPtr]::Zero) { [DeskWin]::SetForegroundWindow($before) | Out-Null }
+  }
+}
+
+# Pastes into a text box without pressing Enter (the "other" answer), keeping the clipboard.
+function Paste-Text($w, $edit, $text) {
+  $saved = Save-Clipboard
+  if ($saved['__unsafe']) { Fail 'clipboard-unsafe' 'the clipboard holds data that cannot be restored' }
+  try {
+    $edit.SetFocus()
+    Start-Sleep -Milliseconds 250
+    if ([DeskWin]::GetForegroundWindow() -ne [IntPtr]$w.Current.NativeWindowHandle) { Fail 'focus-failed' 'focus moved' }
+    Set-PrivateText $text
+    [System.Windows.Forms.SendKeys]::SendWait('^v')
+    Start-Sleep -Milliseconds 400
+  } finally {
+    Restore-Clipboard $saved
+  }
+}
+
 function Run-Command($c) {
   $s = $c.strings
   switch ($c.cmd) {
@@ -330,6 +475,11 @@ function Run-Command($c) {
         return @{ ok = $true; how = 'invoke' }
       }
       return @{ ok = $true; how = (Claude-AllowOnce $w $s) }
+    }
+    'choose' {
+      $w = Need-Window $c.app
+      $page = Need-Doc $w $c.doc
+      return @{ ok = $true; how = (Answer-Questions $w $page $s @($c.questions)) }
     }
     default { Fail 'bad-command' "unknown command" }
   }

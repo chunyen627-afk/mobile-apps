@@ -5,7 +5,10 @@
     "deny": "拒絕",
     "more_allow": "更多允許選項",
     "allow_once": "允許一次",
-    "new": "新增"
+    "new": "新增",
+    "submit": "提交",
+    "next": "下一步",
+    "other": "其他"
   },
   "codex": {
     "edit": "與 Codex 協作",

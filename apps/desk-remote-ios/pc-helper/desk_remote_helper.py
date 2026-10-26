@@ -1064,8 +1064,12 @@ class WindowsDriver:
         return self.ask(app, cmd='answer', doc=doc, decision=decision, expect=expect).get('how')
 
     def answer_question(self, app, doc, question, answers):
-        # The question card's controls are read from the live app before this is written.
-        raise ActionError('not-supported', 'option questions are not wired to the desktop window yet')
+        """Turns on each chosen option (and 其他 with its text) in the question's card, then 提交."""
+        if app != 'claude':
+            raise ActionError('not-supported', 'option questions are only read from Claude')
+        items = [{'question': q['question'], 'labels': a.get('labels') or [], 'other': a.get('other') or ''}
+                 for q, a in zip(question['questions'], answers)]
+        return self.ask(app, cmd='choose', doc=doc, questions=items).get('how')
 
 
 def prompt_id(app, doc, text):
@@ -1526,6 +1530,7 @@ FAILURE_TEXT = {
     'menu-failed': '打不開「允許一次」選單',
     'still-asking': '按了之後電腦上仍在詢問，可能沒有按到',
     'question-changed': '這個選項題已經回答過或換了一題',
+    'toggle-failed': '選項按了沒有反應',
     'not-supported': '這台電腦的小幫手還不支援這個動作',
     'not-found': '畫面上找不到需要的按鈕',
     'not-invokable': '按鈕按不下去',
@@ -1969,9 +1974,7 @@ def build_driving(hub, driver, notify, pc_name, cfg, interval, verify_seconds):
     hub.prompts = watcher.prompt_for
     runner = ActionRunner(hub, driver, hub.presence, watcher, notify, pc_name, load_strings(),
                           idle_seconds=int(cfg.get('idle_seconds', 60)), verify_seconds=verify_seconds)
-    hub.capabilities = ['read', 'send', 'permission', 'new', 'open']
-    if not isinstance(driver, WindowsDriver):
-        hub.capabilities.append('question')  # the desktop window side is not wired yet
+    hub.capabilities = ['read', 'send', 'permission', 'new', 'open', 'question']
     threading.Thread(target=watcher.run_forever, daemon=True).start()
     threading.Thread(target=runner.run_forever, daemon=True).start()
     return runner
