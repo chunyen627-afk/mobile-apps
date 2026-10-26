@@ -125,6 +125,7 @@ UI 測試與截圖找到並修正的畫面問題：
 - 使用者回報：放久一點再進 App，有時會跳回示範畫面。原因：iOS 會把放在背景太久的 App 關掉，而 App 每次啟動都從示範開始。
 - 修正：開始讀取時記下 `resumeLive`；下次啟動時，如果這個標記還在、已存的網址也還有效，就自動用同一個來源開始讀取。按「停止讀取」會清掉標記，下次就從示範開始。
 - UI 測試多一項（test19：重開後自動接回、停止後重開回到示範）；其他測試以 `-resumeLive NO` 啟動，一律從示範開始。
+- [run 40333403998](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40333403998)（`2492e8a`）：單元測試 `Executed 121 tests, with 0 failures`；UI 測試沒有跑起來，runner 的 UI 測試工具初始化失敗（`Failed call to AXDisableAccessibilityOnTermination: kAXErrorCannotComplete`），是 runner 環境問題，不是程式錯誤；用這次紀錄的 commit 重跑
 
 ## 0.6.0（build 8，已發布 [Release miner-status-0.6.0-build8](https://github.com/chunyen627-afk/mobile-apps/releases/tag/miner-status-0.6.0-build8)）：遠端開機、依電價自動挖礦
 
