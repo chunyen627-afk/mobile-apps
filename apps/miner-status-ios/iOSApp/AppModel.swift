@@ -70,8 +70,30 @@ enum AppMode: Equatable {
     case live
 }
 
-/// Single source of truth for the views. Live mode never starts on its own: only `startLive`
-/// (an explicit user action) connects, and polling stops whenever the app leaves the foreground.
+/// Remembers that the user is reading a live source. iOS ends an app that stays in the background
+/// for a while; without this, coming back meant a fresh launch in the demo (reported 2026-10-26).
+/// Set by `startLive`, cleared only when the user stops reading and returns to the demo.
+enum LiveResume {
+    static let key = "resumeLive"
+
+    static var enabled: Bool {
+        get { UserDefaults.standard.bool(forKey: key) }
+        set { UserDefaults.standard.set(newValue, forKey: key) }
+    }
+
+    /// The saved source to reconnect to at launch, or nil when the user was not reading one or the
+    /// saved URL is no longer valid.
+    static func savedSource() -> (endpoint: SourceEndpoint, pollInterval: TimeInterval)? {
+        guard enabled, let text = UserDefaults.standard.string(forKey: "sourceURL") else { return nil }
+        guard let endpoint = try? SourceEndpoint(validating: text) else { return nil }
+        let seconds = (UserDefaults.standard.object(forKey: "pollIntervalSeconds") as? Int) ?? 30
+        return (endpoint, TimeInterval(seconds))
+    }
+}
+
+/// Single source of truth for the views. Every launch begins in the demo; live mode starts only
+/// from `startLive` (the user's action, or a relaunch while the user was still reading a source,
+/// see `LiveResume`), and polling stops whenever the app leaves the foreground.
 @MainActor
 final class AppModel: ObservableObject {
     static let pollIntervals: [TimeInterval] = [15, 30, 60]
@@ -134,6 +156,9 @@ final class AppModel: ObservableObject {
         demo = DemoPlayer.loadBundled()
         demoNotice = demo?.notice ?? ""
         selectDemo(.confirmedMining)
+        if let saved = LiveResume.savedSource() {
+            startLive(endpoint: saved.endpoint, pollInterval: saved.pollInterval)
+        }
     }
 
     // MARK: - Demo
@@ -187,10 +212,12 @@ final class AppModel: ObservableObject {
         sourceSentDemoData = false
         market = nil
         advice = []
+        LiveResume.enabled = true
         if isForeground { startPolling() }
     }
 
     func stopLiveAndReturnToDemo() {
+        LiveResume.enabled = false
         attentionAlert = nil
         controlNotice = nil
         selectDemo(scenario)
@@ -316,6 +343,12 @@ final class AppModel: ObservableObject {
     }
 
     private func pollLoop() async {
+        // A fetch from a just-cancelled loop may still be finishing: wait for it, or this loop's
+        // first fetch is skipped and the screen stays empty for a whole interval. Happened at
+        // launch, when the reconnect's fetch was cancelled by the first foreground event.
+        while isFetching, !Task.isCancelled {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
         while !Task.isCancelled {
             await fetchOnce()
             let deadline = ContinuousClock.now + .seconds(pollInterval)
@@ -336,7 +369,8 @@ final class AppModel: ObservableObject {
         guard mode == .live, self.client?.endpoint == client.endpoint else { return }
         // Receive time is taken after the response arrived.
         engine.apply(result, at: clock.reading())
-        awaitingResumeFetch = false
+        // A cancelled fetch is not the fresh answer that judging waits for.
+        if result != .failure(.cancelled) { awaitingResumeFetch = false }
         switch result {
         case .success(let feed):
             lastSuccessAt = Date()

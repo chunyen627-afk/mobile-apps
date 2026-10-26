@@ -32,7 +32,7 @@
   - 沒有 POST、PUT、PATCH、DELETE、背景工作、WebSocket、監聽或 WebView
   - 只有 `StatusClient.swift` 使用 URLSession
   - 沒有寫死的網址或 IPv4，只允許設定畫面的通用提示字樣
-- **啟動與讀取**：每次啟動為示範；來源網址預設為空；讀取綁定前景。
+- **啟動與讀取**：第一次啟動為示範；來源網址預設為空；讀取綁定前景。上次還在讀來源時，啟動會自動接回（0.6.1）。
 - **測試**：只使用文件保留位址（`.example`、`192.0.2.0/24`）。
 - **檢查本身會失敗**：在暫存副本中刻意加入 `NSAllowsArbitraryLoads`、`"POST"` 與寫死的網址後，檢查回報 4 項失敗並以 exit 1 結束，證明這些規則有效。
 
@@ -120,7 +120,14 @@ UI 測試與截圖找到並修正的畫面問題：
 - App：清單的「開挖建議」區塊、資料格式加選填 `advice`（feature `advice`）
 - [run 40279093799](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40279093799)（`1cd5dc9`）：單元測試 `Executed 121 tests, with 0 failures`、UI 測試 `Executed 17 tests, with 0 failures`；截圖確認「開挖建議」區塊顯示關機中的示範筆電「建議挖礦」（綠）與虧損機器「建議停挖」（橘、NT$-35）。IPA 393,533 bytes（runner 內，未上傳）
 
-## 0.6.0（build 8，待發布）：遠端開機、依電價自動挖礦
+## 0.6.1（build 9，開發中）：被 iOS 關掉後自動接回來源
+
+- 使用者回報：放久一點再進 App，有時會跳回示範畫面。原因：iOS 會把放在背景太久的 App 關掉，而 App 每次啟動都從示範開始。
+- 修正：開始讀取時記下 `resumeLive`；下次啟動時，如果這個標記還在、已存的網址也還有效，就自動用同一個來源開始讀取。按「停止讀取」會清掉標記，下次就從示範開始。
+- UI 測試多一項（test19：重開後自動接回、停止後重開回到示範）；其他測試以 `-resumeLive NO` 啟動，一律從示範開始。
+- [run 40333403998](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40333403998)（`2492e8a`）：單元測試 `Executed 121 tests, with 0 failures`；UI 測試沒有跑起來，runner 的 UI 測試工具初始化失敗（`Failed call to AXDisableAccessibilityOnTermination: kAXErrorCannotComplete`），是 runner 環境問題，不是程式錯誤；用這次紀錄的 commit 重跑
+
+## 0.6.0（build 8，已發布 [Release miner-status-0.6.0-build8](https://github.com/chunyen627-afk/mobile-apps/releases/tag/miner-status-0.6.0-build8)）：遠端開機、依電價自動挖礦
 
 - 使用者要求：開挖建議的筆電那列加遠端開機按鈕，開機後自動接回監控與遠端開始挖礦；並讓電腦端自動化：離峰划算就自動開機挖、尖峰只有划算才挖
 - 網路喚醒已實測（2026-10-26）：筆電關機後由同一網路裡的另一台電腦送封包，6 秒後開機、約 40 秒後可遠端連線
