@@ -91,13 +91,21 @@ public struct HelperClient: Sendable {
 
     /// Long-polls for events after `cursor` in `epoch`, waiting up to `wait` seconds.
     public func events(_ app: DeskApp, session id: String, after cursor: Int, epoch: String,
-                       knownPrompt: String?, wait: Int) async throws -> EventPage {
+                       knownPrompt: String?, knownQuestion: String? = nil, wait: Int) async throws -> EventPage {
         try await get(["v1", app.rawValue, "sessions", id, "events"], query: [
             URLQueryItem(name: "after", value: String(cursor)),
             URLQueryItem(name: "epoch", value: epoch),
             URLQueryItem(name: "prompt", value: knownPrompt ?? ""),
+            URLQueryItem(name: "question", value: knownQuestion ?? ""),
             URLQueryItem(name: "wait", value: String(wait)),
         ], timeout: TimeInterval(wait + 10))
+    }
+
+    /// Answers the option question waiting now, one `QuestionAnswer` per question.
+    public func answerQuestion(_ app: DeskApp, session id: String, questionId: String, answers: [QuestionAnswer],
+                               force: Bool = false) async throws -> ActionStatus {
+        try await post(["v1", app.rawValue, "sessions", id, "answer"],
+                       ActionRequest(questionId: questionId, answers: answers, force: force ? true : nil))
     }
 
     /// Full text of an event the helper shortened.
@@ -196,7 +204,7 @@ public struct HelperClient: Sendable {
         case (429, "locked-out"): throw HelperFailure.lockedOut
         case (429, _): throw HelperFailure.queueFull
         case (409, "busy-user"): throw HelperFailure.busyUser(body?.idleSeconds)
-        case (409, "prompt-changed"): throw HelperFailure.promptChanged
+        case (409, "prompt-changed"), (409, "question-changed"): throw HelperFailure.promptChanged
         case (423, _): throw HelperFailure.locked
         case (400, _), (413, _): throw HelperFailure.badRequest(body?.message)
         case (403, _): throw HelperFailure.forbidden

@@ -14,7 +14,7 @@ public enum DeskText {
         case .readOnly: return "這台電腦的小幫手只能讀取（舊版或未開啟操作）"
         case .busyUser(let seconds): return seconds.map { "電腦有人在用（\($0) 秒前有操作）" } ?? "電腦有人在用"
         case .locked: return "電腦已鎖定，請先解鎖（可用 Google 遠端桌面）"
-        case .promptChanged: return "電腦上的權限詢問已經不一樣了"
+        case .promptChanged: return "電腦上的詢問已經不一樣了（可能已經回答過）"
         case .badRequest(let message): return message ?? "送出的內容不對"
         case .queueFull: return "電腦端還有動作在排隊，請稍後再試"
         case .server(let message): return message ?? "電腦端發生錯誤"

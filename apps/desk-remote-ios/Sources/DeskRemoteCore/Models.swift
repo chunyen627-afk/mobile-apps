@@ -65,6 +65,8 @@ struct ActionRequest: Encodable {
     var clientMsgId: String?
     var promptId: String?
     var decision: String?
+    var questionId: String?
+    var answers: [QuestionAnswer]?
     var project: String?
     var force: Bool?
 }
@@ -131,6 +133,49 @@ public struct PermissionPrompt: Decodable, Equatable, Sendable {
     public let text: String
 }
 
+/// An option question Claude is waiting on (AskUserQuestion): one or more questions, each with
+/// labelled options, single or multiple choice, plus free text ("其他").
+public struct OptionQuestion: Decodable, Equatable, Sendable {
+    public struct Option: Decodable, Equatable, Sendable {
+        public let label: String
+        public let description: String?
+    }
+
+    public struct Item: Decodable, Equatable, Sendable {
+        public let question: String
+        public let header: String?
+        public let multiSelect: Bool
+        public let options: [Option]
+    }
+
+    public let questionId: String
+    public let questions: [Item]
+}
+
+/// The answer to one question: chosen option labels and/or free text.
+public struct QuestionAnswer: Codable, Equatable, Sendable {
+    public var labels: [String]
+    public var other: String?
+
+    public init(labels: [String] = [], other: String? = nil) {
+        self.labels = labels
+        self.other = other
+    }
+
+    public var isEmpty: Bool { labels.isEmpty && (other ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+}
+
+/// Reply buttons from the desktop app's next-step box; each just sends its message.
+public struct ReplySuggestions: Decodable, Equatable, Sendable {
+    public struct Reply: Decodable, Equatable, Hashable, Sendable {
+        public let label: String
+        public let message: String
+    }
+
+    public let ask: String?
+    public let replies: [Reply]
+}
+
 /// `GET /v1/{app}/sessions/{id}/events`.
 public struct EventPage: Decodable, Equatable, Sendable {
     public let epoch: String
@@ -141,6 +186,21 @@ public struct EventPage: Decodable, Equatable, Sendable {
     /// "working" or "idle", as far as the transcript shows.
     public let status: String
     public let prompt: PermissionPrompt?
+    public let question: OptionQuestion?
+    public let suggestions: ReplySuggestions?
+
+    public init(epoch: String, reset: Bool, events: [TranscriptEvent], earlier: Bool, cursor: Int, status: String,
+                prompt: PermissionPrompt?, question: OptionQuestion? = nil, suggestions: ReplySuggestions? = nil) {
+        self.epoch = epoch
+        self.reset = reset
+        self.events = events
+        self.earlier = earlier
+        self.cursor = cursor
+        self.status = status
+        self.prompt = prompt
+        self.question = question
+        self.suggestions = suggestions
+    }
 }
 
 struct ItemText: Decodable, Sendable {

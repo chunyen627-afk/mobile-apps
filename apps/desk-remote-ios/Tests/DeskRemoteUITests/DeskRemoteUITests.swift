@@ -10,6 +10,7 @@ final class DeskRemoteUITests: XCTestCase {
     private let claudeB = "local_22222222-2222-4222-8222-222222222222"
     private let claudeC = "local_33333333-3333-4333-8333-333333333333"
     private let claudeArchived = "local_44444444-4444-4444-8444-444444444444"
+    private let claudeQuestion = "local_66666666-6666-4666-8666-666666666666"
     private let codexX = "0a000000-0000-4000-8000-000000000001"
     private let codexY = "0a000000-0000-4000-8000-000000000002"
     private let codexGuardian = "0a000000-0000-4000-8000-000000000003"
@@ -238,6 +239,41 @@ final class DeskRemoteUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["look at README"].waitForExistence(timeout: 25), "did not open the new conversation")
         XCTAssertTrue(text("（示範）新對話收到：look at README").waitForExistence(timeout: 20), "new conversation reply missing")
         snapshot("15-new-session-chat")
+    }
+
+    func test16AnswerOptionQuestion() throws {
+        try launchWithHelper()
+        openChat("claude", claudeQuestion)
+        let card = element("question-card")
+        XCTAssertTrue(card.waitForExistence(timeout: 10), "question card missing")
+        snapshot("16a-question-card")
+        let submit = element("question-submit")
+        XCTAssertTrue(reveal(submit), "submit button missing")
+        XCTAssertFalse(submit.isEnabled, "submit must wait until every question is answered")
+        for id in ["question-option-0-藍綠部署", "question-option-1-ntfy", "question-option-1-Email"] {
+            let option = element(id)
+            XCTAssertTrue(reveal(option), "\(id) missing")
+            option.tap()
+        }
+        XCTAssertTrue(reveal(submit) && submit.isEnabled, "submit stays disabled after answering")
+        snapshot("16b-question-chosen")
+        submit.tap()
+        XCTAssertTrue(text("（示範）收到選擇：藍綠部署／ntfy、Email").waitForExistence(timeout: 25), "answer did not reach the PC")
+        XCTAssertTrue(poll(timeout: 10) { !self.element("question-card").exists }, "card stayed after answering")
+        snapshot("16-question-answered")
+    }
+
+    func test17QuickReply() throws {
+        try launchWithHelper()
+        openChat("claude", claudeC)
+        let reply = element("quick-reply-好，繼續")
+        XCTAssertTrue(reply.waitForExistence(timeout: 10), "quick reply missing")
+        XCTAssertFalse(element("quick-reply-commit").exists, "app actions are not quick replies")
+        snapshot("17a-quick-replies")
+        reply.tap()
+        XCTAssertTrue(text("（示範）收到：好，繼續寫下週計畫。").waitForExistence(timeout: 25), "quick reply was not sent")
+        XCTAssertTrue(poll(timeout: 10) { !self.element("quick-reply-好，繼續").exists }, "quick replies stayed after use")
+        snapshot("17-quick-reply-sent")
     }
 
     // MARK: - Helpers

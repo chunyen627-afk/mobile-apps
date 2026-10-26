@@ -1,3 +1,6 @@
 {"type": "user", "isSidechain": false, "timestamp": "2026-10-25T02:00:00Z", "message": {"role": "user", "content": "幫我寫本週週報草稿。"}}
 { broken line that is not json
-{"type": "assistant", "isSidechain": false, "timestamp": "2026-10-25T02:00:30Z", "message": {"role": "assistant", "content": [{"type": "text", "text": "本週完成：設計稿、唯讀版。下週：送出與權限按鈕。"}], "stop_reason": "end_turn"}}
+{"type": "assistant", "isSidechain": false, "timestamp": "2026-10-25T02:00:30Z", "message": {"role": "assistant", "content": [{"type": "text", "text": "本週完成：設計稿、唯讀版。下週：送出與權限按鈕。"}], "stop_reason": null}}
+{"type": "assistant", "isSidechain": false, "timestamp": "2026-10-25T02:00:31Z", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_demo_wrap", "name": "mcp__ccd_turn__wrap_up", "input": {"recap": "週報草稿寫好了。", "ask": "要接著寫下週計畫嗎？", "actions": [{"label": "好，繼續", "message": "好，繼續寫下週計畫。"}, {"label": "先停", "message": "先停在這裡。"}, {"action": "commit"}]}}], "stop_reason": null}}
+{"type": "user", "isSidechain": false, "timestamp": "2026-10-25T02:00:31Z", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_demo_wrap", "content": "Shown in the next-step box.", "is_error": false}]}}
+{"type": "assistant", "isSidechain": false, "timestamp": "2026-10-25T02:00:32Z", "message": {"role": "assistant", "content": [{"type": "text", "text": "草稿在上面，可以直接貼到週報。"}], "stop_reason": "end_turn"}}

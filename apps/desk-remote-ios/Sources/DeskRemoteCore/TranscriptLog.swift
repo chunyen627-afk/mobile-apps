@@ -25,6 +25,8 @@ public struct TranscriptLog: Equatable, Sendable {
     public private(set) var earlier = false
     public private(set) var status = "idle"
     public private(set) var prompt: PermissionPrompt?
+    public private(set) var question: OptionQuestion?
+    public private(set) var suggestions: ReplySuggestions?
     public private(set) var loaded = false
     static let maxEvents = 1000
 
@@ -35,6 +37,7 @@ public struct TranscriptLog: Equatable, Sendable {
     /// visible changed.
     @discardableResult
     public mutating func apply(_ page: EventPage) -> Bool {
+        let waitingBefore = (question, suggestions)
         let before = (events.last?.seq, events.count, prompt, status, earlier, loaded)
         if page.reset || page.epoch != epoch {
             events = page.events
@@ -51,9 +54,11 @@ public struct TranscriptLog: Equatable, Sendable {
         cursor = max(page.cursor, events.last?.seq ?? 0)
         status = page.status
         prompt = page.prompt
+        question = page.question
+        suggestions = page.suggestions
         loaded = true
         let after = (events.last?.seq, events.count, prompt, status, earlier, loaded)
-        return before != after
+        return before != after || waitingBefore != (question, suggestions)
     }
 
     /// Whether a user message starting like `text` arrived after event `seq`: a message sent

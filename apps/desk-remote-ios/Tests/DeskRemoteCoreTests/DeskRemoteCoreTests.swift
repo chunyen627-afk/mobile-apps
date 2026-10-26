@@ -106,6 +106,38 @@ final class DecodingTests: XCTestCase {
         XCTAssertEqual(done.title, "幫我看")
     }
 
+    func testDecodesQuestionAndReplySuggestions() throws {
+        let page = try HelperClient.decode(EventPage.self, status: 200, data: data("""
+        {"ok":true,"epoch":"e","reset":true,"earlier":false,"cursor":0,"status":"idle","prompt":null,"events":[],
+         "question":{"questionId":"toolu_1","questions":[{"question":"哪一種？","header":"方式","multiSelect":false,
+           "options":[{"label":"A","description":"快"},{"label":"B","description":null}]}]},
+         "suggestions":{"ask":"要繼續嗎？","replies":[{"label":"好","message":"好，繼續。"}]}}
+        """))
+        XCTAssertEqual(page.question?.questions.first?.options.map(\.label), ["A", "B"])
+        XCTAssertEqual(page.suggestions?.replies.first?.message, "好，繼續。")
+        var log = TranscriptLog()
+        XCTAssertTrue(log.apply(page))
+        XCTAssertEqual(log.question?.questionId, "toolu_1")
+        // An older helper without these fields still decodes.
+        let old = try HelperClient.decode(EventPage.self, status: 200, data: data("""
+        {"ok":true,"epoch":"e","reset":false,"earlier":false,"cursor":0,"status":"idle","prompt":null,"events":[]}
+        """))
+        XCTAssertNil(old.question)
+        XCTAssertTrue(log.apply(old), "a question that went away is a visible change")
+        XCTAssertNil(log.question)
+    }
+
+    func testQuestionAnswerEmptinessAndEncoding() throws {
+        XCTAssertTrue(QuestionAnswer().isEmpty)
+        XCTAssertTrue(QuestionAnswer(labels: [], other: "  ").isEmpty)
+        XCTAssertFalse(QuestionAnswer(labels: [], other: "自己寫").isEmpty)
+        let body = try JSONEncoder().encode(ActionRequest(questionId: "q", answers: [QuestionAnswer(labels: ["A"])]))
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(json["questionId"] as? String, "q")
+        XCTAssertEqual(((json["answers"] as? [[String: Any]])?.first?["labels"] as? [String]), ["A"])
+        XCTAssertNil(json["text"], "unused fields are left out")
+    }
+
     func testMapsTransportErrors() {
         XCTAssertEqual(HelperClient.failure(for: URLError(.timedOut)), .timeout)
         XCTAssertEqual(HelperClient.failure(for: URLError(.cancelled)), .cancelled)

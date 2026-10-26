@@ -127,13 +127,54 @@ def summarize_input(name, data):
 # A raw event is {kind, text, ts, tool?, isError?}.
 
 
+QUESTION_TOOL = 'AskUserQuestion'
+
+
+def is_wrap_up(name):
+    """The desktop app's next-step box (its reply buttons are just messages to send)."""
+    return name == 'wrap_up' or name.endswith('__wrap_up')
+
+
+def question_from(tool_id, data):
+    """A pending option question in the shape the phone shows, or None if it is not one."""
+    if not isinstance(data, dict) or not isinstance(data.get('questions'), list):
+        return None
+    questions = []
+    for item in data['questions']:
+        if not isinstance(item, dict) or not isinstance(item.get('options'), list):
+            return None
+        options = [{'label': str(o.get('label') or ''), 'description': o.get('description') or None}
+                   for o in item['options'] if isinstance(o, dict) and o.get('label')]
+        questions.append({'question': str(item.get('question') or ''), 'header': item.get('header') or None,
+                          'multiSelect': bool(item.get('multiSelect')), 'options': options})
+    return {'questionId': tool_id, 'questions': questions} if questions else None
+
+
+def suggestions_from(data):
+    """Reply buttons of the next-step box: only those that send words, not app actions."""
+    if not isinstance(data, dict):
+        return None
+    replies = []
+    for action in data.get('actions') or []:
+        if not isinstance(action, dict) or action.get('action') or not action.get('label'):
+            continue
+        replies.append({'label': str(action['label']), 'message': str(action.get('message') or action['label'])})
+    return {'ask': data.get('ask') or None, 'replies': replies} if replies else None
+
+
 class ClaudeParser:
-    """`~/.claude/projects/*/<cliSessionId>.jsonl` written by the Claude desktop app (Code tab)."""
+    """`~/.claude/projects/*/<cliSessionId>.jsonl` written by the Claude desktop app (Code tab).
+
+    Besides events it keeps what is waiting for the person now: an unanswered option question
+    (AskUserQuestion without its result yet) and the latest next-step box's reply buttons,
+    which last until the person sends the next message."""
 
     def __init__(self):
         self.tool_names = {}
         self.status = 'idle'
         self.queued = []  # messages Claude accepted but holds, e.g. while a question is pending
+        self.question = None
+        self.suggestions = None
 
     def feed(self, obj):
         kind = obj.get('type')
@@ -155,6 +196,7 @@ class ClaudeParser:
                 if content.strip() and not is_noise(content):
                     out.append({'kind': 'user', 'text': content, 'ts': ts})
                     self.status = 'working'
+                    self.suggestions = None
                 return out
             for block in content or []:
                 if not isinstance(block, dict):
@@ -162,12 +204,18 @@ class ClaudeParser:
                 if block.get('type') == 'text' and block.get('text', '').strip() and not is_noise(block['text']):
                     out.append({'kind': 'user', 'text': block['text'], 'ts': ts})
                     self.status = 'working'
+                    self.suggestions = None
                 elif block.get('type') == 'image':
                     out.append({'kind': 'user', 'text': '[圖片]', 'ts': ts})
                 elif block.get('type') == 'tool_result':
-                    out.append({'kind': 'tool_result', 'text': flatten(block.get('content')), 'ts': ts,
-                                'tool': self.tool_names.get(block.get('tool_use_id'), ''),
-                                'isError': bool(block.get('is_error'))})
+                    tool = self.tool_names.get(block.get('tool_use_id'), '')
+                    if tool == QUESTION_TOOL:
+                        if self.question and self.question['questionId'] == block.get('tool_use_id'):
+                            self.question = None
+                        out.append({'kind': 'status', 'text': '已回答選項題', 'ts': ts})
+                    elif not is_wrap_up(tool):
+                        out.append({'kind': 'tool_result', 'text': flatten(block.get('content')), 'ts': ts,
+                                    'tool': tool, 'isError': bool(block.get('is_error'))})
             return out
         for block in content or []:
             if not isinstance(block, dict):
@@ -177,7 +225,13 @@ class ClaudeParser:
             elif block.get('type') == 'tool_use':
                 name = block.get('name') or ''
                 self.tool_names[block.get('id')] = name
-                out.append({'kind': 'tool_call', 'tool': name, 'text': summarize_input(name, block.get('input')), 'ts': ts})
+                if name == QUESTION_TOOL:
+                    self.question = question_from(block.get('id'), block.get('input'))
+                elif is_wrap_up(name):
+                    self.suggestions = suggestions_from(block.get('input'))
+                else:
+                    out.append({'kind': 'tool_call', 'tool': name, 'text': summarize_input(name, block.get('input')),
+                                'ts': ts})
         if message.get('stop_reason') == 'end_turn':
             self.status = 'idle'
         return out
@@ -365,15 +419,24 @@ class Transcript:
     def page(self, after, epoch):
         """Events after `after` in the same epoch, or the latest page with reset=True."""
         with self.lock:
+            waiting = {'question': getattr(self.parser, 'question', None),
+                       'suggestions': getattr(self.parser, 'suggestions', None)}
             if epoch != self.epoch or after <= 0 or after > self.seq:
                 events = self.events[-FIRST_PAGE:]
                 earlier = self.earlier or len(self.events) > len(events)
-                return {'epoch': self.epoch, 'reset': True, 'events': events, 'earlier': earlier,
-                        'cursor': self.seq, 'status': self.parser.status}
+                return dict(waiting, epoch=self.epoch, reset=True, events=events, earlier=earlier,
+                            cursor=self.seq, status=self.parser.status)
             events = [event for event in self.events if event['seq'] > after][:MAX_PAGE]
             cursor = events[-1]['seq'] if events else after
-            return {'epoch': self.epoch, 'reset': False, 'events': events, 'earlier': False,
-                    'cursor': cursor, 'status': self.parser.status}
+            return dict(waiting, epoch=self.epoch, reset=False, events=events, earlier=False,
+                        cursor=cursor, status=self.parser.status)
+
+    def waiting_key(self):
+        """Changes whenever the pending question or reply buttons change."""
+        with self.lock:
+            question = getattr(self.parser, 'question', None)
+            suggestions = getattr(self.parser, 'suggestions', None)
+            return ((question or {}).get('questionId'), json.dumps(suggestions, sort_keys=True, ensure_ascii=False))
 
     def item(self, item_id):
         with self.lock:
@@ -854,19 +917,27 @@ class Hub:
                 self.transcripts.pop(next(iter(self.transcripts)))
             return existing
 
-    def events(self, app, session_id, after, epoch, wait, known_prompt='', stop=None):
-        """Waits up to `wait` seconds for new events or a permission prompt other than the one
-        the app already shows (`known_prompt`, its promptId)."""
+    def events(self, app, session_id, after, epoch, wait, known_prompt='', stop=None, known_question=None):
+        """Waits up to `wait` seconds for new events, a permission prompt other than the one the
+        app already shows (`known_prompt`, its promptId), an option question other than
+        `known_question` (its questionId), or changed reply buttons."""
         transcript = self.transcript(app, session_id)
         if transcript is None:
             return None
         self.on_events(app, session_id)
         deadline = time.monotonic() + max(0, min(wait, MAX_WAIT))
+        transcript.refresh()
+        waiting = transcript.waiting_key()
         while True:
             transcript.refresh()
             page = transcript.page(after, epoch)
             prompt = self.prompts(app, session_id)
             changed = (prompt or {}).get('promptId', '') != known_prompt
+            now_waiting = transcript.waiting_key()
+            if known_question is not None and (now_waiting[0] or '') != known_question:
+                changed = True
+            if now_waiting != waiting:
+                changed = True
             if page['events'] or page['reset'] or changed or time.monotonic() >= deadline or (stop and stop()):
                 page.update({'ok': True, 'prompt': prompt})
                 return page
@@ -991,6 +1062,10 @@ class WindowsDriver:
 
     def answer(self, app, doc, decision, expect):
         return self.ask(app, cmd='answer', doc=doc, decision=decision, expect=expect).get('how')
+
+    def answer_question(self, app, doc, question, answers):
+        # The question card's controls are read from the live app before this is written.
+        raise ActionError('not-supported', 'option questions are not wired to the desktop window yet')
 
 
 def prompt_id(app, doc, text):
@@ -1132,10 +1207,14 @@ class ActionRunner:
             if len(text) > self.MAX_TEXT:
                 return 400, error('bad-request', f'訊息太長（上限 {self.MAX_TEXT} 字）')
         info = None
-        if kind in ('send', 'open', 'permission'):
+        if kind in ('send', 'open', 'permission', 'answer'):
             info = self.hub.info(app, session_id)
             if info is None:
                 return 404, error('not-found', '找不到這個對話')
+        if kind == 'answer':
+            problem = self.check_answers(app, session_id, payload)
+            if problem:
+                return problem
         if kind == 'permission':
             decision = payload.get('decision')
             if decision not in ('allow_once', 'deny'):
@@ -1159,6 +1238,7 @@ class ActionRunner:
                 return 429, error('busy', '電腦端還有動作在排隊，請稍後再試')
             action = {'id': secrets.token_hex(6), 'kind': kind, 'app': app, 'sessionId': session_id, 'info': info,
                       'text': text, 'decision': payload.get('decision'), 'promptId': payload.get('promptId'),
+                      'questionId': payload.get('questionId'), 'answers': payload.get('answers'),
                       'project': payload.get('project'), 'force': force, 'state': 'queued', 'message': '排隊中',
                       'error': None, 'verified': None, 'created': self.clock()}
             self.actions[action['id']] = action
@@ -1168,6 +1248,38 @@ class ActionRunner:
             self.prune()
             self.lock.notify()
         return 202, self.public(action)
+
+    def pending_question(self, app, session_id):
+        transcript = self.hub.transcript(app, session_id)
+        if transcript is None:
+            return None, None
+        transcript.refresh()
+        with transcript.lock:
+            return transcript, getattr(transcript.parser, 'question', None)
+
+    def check_answers(self, app, session_id, payload):
+        """(status, body) when the answers do not fit the question waiting now, else None."""
+        _, question = self.pending_question(app, session_id)
+        if not question or question['questionId'] != payload.get('questionId'):
+            return 409, error('question-changed', '這個選項題已經回答過或換了一題，請重新整理')
+        answers = payload.get('answers')
+        if not isinstance(answers, list) or len(answers) != len(question['questions']):
+            return 400, error('bad-request', '每一題都要回答')
+        for item, answer in zip(question['questions'], answers):
+            if not isinstance(answer, dict):
+                return 400, error('bad-request', '答案格式不對')
+            labels = answer.get('labels') or []
+            other = answer.get('other')
+            known = {o['label'] for o in item['options']}
+            if not isinstance(labels, list) or any(label not in known for label in labels):
+                return 400, error('bad-request', '選了不存在的選項')
+            if not item['multiSelect'] and len(labels) > 1:
+                return 400, error('bad-request', '這一題只能選一個')
+            if other is not None and (not isinstance(other, str) or len(other) > 2000):
+                return 400, error('bad-request', '「其他」的內容不對')
+            if not labels and not (other or '').strip():
+                return 400, error('bad-request', '每一題都要回答')
+        return None
 
     def prune(self):
         now = self.clock()
@@ -1209,7 +1321,7 @@ class ActionRunner:
     def run(self, action):
         self.update(action, state='running', message='處理中')
         handler = {'send': self.do_send, 'permission': self.do_permission, 'new': self.do_new,
-                   'open': self.do_open}[action['kind']]
+                   'open': self.do_open, 'answer': self.do_answer}[action['kind']]
         try:
             handler(action)
         except ActionError as exc:
@@ -1228,7 +1340,8 @@ class ActionRunner:
     def tell(self, action, failed=False):
         if not self.notify:
             return
-        verb = {'send': '送出訊息', 'permission': '回覆權限', 'new': '開新對話', 'open': '打開對話'}[action['kind']]
+        verb = {'send': '送出訊息', 'permission': '回覆權限', 'new': '開新對話', 'open': '打開對話',
+                'answer': '回答選項題'}[action['kind']]
         if action['kind'] == 'permission' and not failed:
             verb = '允許一次' if action['decision'] == 'allow_once' else '拒絕'
         title = (action.get('info') or {}).get('title') or action.get('title') or ''
@@ -1346,6 +1459,30 @@ class ActionRunner:
             time.sleep(0.5)
         self.update(action, state='done', message='已允許一次' if action['decision'] == 'allow_once' else '已拒絕')
 
+    def do_answer(self, action):
+        """Picks the options on the PC; done only once the transcript has the question's result."""
+        app, info = action['app'], action['info']
+        transcript, question = self.pending_question(app, action['sessionId'])
+        if not question or question['questionId'] != action['questionId']:
+            raise ActionError('question-changed', '')
+        self.open_conversation(action)
+        self.recheck(action)
+        self.presence.begin_own()
+        self.driver.answer_question(app, info['doc'], question, action['answers'])
+        self.presence.end_own()
+        self.update(action, message='已選好，確認中')
+        deadline = self.clock() + self.verify_seconds
+        while True:
+            transcript.refresh()
+            with transcript.lock:
+                still = getattr(transcript.parser, 'question', None)
+            if not still or still['questionId'] != action['questionId']:
+                self.update(action, state='done', verified=True, message='已回答')
+                return
+            if self.clock() >= deadline:
+                raise ActionError('still-asking', '')
+            time.sleep(0.5)
+
     def do_new(self, action):
         app, text, project = action['app'], action['text'], action.get('project')
         source = self.hub.sources[app]
@@ -1388,6 +1525,8 @@ FAILURE_TEXT = {
     'prompt-changed': '權限詢問已經不一樣了',
     'menu-failed': '打不開「允許一次」選單',
     'still-asking': '按了之後電腦上仍在詢問，可能沒有按到',
+    'question-changed': '這個選項題已經回答過或換了一題',
+    'not-supported': '這台電腦的小幫手還不支援這個動作',
     'not-found': '畫面上找不到需要的按鈕',
     'not-invokable': '按鈕按不下去',
     'timeout': '畫面操作逾時',
@@ -1445,7 +1584,7 @@ def handler_for(hub, gate, networks, runner=None):
             if not self.allowed():
                 return self.send_json(403, error('forbidden', '不在允許的網路'))
             url = urllib.parse.urlsplit(self.path)
-            query = urllib.parse.parse_qs(url.query)
+            query = urllib.parse.parse_qs(url.query, keep_blank_values=True)  # "question=" means none known
             parts = [urllib.parse.unquote(p) for p in url.path.strip('/').split('/')]
             if parts == ['health'] and route == self.route:
                 return self.send_json(200, {'ok': True})
@@ -1488,7 +1627,7 @@ def handler_for(hub, gate, networks, runner=None):
                 app = parts[0]
                 if len(parts) == 2:
                     return self.send_json(*runner.submit('new', app, None, body))
-                kinds = {'messages': 'send', 'permission': 'permission', 'open': 'open'}
+                kinds = {'messages': 'send', 'permission': 'permission', 'open': 'open', 'answer': 'answer'}
                 if len(parts) == 4 and parts[3] in kinds and hub.sources[app].id_pattern.match(parts[2]):
                     return self.send_json(*runner.submit(kinds[parts[3]], app, parts[2], body))
             return self.send_json(404, error('not-found', '沒有這個路徑'))
@@ -1512,7 +1651,8 @@ def handler_for(hub, gate, networks, runner=None):
                     return self.send_json(200, hub.sessions(app, max(1, min(number('limit', 50), 100))))
                 if len(parts) == 4 and parts[3] == 'events':
                     page = hub.events(app, parts[2], number('after', 0), query.get('epoch', [''])[0],
-                                      number('wait', 0), query.get('prompt', [''])[0])
+                                      number('wait', 0), query.get('prompt', [''])[0],
+                                      known_question=query.get('question', [None])[0])
                     if page is None:
                         return self.send_json(404, error('not-found', '找不到這個對話的逐字稿'))
                     return self.send_json(200, page)
@@ -1760,6 +1900,22 @@ class FakeDriver:
         self.write(app, path, 'assistant', '已補上分號並存檔（示範）' if decision == 'allow_once' else '好的，先不修改。')
         return 'fake'
 
+    def answer_question(self, app, doc, question, answers):
+        self.calls.append(('answer_question', app, question['questionId']))
+        if self.open_doc.get(app) != doc:
+            raise ActionError('title-mismatch', '')
+        session_id = self.session_for_doc(app, doc)
+        path = self.hub.sources[app].transcript_path(session_id)
+        chosen = ['、'.join(a.get('labels') or []) or (a.get('other') or '') for a in answers]
+        pairs = ', '.join(f'"{q["question"]}"="{c}"' for q, c in zip(question['questions'], chosen))
+        line = {'type': 'user', 'timestamp': datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%S.000Z'),
+                'message': {'role': 'user', 'content': [{'type': 'tool_result', 'tool_use_id': question['questionId'],
+                                                         'content': f'User has answered your questions: {pairs}.'}]}}
+        with self.lock:
+            with Path(path).open('a', encoding='utf-8') as handle:
+                handle.write(json.dumps(line, ensure_ascii=False) + '\n')
+        self.later(app, path, f'（示範）收到選擇：{"／".join(chosen)}')
+
     def later(self, app, path, text):
         def reply():
             time.sleep(self.reply_after)
@@ -1814,6 +1970,8 @@ def build_driving(hub, driver, notify, pc_name, cfg, interval, verify_seconds):
     runner = ActionRunner(hub, driver, hub.presence, watcher, notify, pc_name, load_strings(),
                           idle_seconds=int(cfg.get('idle_seconds', 60)), verify_seconds=verify_seconds)
     hub.capabilities = ['read', 'send', 'permission', 'new', 'open']
+    if not isinstance(driver, WindowsDriver):
+        hub.capabilities.append('question')  # the desktop window side is not wired yet
     threading.Thread(target=watcher.run_forever, daemon=True).start()
     threading.Thread(target=runner.run_forever, daemon=True).start()
     return runner

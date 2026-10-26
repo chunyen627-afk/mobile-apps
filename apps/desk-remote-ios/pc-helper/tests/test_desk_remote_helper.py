@@ -23,6 +23,7 @@ import desk_remote_helper as h  # noqa: E402
 FIXTURES = HERE.parent.parent / 'fixtures' / 'fake-helper'
 A = 'local_11111111-1111-4111-8111-111111111111'
 B = 'local_22222222-2222-4222-8222-222222222222'
+E = 'local_66666666-6666-4666-8666-666666666666'
 X = '0a000000-0000-4000-8000-000000000001'
 Y = '0a000000-0000-4000-8000-000000000002'
 TOKEN = json.loads((FIXTURES / 'fake-config.json').read_text(encoding='utf-8'))['token']
@@ -93,7 +94,7 @@ class FakeEnvironment(unittest.TestCase):
 class ClaudeTests(FakeEnvironment):
     def test_list_is_newest_first_without_archived_and_reports_bad_files(self):
         rows = self.sources['claude'].list_sessions(50)
-        self.assertEqual([r['title'] for r in rows], ['整理專案 README', '修正建置錯誤', '週報草稿'])
+        self.assertEqual([r['title'] for r in rows], ['整理專案 README', '修正建置錯誤', '選擇部署方式', '週報草稿'])
         self.assertEqual(self.sources['claude'].warning, 'Claude 對話清單有 1 個檔案無法解析')
         first = rows[0]
         self.assertEqual(first['id'], A)
@@ -117,6 +118,36 @@ class ClaudeTests(FakeEnvironment):
         joined = ' '.join(e['text'] for e in events)
         self.assertNotIn('system-reminder', joined)
         self.assertNotIn('subagent', joined)
+
+    def test_option_question_waits_until_its_result_arrives(self):
+        transcript = h.Transcript(self.sources['claude'].transcript_path(E), h.ClaudeParser)
+        events = drain(transcript)
+        self.assertNotIn('AskUserQuestion', [e.get('tool') for e in events], 'the question is a card, not a tool row')
+        question = transcript.page(0, '')['question']
+        self.assertEqual(question['questionId'], 'toolu_demo_question')
+        self.assertEqual([q['multiSelect'] for q in question['questions']], [False, True])
+        self.assertEqual([o['label'] for o in question['questions'][0]['options']], ['藍綠部署', '直接覆蓋'])
+        with Path(transcript.path).open('a', encoding='utf-8') as handle:
+            handle.write(json.dumps({'type': 'user', 'message': {'content': [
+                {'type': 'tool_result', 'tool_use_id': 'toolu_demo_question', 'content': 'answered'}]}}) + '\n')
+        transcript.refresh()
+        page = transcript.page(0, '')
+        self.assertIsNone(page['question'])
+        self.assertEqual(page['events'][-1]['text'], '已回答選項題')
+
+    def test_reply_buttons_last_until_the_next_message(self):
+        C = 'local_33333333-3333-4333-8333-333333333333'
+        transcript = h.Transcript(self.sources['claude'].transcript_path(C), h.ClaudeParser)
+        events = drain(transcript)
+        self.assertFalse([e for e in events if e['kind'].startswith('tool')], 'the next-step box is not a tool row')
+        suggestions = transcript.page(0, '')['suggestions']
+        self.assertEqual(suggestions['ask'], '要接著寫下週計畫嗎？')
+        self.assertEqual(suggestions['replies'], [{'label': '好，繼續', 'message': '好，繼續寫下週計畫。'},
+                                                  {'label': '先停', 'message': '先停在這裡。'}])
+        with Path(transcript.path).open('a', encoding='utf-8') as handle:
+            handle.write(json.dumps({'type': 'user', 'message': {'content': '好，繼續寫下週計畫。'}}, ensure_ascii=False) + '\n')
+        transcript.refresh()
+        self.assertIsNone(transcript.page(0, '')['suggestions'])
 
     def test_error_results_are_marked(self):
         events = drain(h.Transcript(self.sources['claude'].transcript_path(B), h.ClaudeParser))
@@ -401,6 +432,36 @@ class DrivingTests(FakeEnvironment):
         self.assertEqual(allow[1]['error'], 'busy-user')  # Claude's dropdown needs the mouse
         self.assertEqual(runner.submit('permission', 'claude', B, {'promptId': prompt['promptId'], 'decision': 'deny'})[0], 202)
 
+    def test_answers_must_fit_the_question_waiting_now(self):
+        hub, driver, _, runner = drive(self.fake)
+        good = [{'labels': ['藍綠部署']}, {'labels': ['ntfy', 'Email']}]
+        def submit(**payload):
+            return runner.submit('answer', 'claude', E, dict({'questionId': 'toolu_demo_question', 'answers': good}, **payload))
+        self.assertEqual(submit(questionId='old')[1]['error'], 'question-changed')
+        self.assertEqual(submit(answers=[{'labels': ['藍綠部署']}])[0], 400)                       # one answer missing
+        self.assertEqual(submit(answers=[{'labels': ['不存在']}, {'labels': ['ntfy']}])[0], 400)   # unknown option
+        self.assertEqual(submit(answers=[{'labels': ['藍綠部署', '直接覆蓋']}, {'labels': ['ntfy']}])[0], 400)  # single
+        self.assertEqual(submit(answers=[{'labels': []}, {'labels': ['ntfy']}])[0], 400)          # nothing chosen
+        code, body = submit(answers=[{'labels': [], 'other': '先問運維'}, {'labels': ['ntfy', 'Email']}])
+        self.assertEqual(code, 202)
+        run_all(runner)
+        status = runner.status(body['id'])
+        self.assertEqual((status['state'], status['message']), ('done', '已回答'), status)
+        self.assertEqual([c[0] for c in driver.calls], ['open', 'answer_question'])
+        self.assertIsNone(hub.transcript('claude', E).page(0, '')['question'])
+        self.assertEqual(submit()[1]['error'], 'question-changed', 'an answered question cannot be answered again')
+
+    def test_answer_the_pc_did_not_take_fails(self):
+        class DeafDriver(h.FakeDriver):
+            def answer_question(self, app, doc, question, answers):
+                self.calls.append(('answer_question', app, question['questionId']))
+        _, _, _, runner = drive(self.fake, driver_class=DeafDriver)
+        runner.clock = FastClock()
+        body = runner.submit('answer', 'claude', E, {'questionId': 'toolu_demo_question',
+                                                     'answers': [{'labels': ['直接覆蓋']}, {'labels': ['ntfy']}]})[1]
+        run_all(runner)
+        self.assertEqual(runner.status(body['id'])['error'], 'still-asking')
+
     def test_new_conversation_reports_its_id(self):
         _, driver, _, runner = drive(self.fake)
         body = runner.submit('new', 'codex', None, {'text': '幫我看一下 README'})[1]
@@ -530,6 +591,18 @@ class HttpTests(FakeEnvironment):
         self.assertEqual(self.get('/v1/claude/sessions/local_00000000-0000-4000-8000-000000000000/messages',
                                   method='POST', body={'text': 'x'})[0], 404)
         self.assertEqual(self.get('/v1/state', method='PUT')[0], 405)
+
+    def test_question_wakes_a_long_poll_and_can_be_answered(self):
+        code, page = self.get(f'/v1/claude/sessions/{E}/events')
+        self.assertEqual(page['question']['questionId'], 'toolu_demo_question')
+        started = time.monotonic()
+        code, again = self.get(f"/v1/claude/sessions/{E}/events?after={page['cursor']}&epoch={page['epoch']}"
+                               '&wait=10&question=')
+        self.assertLess(time.monotonic() - started, 3, 'a question the phone does not know must not wait')
+        self.assertIsNotNone(again['question'])
+        code, body = self.get(f'/v1/claude/sessions/{E}/answer', method='POST', body={
+            'questionId': 'toolu_demo_question', 'answers': [{'labels': ['藍綠部署']}, {'labels': ['Email']}]})
+        self.assertEqual(code, 202, body)
 
     def test_read_only_server_refuses_posts(self):
         self.start_server([ipaddress.ip_network('127.0.0.0/8')], driving=False)

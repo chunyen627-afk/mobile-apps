@@ -20,6 +20,7 @@ struct DeskChatView: View {
     @State private var pending: [DeskPending] = []
     @State private var confirm: DeskConfirm?
     @State private var promptBusy: String?
+    @State private var questionBusy: String?
     @State private var openState: String?
     /// A question was seen here, so the list's "needs action" is no longer news.
     @State private var sawPrompt = false
@@ -50,8 +51,14 @@ struct DeskChatView: View {
                         DeskPromptCard(app: app, prompt: prompt, busy: promptBusy,
                                        answer: { allow in Task { await answer(prompt, allow: allow, force: false) } })
                             .id("prompt")
-                    } else if session.status == "needs-action" && log.loaded && !sawPrompt {
+                    } else if session.status == "needs-action" && log.loaded && !sawPrompt && log.question == nil {
                         DeskOpenOnPC(state: openState) { Task { await openOnPC(force: false) } }
+                    }
+                    if let question = log.question {
+                        DeskQuestionCard(question: question, busy: questionBusy) { answers in
+                            Task { await answerQuestion(question, answers: answers, force: false) }
+                        }
+                        .id("question-\(question.questionId)")
                     }
                     if log.prompt == nil, let working = DeskText.working(app, status: log.status) {
                         Label(working, systemImage: "ellipsis.bubble")
@@ -74,6 +81,9 @@ struct DeskChatView: View {
             .onChange(of: log.prompt) {
                 withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
             }
+            .onChange(of: log.question?.questionId) {
+                withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+            }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
             if let failure {
@@ -85,7 +95,12 @@ struct DeskChatView: View {
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            DeskInputBar(text: $draft, focused: $inputFocused) { submitDraft() }
+            VStack(spacing: 0) {
+                if let suggestions = log.suggestions, pending.isEmpty, log.question == nil, log.prompt == nil {
+                    DeskQuickReplies(suggestions: suggestions) { reply in submit(reply.message) }
+                }
+                DeskInputBar(text: $draft, focused: $inputFocused) { submitDraft() }
+            }
         }
         .alert(confirm?.title ?? "", isPresented: Binding(get: { confirm != nil }, set: { if !$0 { confirm = nil } }),
                presenting: confirm) { item in
@@ -133,9 +148,12 @@ struct DeskChatView: View {
         while !Task.isCancelled {
             do {
                 let page = try await client.events(app, session: session.id, after: log.cursor, epoch: log.epoch,
-                                                   knownPrompt: log.prompt?.promptId, wait: wait)
+                                                   knownPrompt: log.prompt?.promptId,
+                                                   knownQuestion: log.question?.questionId, wait: wait)
+                let previousQuestion = log.question?.questionId
                 log.apply(page)
                 if log.prompt == nil { promptBusy = nil } else { sawPrompt = true }
+                if log.question?.questionId != previousQuestion { questionBusy = nil }
                 pending.removeAll { $0.mark != nil && log.hasUserText($0.text, after: $0.mark ?? 0) }
                 failure = nil
                 wait = 25
@@ -168,6 +186,11 @@ struct DeskChatView: View {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         draft = ""
+        submit(text)
+    }
+
+    /// Sends typed text or a quick reply's message the same way.
+    private func submit(_ text: String) {
         let item = DeskPending(text: text, mark: log.events.last?.seq ?? 0)
         pending.append(item)
         Task { await send(item, force: false) }
@@ -226,6 +249,29 @@ struct DeskChatView: View {
             promptBusy = "沒有成功：\(DeskText.failure(error))"
         } catch {
             promptBusy = "沒有成功：\(DeskText.failure(.unreachable))"
+        }
+    }
+
+    private func answerQuestion(_ question: OptionQuestion, answers: [QuestionAnswer], force: Bool) async {
+        guard let client = store.client(pcID) else { return }
+        questionBusy = "正在電腦上選擇…"
+        do {
+            let start = try await client.answerQuestion(app, session: session.id, questionId: question.questionId,
+                                                        answers: answers, force: force)
+            let end = try await client.follow(start, timeout: 60)
+            questionBusy = end.state == "failed" ? "沒有成功：\(end.message)" : "\(end.message)，等待電腦更新…"
+        } catch HelperFailure.busyUser(let seconds) {
+            questionBusy = nil
+            confirm = DeskConfirm(
+                title: "電腦有人在用",
+                message: "\(seconds.map { "\($0) 秒前" } ?? "剛剛")有人操作過這台電腦。回答會把視窗切到前面並點選選項。",
+                confirmLabel: "仍要回答",
+                run: { await answerQuestion(question, answers: answers, force: true) },
+                cancel: {})
+        } catch let error as HelperFailure {
+            questionBusy = "沒有成功：\(DeskText.failure(error))"
+        } catch {
+            questionBusy = "沒有成功：\(DeskText.failure(.unreachable))"
         }
     }
 
@@ -438,6 +484,119 @@ struct DeskPromptCard: View {
         .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("prompt-card")
+    }
+}
+
+/// An option question: pick one (or several) per question, or write your own under 其他.
+struct DeskQuestionCard: View {
+    let question: OptionQuestion
+    let busy: String?
+    let submit: ([QuestionAnswer]) -> Void
+    @State private var picks: [Int: [String]] = [:]
+    @State private var others: [Int: String] = [:]
+
+    private func answer(_ index: Int) -> QuestionAnswer {
+        let other = (others[index] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return QuestionAnswer(labels: picks[index] ?? [], other: other.isEmpty ? nil : other)
+    }
+
+    private var complete: Bool { question.questions.indices.allSatisfy { !answer($0).isEmpty } }
+
+    private func toggle(_ index: Int, _ label: String, multi: Bool) {
+        var chosen = picks[index] ?? []
+        if chosen.contains(label) {
+            chosen.removeAll { $0 == label }
+        } else {
+            chosen = multi ? chosen + [label] : [label]
+        }
+        picks[index] = chosen
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Label("Claude 在等你選擇", systemImage: "list.bullet.circle.fill")
+                .font(.subheadline.bold())
+                .foregroundStyle(.blue)
+            ForEach(Array(question.questions.enumerated()), id: \.offset) { index, item in
+                VStack(alignment: .leading, spacing: 6) {
+                    if let header = item.header {
+                        Text(header).font(.caption.bold()).foregroundStyle(.secondary)
+                    }
+                    Text(item.question).font(.callout)
+                    Text(item.multiSelect ? "可複選" : "選一個").font(.caption2).foregroundStyle(.secondary)
+                    ForEach(item.options, id: \.label) { option in
+                        let on = (picks[index] ?? []).contains(option.label)
+                        Button { toggle(index, option.label, multi: item.multiSelect) } label: {
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Image(systemName: item.multiSelect ? (on ? "checkmark.square.fill" : "square")
+                                                                   : (on ? "largecircle.fill.circle" : "circle"))
+                                    .foregroundStyle(on ? Color.blue : Color.secondary)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(option.label).foregroundStyle(.primary)
+                                    if let detail = option.description {
+                                        Text(detail).font(.caption).foregroundStyle(.secondary)
+                                    }
+                                }
+                                Spacer(minLength: 0)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(busy != nil)
+                        .accessibilityIdentifier("question-option-\(index)-\(option.label)")
+                        .accessibilityValue(on ? "已選" : "未選")
+                    }
+                    TextField("其他（自己寫）", text: Binding(get: { others[index] ?? "" }, set: { others[index] = $0 }),
+                              axis: .vertical)
+                        .textFieldStyle(.roundedBorder)
+                        .disabled(busy != nil)
+                        .accessibilityIdentifier("question-other-\(index)")
+                }
+            }
+            if let busy {
+                Text(busy).font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("question-busy")
+            } else {
+                Button { submit(question.questions.indices.map { answer($0) }) } label: {
+                    Text("送出選擇").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!complete)
+                .accessibilityIdentifier("question-submit")
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("question-card")
+    }
+}
+
+/// The next-step box's reply buttons: tapping one sends its message like typing it.
+struct DeskQuickReplies: View {
+    let suggestions: ReplySuggestions
+    let send: (ReplySuggestions.Reply) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let ask = suggestions.ask {
+                Text(ask).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(suggestions.replies, id: \.self) { reply in
+                        Button(reply.label) { send(reply) }
+                            .buttonStyle(.bordered)
+                            .accessibilityIdentifier("quick-reply-\(reply.label)")
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.bar)
     }
 }
 
