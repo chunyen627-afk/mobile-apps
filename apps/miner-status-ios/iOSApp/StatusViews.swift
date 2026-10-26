@@ -73,6 +73,10 @@ struct OverviewList: View {
             }
         }
 
+        if !model.advice.isEmpty {
+            AdviceSection(items: model.advice, now: model.displayNow)
+        }
+
         // Below the machines so their rows stay on the first screen.
         if model.hasEarnings {
             EarningsSummarySection(model: model) { showingEarningsSettings = true }

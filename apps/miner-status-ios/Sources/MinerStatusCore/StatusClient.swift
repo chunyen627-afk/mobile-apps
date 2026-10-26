@@ -129,7 +129,7 @@ public struct StatusFeedClient: Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         // Asks the source for the optional market/earnings extension; sources that ignore the
         // header send the base feed, which this app also accepts.
-        request.setValue("earnings,assessment,control", forHTTPHeaderField: "X-Miner-Status-Features")
+        request.setValue("earnings,assessment,control,advice", forHTTPHeaderField: "X-Miner-Status-Features")
         return request
     }
 

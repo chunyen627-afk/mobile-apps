@@ -111,6 +111,8 @@ final class AppModel: ObservableObject {
     // Earnings
     @Published private(set) var market: MarketReport?
     @Published private(set) var sourceTariff: TariffReport? = SourceTariffStore.load()
+    /// The source's mine-or-rest advice for billed machines; live mode only.
+    @Published private(set) var advice: [AdviceReport] = []
     @Published var earningsSettings = EarningsSettings.load() {
         didSet { earningsSettings.save() }
     }
@@ -141,6 +143,7 @@ final class AppModel: ObservableObject {
         client = nil
         mode = .demo
         self.scenario = scenario
+        advice = []
         guard let demo else {
             snapshots = []
             feedProblem = nil
@@ -183,6 +186,7 @@ final class AppModel: ObservableObject {
         lastFailure = nil
         sourceSentDemoData = false
         market = nil
+        advice = []
         if isForeground { startPolling() }
     }
 
@@ -339,6 +343,7 @@ final class AppModel: ObservableObject {
             lastFailure = nil
             sourceSentDemoData = feed.isDemo
             market = feed.market
+            advice = feed.advice ?? []
             if let tariff = feed.tariff, tariff != sourceTariff {
                 sourceTariff = tariff
                 SourceTariffStore.save(tariff)

@@ -214,6 +214,26 @@ final class MinerStatusUITests: XCTestCase {
         snapshot("19-control-result")
     }
 
+    // MARK: - Mining advice
+
+    func test17MiningAdviceForBilledMachines() throws {
+        XCTAssertFalse(element("advice-demo-laptop").exists, "the offline demo carries no advice")
+        startLive(try sourceURL("MINER_UI_SOURCE_URL"))
+        XCTAssertTrue(element("machine-demo-rig-a").waitForExistence(timeout: 20), "live feed rows did not appear")
+        // A switched-off machine has no machine row but still gets advice.
+        let laptop = element("advice-demo-laptop")
+        XCTAssertTrue(reveal(laptop), "advice for the switched-off machine missing")
+        XCTAssertTrue(waitFor(laptop, labelContains: "建議挖礦", timeout: 3), "laptop advice says \(laptop.label)")
+        XCTAssertTrue(laptop.label.contains("NT$343") || laptop.label.contains("NT$342"), "no monthly net: \(laptop.label)")
+        let rig = element("advice-demo-rig-b")
+        XCTAssertTrue(reveal(rig), "advice for the losing machine missing")
+        XCTAssertTrue(waitFor(rig, labelContains: "建議停挖", timeout: 3), "rig advice says \(rig.label)")
+        XCTAssertTrue(rig.label.contains("-35") || rig.label.contains("−35"), "loss not shown: \(rig.label)")
+        snapshot("20-mining-advice")
+        stopLiveAndCheckDemo()
+        XCTAssertFalse(element("advice-demo-laptop").exists, "advice must not carry over into the demo")
+    }
+
     // MARK: - Helpers
     // MARK: - Helpers
 

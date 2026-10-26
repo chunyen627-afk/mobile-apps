@@ -332,6 +332,30 @@ def build_cases(base: dict) -> tuple[list, list]:
         ("tariff too many dates", [(("tariff",), dict(tariff, offPeakDates=["2026-10-26"] * 61))]),
     ]
 
+    # Optional advice extension.
+    advice = {"machineId": "demo-laptop", "displayName": "示範筆電", "recommendation": "rest",
+              "monthlyNetTwd": 120.5, "startAtTwd": 300, "stopBelowTwd": 250,
+              "reason": "估算每月淨收益 NT$120，未達開挖門檻 NT$300", "since": None,
+              "observedAt": "2026-10-26T14:30:00+08:00"}
+    positive += [
+        ("advice present", [(("advice",), [advice, dict(advice, machineId="demo-rig-b", recommendation="mine",
+                                                        monthlyNetTwd=-20.5, stopBelowTwd=0,
+                                                        since="2026-10-26T14:30:00+08:00")])]),
+        ("advice null", [(("advice",), None)]),
+        ("advice empty", [(("advice",), [])]),
+        ("advice unknown net", [(("advice",), [dict(advice, monthlyNetTwd=None, observedAt=None)])]),
+    ]
+    negative += [
+        ("advice not a list", [(("advice",), advice)]),
+        ("advice extra key", [(("advice",), [dict(advice, account="x")])]),
+        ("advice unknown recommendation", [(("advice",), [dict(advice, recommendation="maybe")])]),
+        ("advice bad machine id", [(("advice",), [dict(advice, machineId="demo laptop")])]),
+        ("advice empty reason", [(("advice",), [dict(advice, reason="")])]),
+        ("advice null threshold", [(("advice",), [dict(advice, startAtTwd=None)])]),
+        ("advice missing since", [(("advice",), [{k: v for k, v in advice.items() if k != "since"}])]),
+        ("advice too many", [(("advice",), [advice] * 9)]),
+    ]
+
     # Optional control extension.
     control = {"canStart": False, "canStop": True}
     positive += [

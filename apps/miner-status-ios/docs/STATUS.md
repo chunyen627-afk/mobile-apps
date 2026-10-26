@@ -113,6 +113,12 @@ UI 測試與截圖找到並修正的畫面問題：
 - [run 40210990544](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40210990544)（第一次發布）：test01、test11 又被 NSPredicate 漏看文字（runner 特別慢，UI 測試 598 秒），沒有建立 Release；共用的 `waitFor` 全面改用 poll
 - [run 40212351070](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40212351070)（`880f001`）：單元測試 `Executed 117 tests, with 0 failures`、UI 測試 `Executed 16 tests, with 0 failures`
 
+## 0.5.0（build 7，待發布）：開挖建議
+
+- 使用者要求：收益回來時提醒可以把筆電開機挖，反過來收益差到扣電費不划算時也提醒停掉要算電費的那台；只對要算電費的機器
+- 電腦端已上線（2026-10-26）：每 10 分鐘估算，6 小時平均越過門檻才改變建議並推播；關機中的機器設「達到某金額建議挖、低於稍低金額建議停」，在跑的機器設「扣電費後虧損就建議停」
+- App：清單的「開挖建議」區塊、資料格式加選填 `advice`（feature `advice`）
+
 ## 實機
 
 | 項目 | 結果 |

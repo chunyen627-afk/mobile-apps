@@ -33,6 +33,10 @@
     "tariff": {
       "description": "OPTIONAL extension sent with market: the published Taipower simple two-stage time-of-use rates and upcoming weekday days off (billed off-peak all day). Null when never fetched.",
       "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/tariff" }]
+    },
+    "advice": {
+      "description": "OPTIONAL extension (feature `advice`): for machines whose electricity is billed, whether mining is currently worth it, including machines that are switched off and so absent from machines. Null when the publisher has no advisor.",
+      "oneOf": [{ "type": "null" }, { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/advice" } }]
     }
   },
   "allOf": [
@@ -251,6 +255,24 @@
           "type": "array", "maxItems": 60,
           "items": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" }
         },
+        "observedAt": { "$ref": "#/$defs/timestampOrNull" }
+      }
+    },
+    "advice": {
+      "description": "Publisher's mine-or-rest recommendation for one billed machine, from its measured hashrate and power, the pool estimate and the tariff. monthlyNetTwd is the estimated NT$ a month after electricity; the recommendation turns to mine at startAtTwd and to rest below stopBelowTwd, each held for some hours.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["machineId", "displayName", "recommendation", "monthlyNetTwd", "startAtTwd", "stopBelowTwd",
+                   "reason", "since", "observedAt"],
+      "properties": {
+        "machineId": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "recommendation": { "enum": ["mine", "rest"] },
+        "monthlyNetTwd": { "type": ["number", "null"] },
+        "startAtTwd": { "type": "number" },
+        "stopBelowTwd": { "type": "number" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "since": { "description": "When the recommendation last changed; null before the first change.", "$ref": "#/$defs/timestampOrNull" },
         "observedAt": { "$ref": "#/$defs/timestampOrNull" }
       }
     },

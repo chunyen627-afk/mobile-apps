@@ -30,11 +30,13 @@ public struct MinerStatusFeed: Codable, Hashable, Sendable {
     public let market: MarketReport?
     /// Optional extension: the published electricity tariff; nil when absent or null.
     public let tariff: TariffReport?
+    /// Optional extension: whether mining billed machines is worth it now; nil when absent or null.
+    public let advice: [AdviceReport]?
 
     public var isDemo: Bool { dataOrigin == .demo }
 
     enum CodingKeys: String, CodingKey, CaseIterable {
-        case schemaVersion, dataOrigin, demoNotice, publishedAt, machines, market, tariff
+        case schemaVersion, dataOrigin, demoNotice, publishedAt, machines, market, tariff, advice
     }
 
     public init(from decoder: Decoder) throws {
@@ -69,6 +71,10 @@ public struct MinerStatusFeed: Codable, Hashable, Sendable {
         machines = try c.decode([MachineStatus].self, forKey: .machines)
         market = c.contains(.market) ? try c.decodeNullable(MarketReport.self, forKey: .market) : nil
         tariff = c.contains(.tariff) ? try c.decodeNullable(TariffReport.self, forKey: .tariff) : nil
+        advice = c.contains(.advice) ? try c.decodeNullable([AdviceReport].self, forKey: .advice) : nil
+        if let items = advice, items.count > 8 {
+            throw DecodingError.dataCorruptedError(forKey: .advice, in: c, debugDescription: "at most 8 advice items")
+        }
 
         // Stricter than the schema: duplicate ids would let samples from different
         // machines be compared against each other.
@@ -89,6 +95,7 @@ public struct MinerStatusFeed: Codable, Hashable, Sendable {
         try c.encode(machines, forKey: .machines)
         try c.encodeIfPresent(market, forKey: .market)
         try c.encodeIfPresent(tariff, forKey: .tariff)
+        try c.encodeIfPresent(advice, forKey: .advice)
     }
 }
 
@@ -189,6 +196,80 @@ public struct MachineStatus: Codable, Hashable, Sendable {
         try c.encodeIfPresent(assessment, forKey: .assessment)
         try c.encodeIfPresent(health, forKey: .health)
         try c.encodeIfPresent(control, forKey: .control)
+    }
+}
+
+// MARK: - Advice extension
+
+/// Whether mining a machine whose electricity is billed is worth it now (feature `advice`).
+/// Covers switched-off machines too, so it is keyed by its own machineId, not by `machines`.
+public struct AdviceReport: Codable, Hashable, Sendable {
+    public enum Recommendation: String, Codable, Hashable, Sendable {
+        case mine, rest
+    }
+
+    public let machineId: String
+    public let displayName: String
+    public let recommendation: Recommendation
+    /// Estimated NT$ a month after electricity; nil when the publisher cannot estimate it.
+    public let monthlyNetTwd: Double?
+    public let startAtTwd: Double
+    public let stopBelowTwd: Double
+    public let reason: String
+    /// When the recommendation last changed.
+    public let since: Timestamp?
+    public let observedAt: Timestamp?
+
+    enum CodingKeys: String, CodingKey, CaseIterable {
+        case machineId, displayName, recommendation, monthlyNetTwd, startAtTwd, stopBelowTwd, reason, since, observedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownKeys(decoder, allowed: CodingKeys.self)
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        machineId = try c.decode(String.self, forKey: .machineId)
+        let idIsValid = !machineId.isEmpty && machineId.unicodeScalars.allSatisfy { scalar in
+            scalar.isASCII && (CharacterSet.alphanumerics.contains(scalar) || "._-".unicodeScalars.contains(scalar))
+        }
+        guard idIsValid else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .machineId, in: c, debugDescription: "machineId must match ^[A-Za-z0-9._-]+$")
+        }
+        displayName = try c.decode(String.self, forKey: .displayName)
+        reason = try c.decode(String.self, forKey: .reason)
+        guard (1 ... 40).contains(displayName.count), (1 ... 200).contains(reason.count) else {
+            throw DecodingError.dataCorruptedError(forKey: .reason, in: c, debugDescription: "displayName 1–40, reason 1–200 characters")
+        }
+        let name = try c.decode(String.self, forKey: .recommendation)
+        guard let decoded = Recommendation(rawValue: name) else {
+            throw DecodingError.dataCorruptedError(forKey: .recommendation, in: c, debugDescription: "unknown recommendation \(name)")
+        }
+        recommendation = decoded
+        // Any finite amount: a net loss is negative.
+        monthlyNetTwd = try c.decodeNumber(forKey: .monthlyNetTwd, minimum: -.greatestFiniteMagnitude)
+        func threshold(_ key: CodingKeys) throws -> Double {
+            guard let value = try c.decodeNumber(forKey: key, minimum: -.greatestFiniteMagnitude) else {
+                throw DecodingError.dataCorruptedError(forKey: key, in: c, debugDescription: "threshold must be a number")
+            }
+            return value
+        }
+        startAtTwd = try threshold(.startAtTwd)
+        stopBelowTwd = try threshold(.stopBelowTwd)
+        since = try c.decodeNullable(Timestamp.self, forKey: .since)
+        observedAt = try c.decodeNullable(Timestamp.self, forKey: .observedAt)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(machineId, forKey: .machineId)
+        try c.encode(displayName, forKey: .displayName)
+        try c.encode(recommendation, forKey: .recommendation)
+        try c.encode(monthlyNetTwd, forKey: .monthlyNetTwd)
+        try c.encode(startAtTwd, forKey: .startAtTwd)
+        try c.encode(stopBelowTwd, forKey: .stopBelowTwd)
+        try c.encode(reason, forKey: .reason)
+        try c.encode(since, forKey: .since)
+        try c.encode(observedAt, forKey: .observedAt)
     }
 }
 
