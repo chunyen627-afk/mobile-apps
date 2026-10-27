@@ -16,7 +16,7 @@
 | iPhone App（P1–P3 畫面） | **編譯通過、模擬器測試通過**：小幫手 65（macOS 上跳過 2 項 Windows 專屬）、單元 23、UI 19 項，0 失敗，30 張截圖已人工檢視（[run 40434410490](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40434410490)）。P3 的 UI 測試抓到兩個問題並已修正：清單區塊上的定時讀取不會執行、兩個密碼欄讓 iOS 跳出「高強度密碼」搶走輸入 |
 | P1 的 CI 證據 | 單元 15、UI 11 項 0 失敗（[run 40339664008](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40339664008)） |
 | P3 `elevate` | 實作完成：提權夥伴（PowerShell）、`elevate` 指令、小幫手轉送、手機核准（Face ID＋HMAC）。小幫手測試 65 項在 Windows 本機通過，其中 2 項直接跑真的 PowerShell 夥伴（未提權）：簽章錯、token 錯被拒，簽章對才執行且 UTF-8 輸出與結束碼正確，同一核准不能用兩次；手機與電腦用同一組測試向量驗 HMAC。另做 8 項變異測試（拿掉夥伴的簽章檢查、token 檢查、內容雜湊、Python 雙胞胎的簽章與逾時、啟動時不重複通知、通知不含指令），全部被抓到。**辦公室電腦已安裝並實測（2026-10-27）**：使用者以系統管理員執行 `install-elevated.ps1`，排程工作 `DeskRemoteElevated` 以最高權限執行、只聽 127.0.0.1。從 Git Bash 執行 `elevate -c 'whoami /groups \| Select-String "Mandatory Label"'`：夥伴收到的內容與送出的一字不差（含引號與管線）、資料夾正確、10 分鐘到期；拒絕後 `elevate` 以 126 結束；錯的提交 token 被拒。**核准後以管理員執行這一段在真機上尚未實測**（要等手機 App 裝好；未提權的測試已驗證）。實測時發現 Git Bash 找不到 `elevate.cmd` 的短名稱、經 cmd.exe 又會重新解析引號，安裝腳本改為另外放一個直接呼叫 Python 的 `elevate` 殼層檔。規則檔的 elevate 規則行要等手機能核准後才加 |
-| 實機 | 使用者 2026-10-27 改為先裝**單獨 App**（已自行空出一個名額），同意以公開 prerelease 發布 0.3.0 build 1；發布與安裝結果待確認。工具箱第三分頁之後再整合 |
+| 實機 | 使用者 2026-10-27 改為先裝**單獨 App**（已自行空出一個名額）。**0.3.0 build 1 已發布**：[Release desk-remote-0.3.0-build1](https://github.com/chunyen627-afk/mobile-apps/releases/tag/desk-remote-0.3.0-build1)（[run 40439161778](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40439161778)：小幫手 67、單元 23、UI 19 項 0 失敗；IPA 342,736 bytes，SHA256 `b0b6a30c…4a6d`）。**實機安裝尚待使用者確認**。工具箱第三分頁之後再整合 |
 | 小幫手常駐安裝 | `install.ps1` 已寫好，**尚未在電腦上執行** |
 
 ## 結構
