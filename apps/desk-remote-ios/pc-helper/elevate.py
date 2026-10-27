@@ -224,5 +224,14 @@ def run(argv=None, submit_path=None, poll=2.0, out=sys.stdout, err=sys.stderr):
         return EXIT.get(state, 126)
 
 
+def use_utf8_in_git_bash():
+    """Git Bash (and the AI tools that run it) reads UTF-8, but Python writes to its pipes in the
+    console code page (cp950 here), so Chinese messages and command output came out garbled."""
+    if os.environ.get('MSYSTEM'):
+        for stream in (sys.stdout, sys.stderr):
+            stream.reconfigure(encoding='utf-8')
+
+
 if __name__ == '__main__':
+    use_utf8_in_git_bash()
     sys.exit(run())
