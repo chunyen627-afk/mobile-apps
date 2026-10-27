@@ -1,6 +1,6 @@
 name: Build Desk Remote iOS
 # Runs only for this app's development branch. No workflow_dispatch: that needs the file on main.
-# No IPA release step: the phone gets this tool through the toolbox app.
+# The IPA is published only for commits marked [release-ipa], added after the user approves.
 on:
   push:
     branches: [claude/desk-remote]
@@ -42,6 +42,48 @@ jobs:
             echo "- size: $size bytes"
             echo "- SHA256: \`$sha\`"
           } >> "$GITHUB_STEP_SUMMARY"
+      # Public prerelease of the tested IPA and its crash symbols, only when the head commit message
+      # contains [release-ipa]; that marker is added only after the user approves. 5 MB cap.
+      - name: Publish IPA release (approved builds only)
+        if: success() && contains(github.event.head_commit.message, '[release-ipa]')
+        working-directory: ${{ env.APP_DIR }}/build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          plist=DeskRemote.xcarchive/Products/Applications/DeskRemote.app/Info.plist
+          version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist")
+          build=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$plist")
+          tag="desk-remote-${version}-build${build}"
+          asset="DeskRemote-${version}-build${build}-unsigned.ipa"
+          symbols="DeskRemote-${version}-build${build}-crash-symbols.zip"
+          cp DeskRemote-unsigned.ipa "$asset"
+          files=("$asset")
+          if [ -d DeskRemote.xcarchive/dSYMs ]; then
+            (cd DeskRemote.xcarchive && /usr/bin/zip -qr "../$symbols" dSYMs)
+            files+=("$symbols")
+          fi
+          size=$(stat -f %z "$asset")
+          total=$(stat -f %z "${files[@]}" | awk '{s+=$1} END {print s+0}')
+          if [ "$total" -gt 5242880 ]; then
+            echo "IPA and symbols exceed 5 MB; refusing to publish."
+            exit 1
+          fi
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $tag already exists; raise CURRENT_PROJECT_VERSION before releasing again."
+            exit 1
+          fi
+          sha=$(shasum -a 256 "$asset" | cut -d' ' -f1)
+          notes=$(printf '%s\n' \
+            "未簽署 IPA，需用自己的 Apple 帳號簽署後安裝（SideStore 匯入）。只含示範資料，不含任何真實位址、密碼或金鑰。" \
+            "電腦端要先安裝 apps/desk-remote-ios/pc-helper 的小幫手；手機在「＋」輸入電腦的私人網路位址與連線密碼。" \
+            "" \
+            "- 來源 commit：${GITHUB_SHA}" \
+            "- 建置與測試：run ${GITHUB_RUN_ID}（小幫手、單元與模擬器 UI 測試皆通過才發布）" \
+            "- 大小：${size} bytes" \
+            "- SHA256：${sha}")
+          gh release create "$tag" "${files[@]}" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --prerelease --title "桌面遙控 ${version}（build ${build}）" --notes "$notes"
+          echo "::notice title=IPA release::${tag} ${asset} size ${size} bytes, SHA256 ${sha}"
       - name: Collect small reports (1 MB limit)
         id: collect
         if: always()

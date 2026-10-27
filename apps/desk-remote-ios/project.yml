@@ -13,7 +13,7 @@ settings:
     SWIFT_VERSION: "5.0"
     SWIFT_STRICT_CONCURRENCY: targeted
     TARGETED_DEVICE_FAMILY: "1"
-    MARKETING_VERSION: "0.1.0"
+    MARKETING_VERSION: "0.3.0"
     CURRENT_PROJECT_VERSION: "1"
 targets:
   DeskRemote:
