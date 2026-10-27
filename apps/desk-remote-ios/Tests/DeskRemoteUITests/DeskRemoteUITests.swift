@@ -288,8 +288,10 @@ final class DeskRemoteUITests: XCTestCase {
         row.tap()
         let content = app.descendants(matching: .any)
             .matching(NSPredicate(format: "identifier == 'elevate-content' AND label CONTAINS 'Restart-Service'")).firstMatch
-        XCTAssertTrue(reveal(content), "the waiting command is not shown")
+        let shown = reveal(content)
         snapshot("18a-elevate-waiting")
+        XCTAssertTrue(shown, "the waiting command is not shown; texts: "
+                      + app.staticTexts.allElementsBoundByIndex.prefix(20).map(\.label).joined(separator: " | "))
         let allow = app.buttons.matching(identifier: "elevate-allow").firstMatch
         XCTAssertTrue(reveal(allow) && allow.isEnabled, "allow must be enabled with this PC's key")
         allow.tap()

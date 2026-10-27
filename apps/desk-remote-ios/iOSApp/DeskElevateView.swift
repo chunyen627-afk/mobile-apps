@@ -2,52 +2,18 @@ import DeskRemoteCore
 import SwiftUI
 import UIKit
 
-/// Administrator commands waiting for this phone (elevate), refreshed every 5 s in the foreground.
-/// Approving needs Face ID (or the passcode) and this PC's approval key; the signature is made
-/// here over the content shown, so the PC runs exactly what was approved or nothing.
-struct DeskElevateSection: View {
-    @ObservedObject var store: DeskStore
-    let pcID: UUID
-    @State private var list: ElevateList?
-    @State private var failure: String?
-    @State private var busy: [String: String] = [:]
-    @State private var expanded: Set<String> = []
+/// Administrator commands waiting for this phone (elevate). Approving needs Face ID (or the
+/// passcode) and this PC's approval key; the signature is made here over the content shown,
+/// so the PC runs exactly what was approved or nothing. The PC page owns the 5-second refresh
+/// loop: a `.task` on a List section did not run reliably (found by the UI tests).
+@MainActor
+final class DeskElevateModel: ObservableObject {
+    @Published private(set) var list: ElevateList?
+    @Published private(set) var failure: String?
+    @Published private(set) var busy: [String: String] = [:]
+    @Published var expanded: Set<String> = []
 
-    var body: some View {
-        Section {
-            if let failure {
-                DeskNotice(text: failure, tint: .red)
-            }
-            if let list {
-                if !list.available {
-                    DeskNotice(text: "提權夥伴沒有回應（排程工作 DeskRemoteElevated 沒在執行？）")
-                }
-                if list.pending.isEmpty {
-                    Text("沒有在等核准的指令").font(.footnote).foregroundStyle(.secondary)
-                        .accessibilityIdentifier("elevate-empty")
-                }
-                ForEach(list.pending) { request in
-                    DeskElevateCard(request: request, hasKey: store.hasElevateKey(pcID), busy: busy[request.id]) { allow in
-                        Task { await decide(request, allow: allow) }
-                    }
-                }
-                ForEach(list.recent) { result in
-                    DeskElevateResultRow(result: result, expanded: expanded.contains(result.id)) {
-                        if expanded.contains(result.id) { expanded.remove(result.id) } else { expanded.insert(result.id) }
-                    }
-                }
-            } else if failure == nil {
-                ProgressView()
-            }
-        } header: {
-            Text("管理員權限（elevate）")
-        } footer: {
-            Text("AI 用 elevate 要求以系統管理員身分執行的指令會出現在這裡。允許前請看清楚內容。")
-        }
-        .deskForegroundLoop(every: 5) { await refresh() }
-    }
-
-    private func refresh() async {
+    func refresh(_ store: DeskStore, _ pcID: UUID) async {
         guard let client = store.client(pcID) else { return }
         do {
             list = try await client.elevateList()
@@ -59,7 +25,7 @@ struct DeskElevateSection: View {
         }
     }
 
-    private func decide(_ request: ElevateRequest, allow: Bool) async {
+    func decide(_ request: ElevateRequest, allow: Bool, _ store: DeskStore, _ pcID: UUID) async {
         guard let client = store.client(pcID) else { return }
         var signature: String?
         if allow {
@@ -82,7 +48,50 @@ struct DeskElevateSection: View {
         } catch {
             busy[request.id] = "沒有成功：\(DeskText.failure(.unreachable))"
         }
-        await refresh()
+        await refresh(store, pcID)
+    }
+}
+
+struct DeskElevateSection: View {
+    @ObservedObject var model: DeskElevateModel
+    let hasKey: Bool
+    let decide: (ElevateRequest, Bool) -> Void
+
+    var body: some View {
+        Section {
+            if let failure = model.failure {
+                DeskNotice(text: failure, tint: .red)
+            }
+            if let list = model.list {
+                if !list.available {
+                    DeskNotice(text: "提權夥伴沒有回應（排程工作 DeskRemoteElevated 沒在執行？）")
+                }
+                if list.pending.isEmpty {
+                    Text("沒有在等核准的指令").font(.footnote).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("elevate-empty")
+                }
+                ForEach(list.pending) { request in
+                    DeskElevateCard(request: request, hasKey: hasKey, busy: model.busy[request.id]) { allow in
+                        decide(request, allow)
+                    }
+                }
+                ForEach(list.recent) { result in
+                    DeskElevateResultRow(result: result, expanded: model.expanded.contains(result.id)) {
+                        if model.expanded.contains(result.id) {
+                            model.expanded.remove(result.id)
+                        } else {
+                            model.expanded.insert(result.id)
+                        }
+                    }
+                }
+            } else if model.failure == nil {
+                ProgressView()
+            }
+        } header: {
+            Text("管理員權限（elevate）")
+        } footer: {
+            Text("AI 用 elevate 要求以系統管理員身分執行的指令會出現在這裡。允許前請看清楚內容。")
+        }
     }
 }
 

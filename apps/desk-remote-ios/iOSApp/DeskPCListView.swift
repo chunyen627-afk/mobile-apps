@@ -151,7 +151,10 @@ struct DeskPCEditView: View {
                     Text("只在私人網路（ZeroTier）裡連線，位址只存在這支手機。")
                 }
                 Section {
+                    // Not a login password: without this, two secure fields made iOS offer a
+                    // "strong password", which took over the typing (found by the UI tests).
                     SecureField(existing == nil ? "連線密碼" : "連線密碼（留空表示不變）", text: $token)
+                        .textContentType(.oneTimeCode)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .accessibilityIdentifier("pc-token")
@@ -162,6 +165,7 @@ struct DeskPCEditView: View {
                 }
                 Section {
                     SecureField(existingKey ? "管理員核准金鑰（已設定，留空表示不變）" : "管理員核准金鑰（選填）", text: $elevateKey)
+                        .textContentType(.oneTimeCode)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .disabled(removeElevateKey)

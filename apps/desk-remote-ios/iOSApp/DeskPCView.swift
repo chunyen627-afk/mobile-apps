@@ -8,6 +8,7 @@ struct DeskPCView: View {
     @State private var state: HelperState?
     @State private var failure: String?
     @State private var editing: DeskPCEditTarget?
+    @StateObject private var elevate = DeskElevateModel()
 
     var body: some View {
         List {
@@ -42,8 +43,13 @@ struct DeskPCView: View {
                 }
             }
             if state?.can("elevate") == true {
-                DeskElevateSection(store: store, pcID: pcID)
+                DeskElevateSection(model: elevate, hasKey: store.hasElevateKey(pcID)) { request, allow in
+                    Task { await elevate.decide(request, allow: allow, store, pcID) }
+                }
             }
+        }
+        .deskForegroundLoop(every: 5) {
+            if state?.can("elevate") == true { await elevate.refresh(store, pcID) }
         }
         .navigationTitle(store.pc(pcID)?.name ?? "電腦")
         .toolbar {
@@ -66,6 +72,7 @@ struct DeskPCView: View {
         do {
             state = try await client.state()
             failure = nil
+            if state?.can("elevate") == true { await elevate.refresh(store, pcID) }
         } catch let error as HelperFailure {
             if error != .cancelled { failure = DeskText.failure(error) }
         } catch {
