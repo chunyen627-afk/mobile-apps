@@ -356,13 +356,14 @@ final class DeskRemoteUITests: XCTestCase {
         let weekly = app.descendants(matching: .any)
             .matching(NSPredicate(format: "identifier == 'usage-claude' AND label CONTAINS '每週'")).firstMatch
         XCTAssertTrue(waitFor(weekly, labelContains: "每週 46%・週日上午11:00 重設", timeout: 10),
-                      "weekly limit missing: \(weekly.label)")
+                      "weekly limit missing: \(said(weekly))")
         snapshot("21b-model-sheet")
         let sonnet = element("model-Sonnet 5.5")
         XCTAssertTrue(reveal(sonnet), "model choices missing")
         sonnet.tap()
+        XCTAssertTrue(reveal(element("model-busy")), "no switch progress shown")
         XCTAssertTrue(waitFor(element("model-busy"), labelContains: "已切換為 Sonnet 5.5", timeout: 20),
-                      "switch did not finish: \(element("model-busy").label)")
+                      "switch did not finish: \(said(element("model-busy")))")
         XCTAssertTrue(waitFor(element("meta-model"), labelContains: "Sonnet 5.5", timeout: 30), "sheet still shows the old model")
         snapshot("21-model-switched")
         element("meta-done").tap()
@@ -388,8 +389,10 @@ final class DeskRemoteUITests: XCTestCase {
         XCTAssertTrue(stop.waitForExistence(timeout: 20), "no stop button while the turn runs")
         snapshot("23a-running")
         stop.tap()
+        XCTAssertTrue(poll(timeout: 20) { self.element("chat-stop-state").exists || self.reveal(self.element("chat-stop-state")) },
+                      "no stop progress shown")
         XCTAssertTrue(waitFor(element("chat-stop-state"), labelContains: "已停止", timeout: 20),
-                      "stop did not finish: \(element("chat-stop-state").label)")
+                      "stop did not finish: \(said(element("chat-stop-state")))")
         XCTAssertTrue(text("（已停止）").waitForExistence(timeout: 20), "the stopped turn is not in the transcript")
         snapshot("23-stopped")
     }
@@ -405,12 +408,12 @@ final class DeskRemoteUITests: XCTestCase {
         snapshot("24-screen")
     }
 
+    /// The notification's link, handed in at launch (opened from outside, iOS first asks whether
+    /// to open the app; the link's parsing has unit tests).
     func test25NotificationLinkOpensTheConversation() throws {
-        try launchWithHelper()
-        XCTAssertTrue(element("pc-row-示範電腦").waitForExistence(timeout: 10), "preset PC missing")
         let link = "deskremote://open?pc=%E7%A4%BA%E7%AF%84%E9%9B%BB%E8%85%A6&app=claude&session=\(claudeB)"
             + "&title=%E4%BF%AE%E6%AD%A3%E5%BB%BA%E7%BD%AE%E9%8C%AF%E8%AA%A4"
-        app.open(try XCTUnwrap(URL(string: link)))
+        try launchWithHelper(openURL: link)
         XCTAssertTrue(app.navigationBars["修正建置錯誤"].waitForExistence(timeout: 15), "the linked conversation did not open")
         // test12 already answered this conversation's question on the shared fake helper.
         XCTAssertTrue(text("要修改 main.c 第 42 行").waitForExistence(timeout: 15), "its transcript is not shown")
@@ -426,13 +429,15 @@ final class DeskRemoteUITests: XCTestCase {
         let effort = element("effort-超高")
         XCTAssertTrue(reveal(effort), "effort choices missing")
         effort.tap()
+        XCTAssertTrue(reveal(element("effort-busy")), "no effort progress shown")
         XCTAssertTrue(waitFor(element("effort-busy"), labelContains: "推理強度已切換為 超高", timeout: 20),
-                      "effort switch did not finish: \(element("effort-busy").label)")
+                      "effort switch did not finish: \(said(element("effort-busy")))")
         let mode = element("mode-計畫")
         XCTAssertTrue(reveal(mode), "mode choices missing")
         mode.tap()
+        XCTAssertTrue(reveal(element("mode-busy")), "no mode progress shown")
         XCTAssertTrue(waitFor(element("mode-busy"), labelContains: "權限模式已切換為 計畫", timeout: 20),
-                      "mode switch did not finish: \(element("mode-busy").label)")
+                      "mode switch did not finish: \(said(element("mode-busy")))")
         XCTAssertTrue(waitFor(element("meta-permission"), labelContains: "計畫", timeout: 30), "sheet still shows the old mode")
         snapshot("26-effort-and-mode")
     }
@@ -454,16 +459,22 @@ final class DeskRemoteUITests: XCTestCase {
                       token: try value("DESK_HELPER_TOKEN"))
     }
 
-    private func launch(pc: String?) {
+    private func launch(pc: String?, openURL: String? = nil) {
         app = XCUIApplication()
         app.launchEnvironment["DESK_UI_TEST"] = "1"
         if let pc { app.launchEnvironment["DESK_UI_PC"] = pc }
+        if let openURL { app.launchEnvironment["DESK_UI_OPEN_URL"] = openURL }
         app.launch()
     }
 
-    private func launchWithHelper() throws {
+    private func launchWithHelper(openURL: String? = nil) throws {
         let helper = try helperSettings()
-        launch(pc: "示範電腦|\(helper.host)|\(helper.port)|\(helper.token)")
+        launch(pc: "示範電腦|\(helper.host)|\(helper.port)|\(helper.token)", openURL: openURL)
+    }
+
+    /// An element's label for a failure message; reading a missing element's label fails the test.
+    private func said(_ element: XCUIElement) -> String {
+        element.exists ? element.label : "（畫面上沒有）"
     }
 
     private func openAddForm() {

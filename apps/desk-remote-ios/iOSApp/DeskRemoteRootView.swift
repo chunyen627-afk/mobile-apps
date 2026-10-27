@@ -26,6 +26,13 @@ struct DeskRemoteRootView: View {
                 }
         }
         .onOpenURL { url in open(url) }
+        .onAppear {
+            // UI tests hand the link in at launch: a link opened from outside goes through a
+            // system confirmation first.
+            if store.uiTest, let link = ProcessInfo.processInfo.environment["DESK_UI_OPEN_URL"], let url = URL(string: link) {
+                open(url)
+            }
+        }
     }
 
     /// A notification's link: straight to that PC's conversation (or its administrator

@@ -81,10 +81,11 @@ struct DeskChatView: View {
                                 .accessibilityIdentifier("chat-stop")
                             }
                         }
-                        if let stopState {
-                            Text(stopState).font(.caption).foregroundStyle(.secondary)
-                                .accessibilityIdentifier("chat-stop-state")
-                        }
+                    }
+                    // Stays after the turn ends, so "已停止" is still readable.
+                    if let stopState {
+                        Text(stopState).font(.caption).foregroundStyle(.secondary)
+                            .accessibilityIdentifier("chat-stop-state")
                     }
                     Color.clear.frame(height: 1).id("bottom")
                 }
@@ -220,6 +221,7 @@ struct DeskChatView: View {
 
     /// Sends typed text (with the picked photo) or a quick reply's message the same way.
     private func submit(_ text: String, photo: Data? = nil) {
+        stopState = nil
         let item = DeskPending(text: text, mark: log.events.last?.seq ?? 0, photo: photo)
         pending.append(item)
         Task { await send(item, force: false) }

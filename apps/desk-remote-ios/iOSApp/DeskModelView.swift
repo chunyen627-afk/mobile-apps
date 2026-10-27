@@ -87,6 +87,17 @@ struct DeskModelSheet: View {
                         Text("上下文用量：還沒有回覆可以計算").font(.footnote).foregroundStyle(.secondary)
                     }
                 }
+                Section("額度") {
+                    if let usage = state?.usage(app) {
+                        DeskUsageRows(app: app, usage: usage)
+                    } else if let failure {
+                        DeskNotice(text: failure, tint: .red)
+                    } else if state == nil {
+                        ProgressView()
+                    } else {
+                        Text("電腦端沒有這個 App 的額度資料").font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
                 ForEach(DeskPick.allCases, id: \.self) { kind in
                     let options = state.map { kind.options($0, app) } ?? []
                     if !options.isEmpty {
@@ -113,17 +124,6 @@ struct DeskModelSheet: View {
                         } footer: {
                             Text(kind.footer(app))
                         }
-                    }
-                }
-                Section("額度") {
-                    if let usage = state?.usage(app) {
-                        DeskUsageRows(app: app, usage: usage)
-                    } else if let failure {
-                        DeskNotice(text: failure, tint: .red)
-                    } else if state == nil {
-                        ProgressView()
-                    } else {
-                        Text("電腦端沒有這個 App 的額度資料").font(.footnote).foregroundStyle(.secondary)
                     }
                 }
             }
