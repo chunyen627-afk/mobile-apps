@@ -132,6 +132,24 @@ public enum DeskText {
         return formatter.date(from: iso)
     }
 
+    /// Bare http(s) addresses become links; text that already is a (Markdown) link stays as it is.
+    /// Paths on the PC (C:\…) are not links: the phone cannot open them.
+    public static func linkingWebAddresses(_ text: AttributedString) -> AttributedString {
+        var out = text
+        let plain = String(out.characters)
+        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else { return out }
+        for match in detector.matches(in: plain, range: NSRange(location: 0, length: (plain as NSString).length)) {
+            guard let url = match.url, ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+                  let range = Range(match.range, in: plain),
+                  let lower = AttributedString.Index(range.lowerBound, within: out),
+                  let upper = AttributedString.Index(range.upperBound, within: out)
+            else { continue }
+            if out[lower ..< upper].runs.contains(where: { $0.link != nil }) { continue }
+            out[lower ..< upper].link = url
+        }
+        return out
+    }
+
     /// Text split into prose and ``` fenced code blocks, for the chat bubbles.
     public static func segments(_ text: String) -> [(code: Bool, text: String)] {
         var out: [(code: Bool, text: String)] = []

@@ -1,27 +1,70 @@
 # 桌面遙控（desk-remote-ios）
 
-用 iPhone 原生輸入操作自己 Windows 電腦上的 Claude 桌面版與 Codex 桌面版：看對話清單、打字送出、看回覆、按權限的「允許一次」／「拒絕」，並在手機核准需要管理員權限的指令（`elevate`）。設計見 [DESIGN.md](DESIGN.md)（2026-10-26 核准）。
+用 iPhone 原生輸入操作自己 Windows 電腦上的 **Claude 桌面版**與 **Codex 桌面版**：看對話與回覆、打字或傳照片、按權限的「允許一次」／「拒絕」、回答選項題、開新對話、停止、切換模型與權限模式、看電腦畫面，並在手機上用 Face ID 核准需要系統管理員權限的指令（`elevate`）。電腦端是一個只走私人網路（ZeroTier）的小幫手；桌面版的畫面由它用 UI Automation 操作。設計見 [DESIGN.md](DESIGN.md)（2026-10-26 核准）。
 
-**目前到 P3**：P1 唯讀（清單、即時逐字稿）之外，手機可以送出訊息、按「允許一次」／「拒絕」、回答選項題、開新對話、把等待處理的對話在電腦上打開；P3 加上 `elevate`：AI 要求的系統管理員指令推到手機，用 Face ID 核准才執行。
+## 目前版本
 
-## 驗證狀態
-
-| 項目 | 狀態 |
+| 項目 | 內容 |
 | --- | --- |
-| 小幫手 P1 讀取 | 辦公室電腦讀真實資料通過（2026-10-26）：經 ZeroTier 位址讀到 Claude 與 Codex 的真實對話清單與逐字稿，long-poll 正常；未帶 token 回 401 |
-| 小幫手 P2 操作（`pc-helper/`） | 44 項 Python 單元測試在 Windows 本機通過（用假的視窗驅動）；另做 10 項變異測試（拿掉標題比對、有人在用的檢查、鎖定檢查、重送去重、權限詢問比對、同名對話拒絕、通知不含內文、允許一次的前景檢查、扣除自身輸入、送出後確認），全部被測試抓到 |
-| 真的 Claude 桌面版實測（2026-10-26，使用者同意，只測 Claude） | **送出：通過**（對話開著時送出並在逐字稿確認；切換對話後送出，訊息被 Claude 收進佇列，因為該對話還在等權限）。**閒置門檻：通過**（等滿 60 秒才動作）。**偵測權限詢問、在電腦上打開對話：通過**。**允許一次：通過**（2026-10-27）：這一版的「允許一次」是權限區塊裡的一般按鈕（不在「更多允許選項」選單裡）；它的 Invoke 回報成功卻沒作用，改成確認該點最上層視窗是 Claude 後真實點一次，詢問消失、Claude 寫入測試檔並回覆，排隊中的訊息也接著處理。現在只有詢問真的消失才算成功。測試過程另外修掉三個問題：切換後輸入框還是舊頁面（改成只在標題相符的頁面找輸入框、等頁面穩定、貼上後讀回確認）、Alt 鍵技巧會打開 Electron 的選單列吃掉貼上與點擊（已拿掉）、滑鼠點擊前的元件檢查在 Chromium 下無效（改成檢查該點最上層視窗是 Claude）。新對話尚未實測 |
-| 真的 Codex 桌面版實測（2026-10-27，使用者同意） | **送出：通過**（從另一個對話經 `codex://threads/<id>` 切到「回覆 A1」、貼上、逐字稿確認，Codex 回覆 C7）。**權限詢問與允許一次：通過**（偵測到「允許用 PowerShell 建立…嗎？」，按允許一次後詢問消失、檔案寫入 `ok`、Codex 回覆「已建立」）。實測修掉三個問題：Codex 視窗關到系統匣時改用連結叫回；這台電腦 Codex 因套件容器錯誤（0x80070020）不是以套件身分執行，Windows 開不了 `codex://` 連結，改用已安裝套件的 `ChatGPT.exe --single-argument <連結>` 交給執行中的 Codex；空的輸入框會回報提示文字「與 Codex 協作」，不再誤判成有未送出的字 |
-| 選項題與快速回覆 | 小幫手從 Claude 的對話紀錄抓出未回答的選項題（`AskUserQuestion`）與結尾建議按鈕；手機顯示選項卡片（單選、複選、「其他」自己寫）與快速回覆按鈕。**真的 Claude 桌面版實測通過**（2026-10-27，使用者同意）：兩題（單選＋複選）的卡片，小幫手照手機的選擇點選，Claude 回覆「顏色：藍；水果：蘋果、葡萄」與所選完全相同。卡片一次一頁（「下一步」，最後一頁「提交」），每個選項是開關；送出前確認畫面上開著的選項恰好等於手機的選擇，多開的會先關掉，對不上就不送。第一次實測曾點錯成「紅」（位置還在捲動），之後改成先捲到可見再點。「其他」自己寫的路徑尚未實測。快速回覆只是送出按鈕上的文字，走一般送出流程。Codex 的選項題尚未處理 |
-| iPhone App（P1–P3 畫面） | **編譯通過、模擬器測試通過**：小幫手 65（macOS 上跳過 2 項 Windows 專屬）、單元 23、UI 19 項，0 失敗，30 張截圖已人工檢視（[run 40434410490](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40434410490)）。P3 的 UI 測試抓到兩個問題並已修正：清單區塊上的定時讀取不會執行、兩個密碼欄讓 iOS 跳出「高強度密碼」搶走輸入 |
-| P1 的 CI 證據 | 單元 15、UI 11 項 0 失敗（[run 40339664008](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40339664008)） |
-| P3 `elevate` | 實作完成：提權夥伴（PowerShell）、`elevate` 指令、小幫手轉送、手機核准（Face ID＋HMAC）。小幫手測試 65 項在 Windows 本機通過，其中 2 項直接跑真的 PowerShell 夥伴（未提權）：簽章錯、token 錯被拒，簽章對才執行且 UTF-8 輸出與結束碼正確，同一核准不能用兩次；手機與電腦用同一組測試向量驗 HMAC。另做 8 項變異測試（拿掉夥伴的簽章檢查、token 檢查、內容雜湊、Python 雙胞胎的簽章與逾時、啟動時不重複通知、通知不含指令），全部被抓到。**辦公室電腦已安裝並實測（2026-10-27）**：使用者以系統管理員執行 `install-elevated.ps1`，排程工作 `DeskRemoteElevated` 以最高權限執行、只聽 127.0.0.1。從 Git Bash 執行 `elevate -c 'whoami /groups \| Select-String "Mandatory Label"'`：夥伴收到的內容與送出的一字不差（含引號與管線）、資料夾正確、10 分鐘到期；拒絕後 `elevate` 以 126 結束；錯的提交 token 被拒。**手機核准後以管理員執行也已實測通過（2026-10-27）**：換新核准金鑰後，從 Git Bash 送出唯讀指令，iPhone 上的 0.3.0 用 Face ID 核准，夥伴驗過簽章才執行：`IsInRole(Administrator)` 為 True、列得出只有管理員能讀的 `%ProgramData%\DeskRemote`，結束碼 0，輸出回到 `elevate`。實測發現 Git Bash 下 `elevate` 的中文訊息是亂碼（Python 用主控台字碼頁 cp950 寫管線），已改為在 Git Bash 改用 UTF-8 輸出。實測時發現 Git Bash 找不到 `elevate.cmd` 的短名稱、經 cmd.exe 又會重新解析引號，安裝腳本改為另外放一個直接呼叫 Python 的 `elevate` 殼層檔。使用者同意後，2026-10-27 已在辦公室電腦的全域規則檔（Claude Code 的 CLAUDE.md、Codex 的 AGENTS.md）加入「需要系統管理員權限改用 `elevate`」一節（用法、在背景等待最多 10 分鐘、結束碼的意思、不用 `RunAs` 或改 UAC）；AI 實際照規則使用尚未觀察到 |
-| 實機 | 使用者 2026-10-27 改為先裝**單獨 App**（已自行空出一個名額）。**0.3.0 build 1 已發布**：[Release desk-remote-0.3.0-build1](https://github.com/chunyen627-afk/mobile-apps/releases/tag/desk-remote-0.3.0-build1)（[run 40439161778](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40439161778)：小幫手 67、單元 23、UI 19 項 0 失敗；IPA 342,736 bytes，SHA256 `b0b6a30c…4a6d`）。**已裝到 iPhone 並連上辦公室電腦（2026-10-27，使用者回報）**；手機上實測通過：管理員核准（見 P3 那一列）。手機上尚未實測：開新對話、選項題的「其他」、Codex 選項題。工具箱第三分頁之後再整合 |
-| 局部選字複製（0.4.0） | 實機回報 0.3.0 的訊息只能整段拷貝（SwiftUI 的 `.textSelection` 在 iOS 只給整段）。長按訊息泡泡多了選單「拷貝全部」與「選取文字」，後者打開整則訊息的唯讀 `UITextView`（`DeskSelectableText`／`DeskSelectTextSheet`），可以拖曳選一段再拷貝；工具指令與輸出、權限詢問、管理員指令內容與輸出直接就是可局部選取的文字框。**實作完成**，新增 UI 測試 20：長按回覆出現兩個選項，「選取文字」頁長按要出現「全選」選單；**模擬器測試通過**（[run 40455358550](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40455358550)：小幫手 76、單元 26、UI 22 項 0 失敗，截圖已檢視；長按後是選到一個詞的選單「拷貝／查詢／翻譯」，這就是局部選取）；實機待安裝 0.4.0 |
-| 模型、上下文與額度（0.4.0） | 對話頁頂端顯示「Opus 5.5・高・上下文 18%」，點開可看上下文細節、這個 App 的額度，Claude 對話可切換模型；電腦頁多「額度」區塊。資料來源：Claude 的模型與推理強度讀對話檔 `model`／`effort`（畫面上開著的對話改讀輸入框旁的「模型：」按鈕）；上下文＝逐字稿最後一則回覆的 input＋cache read＋cache write tokens；上限只用桌面版回報過的（Opus 5 系列 100 萬），其他模型只顯示已用量不猜上限（可在 config.json 的 `claude.context_windows` 補）；額度讀 `plan-usage-history.json`（5 小時 `fh`、每週 `sd`，取登入組織最新一筆），每週重設時間讀輸入框旁的「使用量：」按鈕。Codex 讀 rollout 的 `turn_context`（模型、effort）與 `token_count`（上次輸入 tokens、`model_context_window`、`rate_limits`）。切換模型＝打開對話→點「模型：」按鈕→選單裡的單選項 Select（不行再點一次）→按鈕顯示新模型才算數，再確認對話檔的 `model` 已更新。**實作完成**：小幫手測試 74 項本機通過（新增 7 項），真實資料唯讀試讀與桌面版自己回報的一致（本對話上下文 39%、每週 46%）；畫面腳本讀模型／使用量按鈕約 0.1 秒。手機端模擬器測試通過（同一 run 40455358550，截圖已檢視）；在真的電腦上切換模型尚未實測（切換會換電腦畫面上的對話，實測前先問使用者）。**Codex 也能切換**（使用者同意後 10/27 讀過選單）：模型按鈕「GPT-6.1 Sol 高」只用 UI Automation 操作（Expand → 「選取模型」Invoke → 模型單選項 Invoke → 按鈕顯示新模型），不用滑鼠、視窗最小化也行；Codex 要到下一則回覆才把模型寫進 rollout，所以以按鈕為準。探測時兩個失誤已改進寫法：①Codex 視窗最小化時腳本仍點座標，點到了蓋在上面的 Chrome（正式流程的點擊會先檢查最上層視窗，Codex 改成完全不點）；②為關選單把所有展開的元件都收合，連側邊欄與專案資料夾也收起來（已用名稱逐一展開復原大部分，正式流程只收合自己開的選單）。Codex 的預設模型在 `~/.codex/config.toml`（`model`、`model_reasoning_effort`），目前是 GPT-6.1 Sol／高 |
-| 通知（0.4.0 小幫手） | 使用者 10/27 要求只通知需要處理的事：權限詢問、新的選項題（新增）、管理員指令等核准、手機操作失敗、一輪完成、密碼錯誤鎖定；不再通知手機操作成功與管理員指令結果。小幫手測試 76 項本機通過，已裝到辦公室電腦 |
-| 更多遙控（0.5.0） | 使用者 10/27 要「全都要」：①**停止**：Claude 正在處理時對話裡多一個「停止」，小幫手 Invoke 輸入框旁的「停止」按鈕，畫面上不再執行才算數（Codex 的停止按鈕還沒看過，先不做）；②**點通知直接打開**：ntfy 的通知帶 `deskremote://open?pc=…&app=…&session=…` 連結，App 以電腦名稱（只有一台時就用那台）找到電腦並打開對話，管理員請求打開電腦頁；③**傳照片**：輸入列「照片」選圖，手機縮到長邊 2048 的 JPEG，小幫手寫到只有使用者讀得到的暫存檔、以剪貼簿（不進剪貼簿記錄）貼上後刪除，再貼文字送出；④**看電腦畫面**：電腦頁「看電腦畫面」，`screen_capture.ps1` 以獨立的 DPI-aware 程序截整個桌面（1600 寬 JPEG 約 110 KB；畫面操作程式不能 DPI-aware，否則點擊座標會變），鎖定時拒絕；⑤**提醒**：額度任一時段 ≥80%、對話上下文 ≥80% 各通知一次（降回去後再超過才再通知；小幫手啟動時已超過的不通知；門檻可在 config.json 的 `alerts` 改）；⑥**推理強度**（Claude）：模型選單的「投入程度」子選單只在滑鼠停在上面時展開（不點擊），選低／中／高／超高／最高／Ultracode；Codex 的推理強度是要用方向鍵的滑桿，要把視窗叫到前面，先不做；⑦**權限模式**：Claude 的模式按鈕以目前模式命名，展開後選手動／接受編輯／計畫／自動／略過權限確認；Codex「變更權限」選要求核准／代我核准（只用 UI Automation，畫面不顯示目前模式，從下一則回覆起生效，目前模式從 rollout 的 `approvals_reviewer` 讀）。停止、Codex 的模型與權限不需要電腦閒置（純 UI Automation）。**實作完成**：小幫手測試 84 項本機通過，已裝到辦公室電腦並重啟，真實 API 回報正確（權限模式、可選項、截圖 113 KB）；**模擬器測試通過並發布 0.5.0 build 3**（[run 40465532207](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40465532207)：小幫手 84、單元 30、UI 26 項 0 失敗，截圖已檢視；[Release desk-remote-0.5.0-build3](https://github.com/chunyen627-afk/mobile-apps/releases/tag/desk-remote-0.5.0-build3)，IPA 441,704 bytes，SHA256 `4bf107f3…4ed3`）。前三次 CI 的失敗都在 UI 測試：清單沒排出的列找不到、在彈出頁頂端往下滑會把它關掉（改成只往上捲）、從外部開連結 iOS 會先問（改由啟動參數帶入）；App 本身修了「已停止」會跟著執行中那一列消失。**0.5.0 已裝到 iPhone；真的電腦上實測通過（2026-10-27，使用者同意，用測試對話「測試:A1 回覆」）**：推理強度 高→中→高、權限模式 手動→接受編輯→手動，每次按鈕與對話檔都對得上；照片＋文字送出後 Claude 回「收到照片 示範電腦畫面」（讀到圖中文字），暫存照片檔已刪；停止：長回覆開始 8 秒後按下，逐字稿記為中斷。實測發現 Claude 把中斷寫成使用者訊息「[Request interrupted by user]」，小幫手原本把它當新訊息、狀態一直顯示處理中，已改成「已中止」狀態並回到閒置（小幫手測試 85 項）。第一次停止測試因為回覆 6 秒內就結束，小幫手正確回報「沒有在執行」。**第二批實測（同日，使用者同意）**：①開新對話：Claude 通過（回 N1）；Codex 第一次因視窗被關到系統匣而失敗，改成先用最近一個對話的連結把視窗叫出來，且新對話頁的輸入框叫「想做什麼都可以」（`new_edit`），之後通過（回 N2）；②選項題「其他」：通過（Claude 回「收到：芭樂（手機自己寫的）」）。踩到三件事已修：「其他」的開關狀態要以出現「其他選項」輸入框為準；單選題要先開「其他」（它會自動取消已選的選項，已選的選項不能單獨取消）；對話已開著時小幫手自己的 SetForegroundWindow 會被 Windows 擋（另一個 App 在前面），改成也用那個對話的連結把視窗帶到前面；③**Codex 停止**：執行中輸入框旁的按鈕也叫「停止」，純 UI Automation 按下，通過（逐字稿記為已中止）；手機 0.5.1 起 Codex 對話也顯示停止；④**Codex 推理強度不做**：「效能」是 5 格的方向鍵滑桿（第 2 格「標準」＝中、第 3 格「延伸」＝高、第 4 格「極高」），但按一次左鍵有時會移動後直接關掉選單，探測時因此被改成「中」一次（已改回「高」並確認按鈕），不夠可靠；Codex 的推理強度維持 `~/.codex/config.toml` 的預設。另外發現 Claude 一度完全不理會自己的對話連結（連直接 Start-Process 也不切換），側邊欄按鈕仍可用：小幫手在連結沒切過去時改按側邊欄上同名的那一個（`invoke_title`，同名或找不到就中止）。手機長輪詢被中止時的 ConnectionAbortedError 不再記成錯誤。小幫手測試 87 項。手機 0.5.1 build 4（Codex 對話也顯示停止）使用者同意發布（2026-10-27）。家裡那台電腦使用者決定先不做 |
-| 小幫手常駐安裝 | `install.ps1` **已在辦公室電腦執行（2026-10-27）**：登入排程工作 `DeskRemoteHelper`（一般權限）常駐 |
+| 手機 App | **0.5.2 build 5**（Bundle ID `org.personal.deskremote.app`，主畫面名稱「桌面遙控」）：[Release desk-remote-0.5.2-build5](https://github.com/chunyen627-afk/mobile-apps/releases/tag/desk-remote-0.5.2-build5)（測試全部通過才會發布；發布紀錄見下方「驗證紀錄」） |
+| 手機上已安裝 | 0.5.0 build 3（2026-10-27）；0.5.2 待覆蓋安裝 |
+| 電腦端小幫手 | 0.5.0（小幫手測試 87 項），已裝在辦公室電腦（登入時啟動的排程工作 `DeskRemoteHelper`） |
+| 提權夥伴 | 已裝在辦公室電腦（排程工作 `DeskRemoteElevated`，最高權限、只聽 127.0.0.1） |
+| 程式所在 | 分支 `claude/desk-remote`，尚未合併 main；之後會成為工具箱的第三個分頁 |
+
+## 功能與驗證程度
+
+「模擬器」＝macOS CI 的 iPhone 模擬器 UI 測試通過並人工看過截圖；「真電腦」＝在辦公室電腦的真實 Claude／Codex 桌面版上實測（每次都經使用者同意，用測試對話）；「手機」＝裝在 iPhone 上用過。
+
+| 功能 | Claude | Codex | 驗證 |
+| --- | --- | --- | --- |
+| 電腦清單、對話清單、即時逐字稿（工具呼叫收合、長輸出點開取全文） | ✅ | ✅ | 模擬器、真電腦讀真實資料、手機 |
+| 送出訊息（閒置 60 秒才動作，有人在用時手機先確認） | ✅ | ✅ | 模擬器、真電腦 |
+| 權限詢問：允許一次／拒絕（沒有「永遠允許」） | ✅ | ✅ | 模擬器、真電腦 |
+| 選項題卡片（單選、複選、「其他」自己寫）、結尾建議按鈕 | ✅ | — | 模擬器、真電腦（含「其他」） |
+| 開新對話 | ✅ | ✅ | 模擬器、真電腦 |
+| 停止正在執行的那一輪 | ✅ | ✅（手機 0.5.2 起） | 模擬器、真電腦 |
+| 傳照片（先貼照片再貼文字） | ✅ | ✅ | 模擬器；真電腦只測過 Claude |
+| 切換模型 | ✅ | ✅ | 模擬器；**真電腦尚未實測** |
+| 切換推理強度 | ✅ | —（不做，見「還沒做的」） | 模擬器、真電腦 |
+| 切換權限模式 | ✅ | ✅（畫面不顯示目前模式，下一則回覆起生效） | 模擬器、真電腦（Claude） |
+| 模型・推理強度・上下文 %、額度（5 小時／每週與重設時間） | ✅ | ✅ | 模擬器、真電腦數字與桌面版自己回報的一致、手機 |
+| 局部選字複製（長按 →「拷貝全部」／「選取文字」） | ✅ | ✅ | 模擬器、手機 |
+| 網址可點（Markdown 連結、直接寫出的 http(s) 網址、工具輸出裡的網址；電腦上的路徑不是連結） | ✅ | ✅ | 單元測試；0.5.2 起，模擬器與手機待驗 |
+| 看電腦畫面（只看不操作；鎖定時看不到） | — | — | 模擬器、真電腦截圖 API |
+| 管理員指令核准（`elevate`，Face ID＋HMAC） | — | — | 真電腦＋手機核准執行 |
+| ntfy 通知（只發需要處理的事）、點通知直接打開對話 | ✅ | ✅ | 模擬器；通知實際收到；**點通知打開尚未在手機實測** |
+| 額度與上下文 ≥80% 提醒 | ✅ | ✅ | 單元測試；**尚未實際觸發** |
+
+## 還沒做的
+
+- **Codex 推理強度**：Codex 的「效能」是 5 格、只能用方向鍵調的滑桿（第 2 格「標準」＝中、第 3 格「延伸」＝高、第 4 格「極高」），實測按一次方向鍵有時會移動後直接關掉選單，不夠可靠；Codex 的推理強度維持 `~/.codex/config.toml` 的 `model_reasoning_effort`。
+- **Codex 選項題**：只處理 Claude 的 `AskUserQuestion`。
+- 用相機直接拍照傳送（目前只能從相簿選）、封存／改名／搜尋對話。
+- 家裡的第二台電腦（使用者決定先不做）、併入工具箱第三個分頁。
+- 從手機看 Codex 目前的權限模式（Codex 畫面不顯示，只能從下一則回覆的紀錄得知）。
+
+## 驗證紀錄
+
+| 版本 | CI（模擬器） | 發布 | 實機與真電腦 |
+| --- | --- | --- | --- |
+| P1 唯讀 | [run 40339664008](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40339664008)：單元 15、UI 11 | — | 真電腦讀真實資料通過（2026-10-26） |
+| 0.3.0 build 1 | [run 40439161778](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40439161778)：小幫手 67、單元 23、UI 19 | [desk-remote-0.3.0-build1](https://github.com/chunyen627-afk/mobile-apps/releases/tag/desk-remote-0.3.0-build1) | 裝到 iPhone、連上辦公室電腦；手機核准 `elevate` 以管理員執行通過 |
+| 0.4.0 build 2 | [run 40455358550](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40455358550)：小幫手 76、單元 26、UI 22 | [desk-remote-0.4.0-build2](https://github.com/chunyen627-afk/mobile-apps/releases/tag/desk-remote-0.4.0-build2) | 使用者跳過，直接裝 0.5.0 |
+| 0.5.0 build 3 | [run 40465532207](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40465532207)：小幫手 84、單元 30、UI 26 | [desk-remote-0.5.0-build3](https://github.com/chunyen627-afk/mobile-apps/releases/tag/desk-remote-0.5.0-build3)（IPA 441,704 bytes，SHA256 `4bf107f3…4ed3`） | 已裝到 iPhone；真電腦實測推理強度、權限模式、照片、停止、開新對話、「其他」、Codex 停止 |
+| 0.5.1 build 4 | 沒有發布（還在建置時就被 0.5.2 取代；內容是 Codex 對話也顯示停止） | — | — |
+| 0.5.2 build 5 | 0.5.1 的內容＋網址可點；CI 跑完後補上 run 與 SHA256 | [desk-remote-0.5.2-build5](https://github.com/chunyen627-afk/mobile-apps/releases/tag/desk-remote-0.5.2-build5) | 待安裝 |
+
+實測時發現並修好的問題（細節見 commit 紀錄）：
+- **送出**：切換對話後輸入框還是舊頁面 → 只在標題相符的頁面找輸入框並讀回確認；Alt 鍵搶前景會打開 Electron 選單列 → 拿掉；Chromium 下點擊前的元件檢查無效 → 改成檢查該點最上層視窗。
+- **允許一次**：Claude 的按鈕 Invoke 回報成功卻沒作用 → 只有詢問真的消失才算成功，否則確認後真實點一次。
+- **Codex**：視窗常被關到系統匣 → 用對話連結叫回；這台電腦 Codex 不是以套件身分執行，`codex://` 開不了 → 用已安裝套件的 `ChatGPT.exe --single-argument <連結>`；新對話頁的輸入框叫「想做什麼都可以」；開新對話前視窗不在就先用最近一個對話的連結叫回。
+- **前景**：對話已開著時小幫手自己的 SetForegroundWindow 會被 Windows 擋 → 一律用該對話的連結把視窗帶到前面。Claude 一度完全不理會自己的連結 → 連結沒切過去時改按側邊欄上同名的對話（同名或找不到就中止）。
+- **選項題**：位置還在捲動時點錯選項 → 先捲到可見再點，送出前核對開著的選項恰好等於手機的選擇；「其他」的開關狀態不可信 → 以出現「其他選項」輸入框為準；單選題要先開「其他」（已選的選項不能單獨取消）。
+- **停止**：Claude 把中斷寫成使用者訊息「[Request interrupted by user]」→ 改成「已中止」狀態並回到閒置；手機上「已停止」會跟著執行中那一列消失 → 改成留著。
+- **`elevate`**：Git Bash 找不到 `elevate.cmd`、經 cmd 會重新解析引號 → 另放一個直接呼叫 Python 的 `elevate`；Git Bash 下中文亂碼 → 在 Git Bash 改用 UTF-8 輸出。
+- **截圖**：畫面操作程式不能宣告高 DPI（點擊座標會變），截圖改由獨立的 DPI-aware 程序做。
+- **UI 測試**：清單不排出畫面外的列；在彈出頁頂端往下滑會把它關掉；從外部開自訂網址 iOS 會先問 → 測試改用只往上捲、啟動參數帶連結。
 
 ## 結構
 
@@ -29,66 +72,58 @@
 DESIGN.md                  設計與決定
 project.yml                XcodeGen：App、DeskRemoteCore（framework）、單元與 UI 測試
 iOSApp/                    SwiftUI 畫面；DeskRemoteApp.swift 是唯一 @main 檔，工具箱會排除它
-Sources/DeskRemoteCore/    API 模型、HelperClient、TranscriptLog、DeskText（無 UI）
+Sources/DeskRemoteCore/    API 模型、HelperClient、TranscriptLog、DeskText、DeskLink／DeskPhoto（無 UI）
 Tests/                     DeskRemoteCoreTests（單元）、DeskRemoteUITests（模擬器 UI）
-fixtures/fake-helper/      人工編寫的示範資料：兩個桌面版的對話清單、逐字稿、權限詢問
-pc-helper/                 電腦端小幫手（Python 標準函式庫）、UIA 工作程序、單元測試、安裝腳本、設定範例
+fixtures/fake-helper/      人工編寫的示範資料：兩個桌面版的對話清單、逐字稿、權限詢問、額度、示範畫面
+pc-helper/                 電腦端小幫手（Python 標準函式庫）、UIA 工作程序、截圖、提權夥伴、單元測試、安裝腳本、設定範例
 scripts/build.sh           macOS CI：小幫手測試 → 產生專案 → 模擬器單元與 UI 測試 → Release 封裝
 ```
 
-## 電腦端小幫手
+## 電腦端小幫手（`pc-helper/`）
 
-- `desk_remote_helper.py`：只綁設定的 ZeroTier 位址，`/v1/*` 要 `Authorization: Bearer <token>`，錯 5 次鎖 10 分鐘並送 ntfy。
-- 對話清單：Claude 讀桌面版自己的 `claude-code-sessions/*/*/local_*.json`；Codex 讀 `~/.codex/state_5.sqlite`（唯讀），讀不到時改用 `session_index.jsonl`。不寫桌面版任何檔案。
-- 逐字稿：Claude `~/.claude/projects/*/<cliSessionId>.jsonl`、Codex rollout 檔，只從檔尾讀新增的完整行；工具輸出太長時只送前段，手機點開再取全文。
-- **操作視窗（P2）**：一個常駐的 PowerShell（`uia_worker.ps1`，純 ASCII，控制項名稱從 `ui_strings.json` 傳入）做 UI Automation；判斷能不能做都在 Python 裡，有單元測試。
-  - 每個動作排隊、一次一個；送出、開對話、新對話、Claude 的「允許一次」要電腦閒置 60 秒以上（扣掉小幫手自己的按鍵），否則回「有人在用」，手機確認後才強制。電腦鎖定時一律拒絕。
-  - 送出前先用對話自己的連結（`claude://claude.ai/epitaxy/local_<id>`、`codex://threads/<id>`）打開，等頁面標題完全相符才打字；Codex 連結沒切過去時，只有標題唯一才改按側邊欄。標題不符、視窗切不到前面、剪貼簿無法安全保存時一律中止，不送任何字。
-  - 剪貼簿：保存並還原文字、RTF、HTML、圖片、檔案清單；放入的文字標記為不進剪貼簿歷程與雲端剪貼簿。
-  - 送出後 20 秒內要在該對話的逐字稿看到這段文字，看不到就回報「還沒看到」。同一個 `clientMsgId` 只送一次。
-  - 權限：每 4 秒看一次目前開著的對話有沒有詢問；手機只能按「允許一次」或「拒絕」，送來的 `promptId` 必須等於畫面上的那個詢問。Claude 的「允許一次」先試鍵盤開選單，不行才點一次滑鼠（先確認游標下就是那個按鈕）。
-  - ntfy：每個動作（只有電腦名稱、App、對話標題，不含訊息內文）、出現權限詢問、一輪完成都通知。
-  - 設定 `drive_windows: false` 可回到唯讀；`idle_seconds` 改閒置門檻。
-- **管理員權限（P3）**：`elevate -c "<PowerShell 指令>"` 或 `elevate -f <腳本.ps1>` 把請求送到提權夥伴（`desk_remote_elevated.ps1`，登入時以最高權限啟動、只聽 127.0.0.1）。小幫手把等待中的請求轉給手機並送 ntfy（不含指令內容）；手機用 Face ID 確認後，以這台電腦專屬的管理員核准金鑰對「請求 id＋內容的 SHA-256＋資料夾＋到期時間」簽 HMAC，夥伴自己驗簽章才執行，輸出與結束碼原樣回到 `elevate`。小幫手沒有這把金鑰。一次最多 3 個等待、每分鐘 5 個、10 分鐘未核准就失效、同一核准只能用一次。安裝：用系統管理員 PowerShell 執行 `install-elevated.ps1`（建立只有管理員能改的 `%ProgramData%\DeskRemote`、新金鑰、排程工作 `DeskRemoteElevated`、`elevate` 指令，最後顯示一次金鑰給你輸入手機）；不改 UAC。
-- 安裝：`install.ps1 -BindIp <ZeroTier 位址> -Network <網段>` 會在 `%LOCALAPPDATA%\DeskRemote\config.json` 產生隨機 token（只有本人可讀），並註冊登入時啟動的排程工作（一般權限）。連線密碼目前要從 config.json 手動輸入到手機；QR 配對在之後的階段。
+- `desk_remote_helper.py`：只綁設定的 ZeroTier 位址，`/v1/*` 要 `Authorization: Bearer <token>`，錯 5 次鎖 10 分鐘並送 ntfy。不寫桌面版任何檔案。
+- 資料來源：Claude 讀桌面版的 `claude-code-sessions/*/*/local_*.json`（標題、模型、推理強度、權限模式）、逐字稿 `~/.claude/projects/*/<cliSessionId>.jsonl`、額度 `plan-usage-history.json`；Codex 讀 `~/.codex/state_5.sqlite`（唯讀，讀不到改用 `session_index.jsonl`）與 rollout 檔（`turn_context`、`token_count`）。上下文上限只用桌面版回報過的（Opus 5 系列 100 萬），其他模型只顯示已用量（可在 `config.json` 的 `claude.context_windows` 補）。
+- **操作視窗**：常駐的 PowerShell（`uia_worker.ps1`，純 ASCII；控制項名稱都在 `ui_strings.json`，桌面版改版時改這個檔）做 UI Automation，判斷能不能做都在 Python 裡、有單元測試。
+  - 動作排隊、一次一個；要用前景的動作（送出、開對話、新對話、Claude 的選單）要電腦閒置 60 秒以上（扣掉小幫手自己的按鍵），否則回「有人在用」，手機確認後才強制。鎖定時一律拒絕。停止、Codex 的模型與權限只用 UI Automation，不需閒置。
+  - 先用對話自己的連結打開、等頁面標題完全相符才動作；標題不符、視窗切不到前面、剪貼簿無法安全保存時一律中止，不送任何字。剪貼簿先保存後還原，放入的文字與照片標記為不進剪貼簿歷程與雲端剪貼簿。
+  - 送出後 20 秒內要在該對話的逐字稿看到這段文字；同一個 `clientMsgId` 只送一次。照片寫到只有本人讀得到的暫存檔，貼上後立刻刪除。
+- **ntfy**（`config.json` 的 `notify.server`／`notify.topic`）：只發需要處理的事——權限詢問、新的選項題、管理員指令等核准、手機操作失敗、一輪完成、額度或上下文 ≥80%（`alerts` 可改門檻）、密碼錯誤鎖定；每則帶 `deskremote://open?…` 連結，點了直接打開那個對話。不含訊息內文與指令內容。
+- **截圖**：`screen_capture.ps1` 以獨立的 DPI-aware 程序截整個桌面（1600 寬 JPEG 約 110 KB）；`config.json` 設 `screen: false` 可關閉。
+- **管理員權限**：`elevate -c "<PowerShell 指令>"` 或 `elevate -f <腳本.ps1>` 把請求送到提權夥伴（`desk_remote_elevated.ps1`）。手機用 Face ID 確認後，以這台電腦專屬的核准金鑰對「請求 id＋內容的 SHA-256＋資料夾＋到期時間」簽 HMAC，夥伴自己驗簽章才執行，輸出與結束碼原樣回到 `elevate`；小幫手沒有這把金鑰。一次最多 3 個等待、每分鐘 5 個、10 分鐘未核准就失效、同一核准只能用一次。辦公室電腦的 Claude Code 與 Codex 全域規則檔已寫明「需要系統管理員權限改用 `elevate`」。
+- 安裝：`install.ps1 -BindIp <ZeroTier 位址> -Network <網段>`（產生只有本人可讀的 `%LOCALAPPDATA%\DeskRemote\config.json` 與隨機 token，註冊登入時啟動的排程工作）；提權夥伴用系統管理員 PowerShell 執行 `install-elevated.ps1`（建立只有管理員能改的 `%ProgramData%\DeskRemote`、新金鑰、排程工作與 `elevate` 指令，顯示一次金鑰給你輸入手機）。不改 UAC。
 - 測試：`cd pc-helper && python -m unittest discover -s tests -v`。
 
 ## 發布與安裝
 
 - 只有 commit 訊息帶 `[release-ipa]`（使用者同意後才加）時，CI 在全部測試通過後把未簽署 IPA 與閃退符號檔發布成公開 prerelease `desk-remote-<版本>-build<N>`；上限 5 MB，同一 build 號不重複發布。
-- 安裝：在 SideStore 的 My Apps 按「＋」匯入 IPA（Bundle ID `org.personal.deskremote.app`，主畫面名稱「桌面遙控」）。
-- 第一次打開：右上角「＋」新增電腦，填私人網路位址、埠 `18790` 與電腦端 `%LOCALAPPDATA%\DeskRemote\config.json` 裡的 token；有裝提權夥伴的話再填管理員核准金鑰。
+- 安裝：在 SideStore 的 My Apps 按「＋」匯入 IPA；覆蓋安裝會保留已設定的電腦、連線密碼與核准金鑰。
+- 第一次打開：右上角「＋」新增電腦，填私人網路位址、埠 `18790` 與電腦端 `config.json` 裡的 token；有裝提權夥伴的話再填管理員核准金鑰。手機要先連上 ZeroTier。
 
 ## API（v1）
 
 | 方法與路徑 | 用途 |
 | --- | --- |
-| `GET /health`、`GET /v1/state` | 健康檢查；電腦狀態、閒置、鎖定、能做的事（`capabilities`）；0.4.0 起加 `usage`（各 App 的額度：每個時段的 %、重設時間、取樣時間）與 `models`（手機可切換的模型） |
+| `GET /health`、`GET /v1/state` | 健康檢查；電腦狀態、閒置、鎖定、`capabilities`、各 App 額度 `usage`、可選的 `models`／`efforts`／`modes`、可停止的 App `stop` |
 | `GET /v1/{claude\|codex}/sessions?limit=50` | 對話清單 |
-| `GET /v1/{app}/sessions/{id}/events?after=&epoch=&prompt=&wait=25` | 逐字稿事件與目前的權限詢問（long-poll）；0.4.0 起加 `meta`（模型、推理強度、上下文已用／上限／%），模型一變就喚醒 |
-| `POST /v1/{app}/sessions/{id}/model` | `{model, force?}` 在電腦上的模型選單選 `models` 裡的一個（0.4.0） |
-| `POST /v1/claude/sessions/{id}/effort`、`POST /v1/{app}/sessions/{id}/mode` | `{effort}`／`{mode}`，選 `efforts`／`modes` 裡的一個（0.5.0） |
-| `POST /v1/claude/sessions/{id}/stop` | 按下正在執行那一輪的「停止」（0.5.0） |
-| `POST /v1/{app}/sessions/{id}/messages` 帶 `image` | base64 JPEG／PNG（解碼後 ≤ 8 MB，這個路徑的請求上限 12 MB），先貼照片再貼文字（0.5.0） |
-| `GET /v1/screen` | 電腦整個桌面的 JPEG；鎖定時 423（0.5.0） |
+| `GET /v1/{app}/sessions/{id}/events?after=&epoch=&prompt=&question=&wait=25` | 逐字稿事件、目前的權限詢問與選項題、`meta`（模型、推理強度、上下文、權限模式）；long-poll，有變化就喚醒 |
 | `GET /v1/{app}/sessions/{id}/items/{itemId}` | 被截短的工具輸出全文 |
-| `POST /v1/{app}/sessions/{id}/messages` | `{text, clientMsgId, force?}` 送出訊息 |
+| `POST /v1/{app}/sessions/{id}/messages` | `{text, clientMsgId, image?, force?}` 送出訊息；`image` 是 base64 JPEG／PNG（解碼後 ≤ 8 MB，這個路徑的請求上限 12 MB） |
 | `POST /v1/{app}/sessions/{id}/permission` | `{promptId, decision: allow_once\|deny, force?}` |
-| `POST /v1/{app}/sessions/{id}/open` | 在電腦上打開這個對話 |
 | `POST /v1/claude/sessions/{id}/answer` | `{questionId, answers: [{labels, other?}], force?}` 回答選項題 |
-| `POST /v1/{app}/sessions` | `{text, clientMsgId, force?}` 開新對話 |
-| `GET /v1/elevate` | 等待核准的管理員指令（完整內容、資料夾、到期時間）與最近結果 |
-| `POST /v1/elevate/{id}` | `{decision: allow\|deny, hmac?}`；允許必須帶手機算的簽章，由提權夥伴驗證 |
-| `GET /v1/actions/{id}` | 動作結果：`queued`／`running`／`done`／`failed`，送出是否已在逐字稿確認 |
+| `POST /v1/{app}/sessions/{id}/model`、`…/effort`、`…/mode` | `{model}`／`{effort}`／`{mode}`，選 `state` 列出的其中一個 |
+| `POST /v1/{app}/sessions/{id}/stop` | 按下正在執行那一輪的「停止」 |
+| `POST /v1/{app}/sessions/{id}/open` | 在電腦上打開這個對話 |
+| `POST /v1/{app}/sessions` | `{text, clientMsgId, project?, force?}` 開新對話 |
+| `GET /v1/screen` | 電腦整個桌面的 JPEG；鎖定時 423 |
+| `GET /v1/elevate`、`POST /v1/elevate/{id}` | 等待核准的管理員指令與最近結果；`{decision: allow\|deny, hmac?}`，允許必須帶手機算的簽章 |
+| `GET /v1/actions/{id}` | 動作結果：`queued`／`running`／`done`／`failed`，以及是否已確認 |
 
-錯誤：`409 busy-user`（含 `idleSeconds`）、`423 locked`、`409 prompt-changed`、`400`、`413`、`429`。
+錯誤：`401`、`409 busy-user`（含 `idleSeconds`）、`409 prompt-changed`、`423 locked`、`400`、`413`、`429`。
 
 ## 手機端
 
-- 電腦清單 → 電腦（狀態、Claude／Codex）→ 對話清單（新到舊，右上角開新對話）→ 聊天畫面。
-- 只在前景讀取：電腦清單 30 秒、電腦頁 15 秒、對話清單 10 秒、聊天畫面 long-poll；離開前景即停止。
-- 連線密碼只存在 iPhone 鑰匙圈（本機限定），位址存在 UserDefaults；倉庫裡沒有任何位址或密碼。
-- 聊天畫面：工具呼叫收合成一列；原生輸入框（多行、聽寫）；送出的訊息先以虛線泡泡顯示進度，逐字稿出現後才換成正式訊息；失敗時可重試或移除。
-- 權限卡片有「允許一次」「拒絕」，沒有「永遠允許」。
-- 選項題卡片：每題標示單選或可複選，也可在「其他」自己寫；每題都答了才能送出。對話結尾的建議按鈕顯示在輸入框上方，點了就送出那段文字。對話在等待處理但電腦上開著別的對話時，顯示「在電腦上打開這個對話」。
-- 電腦有人在用時跳出確認「仍要送出」，取消就不送。
+- 電腦清單 → 電腦頁（狀態、Claude／Codex、看電腦畫面、額度、管理員請求）→ 對話清單（新到舊，右上角開新對話）→ 聊天畫面。
+- 只在前景讀取：電腦清單 30 秒、電腦頁 15 秒、對話清單 10 秒、聊天畫面 long-poll；離開前景即停止。關著 App 時靠 ntfy 通知。
+- 連線密碼與管理員核准金鑰只存在 iPhone 鑰匙圈（本機限定），位址存在 UserDefaults；倉庫裡沒有任何位址、密碼或金鑰。
+- 聊天畫面：頂端一行「模型・推理強度・上下文 %」，點開看細節、額度並切換模型／推理強度／權限模式；工具呼叫收合成一列；輸入列可加照片；送出的訊息先以虛線泡泡顯示進度；處理中可按「停止」；長按訊息可「拷貝全部」或「選取文字」。
+- 權限卡片只有「允許一次」「拒絕」。選項題卡片每題標示單選或可複選，可在「其他」自己寫。電腦有人在用時先跳確認，取消就不動作。

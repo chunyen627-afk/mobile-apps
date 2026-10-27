@@ -369,6 +369,15 @@ final class MoreControlsTests: XCTestCase {
         XCTAssertNil(DeskPhoto.prepare(Data("not an image".utf8)))
     }
 
+    func testBareWebAddressesBecomeLinks() throws {
+        let parsed = try AttributedString(markdown: "看 https://github.com/x/y 和 [說明](https://example.org/doc)，路徑 C:\\work\\a.txt",
+                                          options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))
+        let linked = DeskText.linkingWebAddresses(parsed)
+        let links = linked.runs.compactMap { run in run.link.map { ($0.absoluteString, String(linked[run.range].characters)) } }
+        XCTAssertEqual(links.map(\.0), ["https://github.com/x/y", "https://example.org/doc"])
+        XCTAssertEqual(links.map(\.1), ["https://github.com/x/y", "說明"], "the Markdown link keeps its own text")
+    }
+
     func testCodexPhotoCaptionClearsThePendingBubble() {
         var log = TranscriptLog()
         log.apply(EventPage(epoch: "e", reset: true, events: [TranscriptEvent(seq: 5, kind: "user", text: "[圖片]\n看這張圖")],

@@ -30,7 +30,7 @@ struct DeskSelectableText: UIViewRepresentable {
         view.backgroundColor = .clear
         view.textContainerInset = .zero
         view.textContainer.lineFragmentPadding = 0
-        view.dataDetectorTypes = []
+        view.dataDetectorTypes = [.link]  // web addresses in tool output and the select-text sheet open in Safari
         view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         return view
     }

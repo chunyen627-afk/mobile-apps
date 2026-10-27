@@ -446,7 +446,8 @@ struct DeskBubble: View {
 
     static func markdown(_ text: String) -> AttributedString {
         let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        return (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
+        // Bare web addresses become tappable too, not only Markdown links (asked on the phone 10/27).
+        return DeskText.linkingWebAddresses((try? AttributedString(markdown: text, options: options)) ?? AttributedString(text))
     }
 }
 
