@@ -29,6 +29,12 @@ struct DeskPCListView: View {
                     Button { editing = .edit(pc) } label: { Label("編輯", systemImage: "pencil") }
                 }
             }
+            // The app's own version (the PC page's "小幫手" line is the helper's, read as the app's 10/27).
+            Section {
+            } footer: {
+                Text(DeskText.appVersion(Bundle.main.infoDictionary ?? [:]))
+                    .accessibilityIdentifier("app-version")
+            }
         }
         .navigationTitle("桌面遙控")
         .toolbar {

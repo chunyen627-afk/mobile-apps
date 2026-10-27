@@ -74,6 +74,13 @@ public enum DeskText {
         }
     }
 
+    /// "App 版本 0.5.3（build 6）" from the app's Info.plist values.
+    public static func appVersion(_ info: [String: Any]) -> String {
+        let version = info["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info["CFBundleVersion"] as? String ?? "?"
+        return "App 版本 \(version)（build \(build)）"
+    }
+
     /// "9,800", "18.3 萬", "100 萬": token counts the way the phone shows them.
     public static func tokens(_ count: Int) -> String {
         if count < 10_000 { return count.formatted(.number.locale(Locale(identifier: "en_US"))) }

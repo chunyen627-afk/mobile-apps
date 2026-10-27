@@ -25,6 +25,7 @@ final class DeskRemoteUITests: XCTestCase {
         launch(pc: nil)
         XCTAssertTrue(element("pc-empty").waitForExistence(timeout: 10), "empty state missing")
         XCTAssertTrue(element("pc-add").exists, "add button missing")
+        XCTAssertTrue(waitFor(element("app-version"), labelContains: "App 版本 ", timeout: 5), "app version missing")
         snapshot("01-empty")
     }
 

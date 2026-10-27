@@ -369,6 +369,12 @@ final class MoreControlsTests: XCTestCase {
         XCTAssertNil(DeskPhoto.prepare(Data("not an image".utf8)))
     }
 
+    func testAppVersionLine() {
+        XCTAssertEqual(DeskText.appVersion(["CFBundleShortVersionString": "0.5.3", "CFBundleVersion": "6"]),
+                       "App 版本 0.5.3（build 6）")
+        XCTAssertEqual(DeskText.appVersion([:]), "App 版本 ?（build ?）")
+    }
+
     func testBareWebAddressesBecomeLinks() throws {
         let parsed = try AttributedString(markdown: "看 https://github.com/x/y 和 [說明](https://example.org/doc)，路徑 C:\\work\\a.txt",
                                           options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))
