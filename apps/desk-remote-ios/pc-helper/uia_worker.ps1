@@ -389,6 +389,34 @@ function Make-Exact($w, $card, $s, $labels) {
   return $hows
 }
 
+# "Other" is a toggle that shows a text box; its toggle state did not follow (live 10/27: a
+# Toggle() then a click turned it off again), so the text box appearing is what counts.
+function Card-Edit($card) {
+  return $card.FindFirst($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Edit)))
+}
+
+function Wait-Edit($card, $ms) {
+  for ($i = 0; $i -lt ($ms / 200); $i++) {
+    if (Card-Edit $card) { return $true }
+    Start-Sleep -Milliseconds 200
+  }
+  return [bool](Card-Edit $card)
+}
+
+function Open-Other($w, $card, $s) {
+  if (Card-Edit $card) { return 'other:open' }
+  $other = Find-Option $card $s.other
+  if (-not $other) { Fail 'not-found' 'no other option on the card' }
+  Scroll-To $other
+  $p = $null
+  if ($other.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern, [ref]$p)) { $p.Toggle() }
+  if (Wait-Edit $card 1500) { return 'other:toggle' }
+  Scroll-To $other
+  Click-Element $w (Find-Option $card $s.other) 'the other option'
+  if (Wait-Edit $card 2000) { return 'other:click' }
+  Fail 'toggle-failed' 'no text box after choosing other'
+}
+
 function Answer-Questions($w, $page, $s, $questions) {
   $before = [DeskWin]::GetForegroundWindow()
   $cursor = New-Object DeskWin+POINT
@@ -407,12 +435,13 @@ function Answer-Questions($w, $page, $s, $questions) {
       }
       if (-not $card) { Fail 'question-changed' 'the question is not on screen' }
       $labels = @(@($q.labels) | Where-Object { $_ })
+      # "Other" first: in a single-choice question it clears the chosen option itself, which
+      # cannot be switched off on its own (live 10/27).
+      if ($q.other) { $hows += Open-Other $w $card $s }
       $hows += Make-Exact $w $card $s $labels
       if ($q.other) {
-        $hows += Set-On $w (Find-Option $card $s.other)
-        Start-Sleep -Milliseconds 300
-        $edit = $card.FindFirst($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Edit)))
-        if (-not $edit) { Fail 'not-found' 'no text box after choosing other' }
+        $edit = Card-Edit $card
+        if (-not $edit) { Fail 'toggle-failed' 'the other text box went away' }
         Paste-Text $w $edit $q.other
       }
       $name = if ($qi -eq $count - 1) { $s.submit } else { $s.next }
@@ -795,6 +824,18 @@ function Run-Command($c) {
       if (-not (Invoke-Element $b)) { Fail 'not-invokable' 'button has no invoke pattern' }
       return @{ ok = $true }
     }
+    'invoke_title' {
+      # The sidebar entry: "<title>" or "<title> <note>", but not "<title> <suffix of its menu>".
+      $w = Need-Window $c.app
+      $hits = @()
+      foreach ($b in $w.FindAll($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Button)))) {
+        $n = $b.Current.Name
+        if ($n -eq $c.title -or ($n.StartsWith($c.title + ' ') -and -not ($n.Substring($c.title.Length + 1) -match $s.menu_suffix))) { $hits += $b }
+      }
+      if ($hits.Count -ne 1) { Fail 'duplicate-title' ("sidebar entries with this title: " + $hits.Count) }
+      if (-not (Invoke-Element $hits[0])) { Fail 'not-invokable' 'the sidebar entry has no invoke pattern' }
+      return @{ ok = $true }
+    }
     'send' {
       $w = Need-Window $c.app
       $page = Need-Doc $w $c.doc
@@ -804,18 +845,25 @@ function Run-Command($c) {
     'new_send' {
       $w = Need-Window $c.app
       $before = @(Get-Docs $w)
-      $b = Find-ByName $w $CT::Button $c.name
-      if (-not $b) { Fail 'not-found' 'new conversation button not found' }
-      if (-not (Invoke-Element $b)) { Fail 'not-invokable' 'new conversation button has no invoke pattern' }
-      $changed = $false
-      for ($i = 0; $i -lt 25; $i++) {
-        Start-Sleep -Milliseconds 200
-        $now = @(Get-Docs $w)
-        if (($now -join '|') -ne ($before -join '|')) { $changed = $true; break }
+      # Already on an empty new-conversation page (Codex shows its own box there): use it.
+      $fresh = $s.new_edit -and (Find-ByName $w $CT::Edit $s.new_edit)
+      if (-not $fresh) {
+        $b = Find-ByName $w $CT::Button $c.name
+        if (-not $b) { Fail 'not-found' 'new conversation button not found' }
+        if (-not (Invoke-Element $b)) { Fail 'not-invokable' 'new conversation button has no invoke pattern' }
+        $changed = $false
+        for ($i = 0; $i -lt 25; $i++) {
+          Start-Sleep -Milliseconds 200
+          $now = @(Get-Docs $w)
+          if (($now -join '|') -ne ($before -join '|')) { $changed = $true; break }
+        }
+        if (-not $changed) { Fail 'title-mismatch' 'the new conversation did not open' }
       }
-      if (-not $changed) { Fail 'title-mismatch' 'the new conversation did not open' }
       Start-Sleep -Milliseconds 1500
-      Paste-Send $w $w $s.edit $c.text
+      # Codex names its new-conversation box differently from a conversation's (read live 10/27).
+      $editName = $s.edit
+      if ($s.new_edit -and (Find-ByName $w $CT::Edit $s.new_edit)) { $editName = $s.new_edit }
+      Paste-Send $w $w $editName $c.text
       return @{ ok = $true; docs = @(Get-Docs $w) }
     }
     'answer' {

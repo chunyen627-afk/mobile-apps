@@ -372,6 +372,9 @@ class DrivingTests(FakeEnvironment):
         class StuckDriver(h.FakeDriver):
             def open(self, app, info):
                 self.calls.append(('open', app, info['id']))  # the link does nothing
+
+            def invoke_title(self, app, title):
+                self.calls.append(('invoke_title', app, title))  # nor does the sidebar
         _, driver, _, runner = drive(self.fake, driver_class=StuckDriver)
         body = runner.submit('send', 'claude', A, {'text': 'x'})[1]
         run_all(runner)
@@ -517,6 +520,32 @@ class DrivingTests(FakeEnvironment):
         run_all(runner)
         self.assertEqual([s[0] for s in sent if s[0].startswith('⚠️')], ['⚠️ 手機送出訊息失敗：Claude'])
         self.assertFalse(any('秘密內容' in s[1] for s in sent), 'message text leaked into ntfy')
+
+    def test_claude_ignoring_its_link_falls_back_to_the_sidebar(self):
+        class DeafDriver(h.FakeDriver):
+            def open(self, app, info):
+                self.calls.append(('open', app, info['id']))  # the link does nothing
+        _, driver, _, runner = drive(self.fake, driver_class=DeafDriver)
+        body = runner.submit('open', 'claude', A, {})[1]
+        run_all(runner)
+        self.assertEqual(runner.status(body['id'])['state'], 'done')
+        self.assertEqual([c[0] for c in driver.calls], ['open', 'invoke'])
+
+    def test_new_conversation_brings_a_tray_app_back_first(self):
+        class TrayDriver(h.FakeDriver):
+            hidden = True
+
+            def docs(self, app):
+                return None if self.hidden else super().docs(app)
+
+            def open(self, app, info):
+                super().open(app, info)
+                self.hidden = False
+        _, driver, _, runner = drive(self.fake, driver_class=TrayDriver)
+        body = runner.submit('new', 'codex', None, {'text': '從系統匣叫出來'})[1]
+        run_all(runner)
+        self.assertEqual(runner.status(body['id'])['state'], 'done')
+        self.assertEqual([c[0] for c in driver.calls], ['open', 'new_send'])
 
     def test_a_new_option_question_is_notified_once(self):
         sent = []
@@ -872,7 +901,7 @@ class MoreControlsTests(FakeEnvironment):
         state = hub.state()
         self.assertEqual(state['efforts'], {'claude': ['低', '中', '高', '超高', '最高', 'Ultracode']})
         self.assertEqual(state['modes']['codex'], ['要求核准', '代我核准'])
-        self.assertEqual(state['stop'], ['claude'])
+        self.assertEqual(state['stop'], ['claude', 'codex'])
 
 
 def glob_photos():

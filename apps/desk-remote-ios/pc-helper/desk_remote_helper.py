@@ -1357,6 +1357,10 @@ class WindowsDriver:
     def invoke(self, app, name, doc=None):
         self.ask(app, cmd='invoke', name=name, doc=doc)
 
+    def invoke_title(self, app, title):
+        """The one sidebar button named `title` or `title` plus a note (not its menu buttons)."""
+        self.ask(app, cmd='invoke_title', title=title)
+
     def send(self, app, doc, text, image=None):
         """Pastes `image` (a file path) first when given, then `text`, then Enter."""
         self.ask(app, cmd='send', doc=doc, text=text, image=image)
@@ -1831,6 +1835,14 @@ class ActionRunner:
         app, info = action['app'], action['info']
         docs = self.driver.docs(app)
         if docs is not None and docs.count(info['doc']) == 1:
+            if action.get('needsFront', True):
+                # Windows lets a link activation take the foreground but refuses this helper's own
+                # SetForegroundWindow while another app is in front (live 10/27), so the open
+                # conversation's own link brings its window up.
+                self.recheck(action)
+                self.presence.begin_own()
+                self.driver.open(app, info)
+                time.sleep(min(1.0, self.settle_seconds))
             return
         self.recheck(action)
         self.presence.begin_own()
@@ -1840,14 +1852,19 @@ class ActionRunner:
             # message sent right after the switch was lost), so let it settle.
             time.sleep(self.settle_seconds)
             return
+        # Fallback: the sidebar entry with this title, only when the title is unique. Codex names
+        # the entry by the title; Claude adds a note ("<title> 由 Claude 從「…」啟動"). Claude
+        # once stopped following its links altogether (live 10/27) while its sidebar still worked.
+        titles = [row['title'] for row in self.hub.sources[app].list_sessions(100)]
+        if titles.count(info['title']) != 1:
+            raise ActionError('duplicate-title', '')
         if app == 'codex':
-            # Fallback: the sidebar button with this title, only when the title is unique.
-            titles = [row['title'] for row in self.hub.sources['codex'].list_sessions(100)]
-            if titles.count(info['title']) != 1:
-                raise ActionError('duplicate-title', '')
             self.driver.invoke(app, info['title'])
-            if self.wait_doc(app, info['doc']):
-                return
+        else:
+            self.driver.invoke_title(app, info['title'])
+        if self.wait_doc(app, info['doc']):
+            time.sleep(self.settle_seconds)
+            return
         raise ActionError('title-mismatch', '')
 
     def do_open(self, action):
@@ -2047,6 +2064,16 @@ class ActionRunner:
             button = strings.get('new_in_project', '{project}').format(project=project)
         self.recheck(action)
         self.presence.begin_own()
+        if self.driver.docs(app) is None:
+            # Closed to the tray (Codex, live 10/27): no window has the new-conversation button.
+            # A conversation link brings the window back, the way opening a conversation does.
+            rows = source.list_sessions(1)
+            info = self.hub.info(app, rows[0]['id']) if rows else None
+            if info is None:
+                raise ActionError('app-not-running', '')
+            self.driver.open(app, info)
+            self.wait_doc(app, info['doc'])
+            time.sleep(self.settle_seconds)
         self.driver.new_send(app, button, text)
         self.presence.end_own()
         self.update(action, message='已送出，等待新對話出現')
@@ -2219,7 +2246,7 @@ def handler_for(hub, gate, networks, runner=None):
                 self.send_header('X-Content-Type-Options', 'nosniff')
                 self.end_headers()
                 self.wfile.write(body)
-            except (BrokenPipeError, ConnectionResetError):
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 pass  # The phone left (for example a long-poll cancelled when the app went to the background).
 
         def allowed(self):
@@ -2263,7 +2290,7 @@ def handler_for(hub, gate, networks, runner=None):
                 self.send_header('X-Content-Type-Options', 'nosniff')
                 self.end_headers()
                 self.wfile.write(data)
-            except (BrokenPipeError, ConnectionResetError):
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 pass
 
         def read_body(self, limit=MAX_BODY):
@@ -2651,6 +2678,9 @@ class FakeDriver:
     def open(self, app, info):
         self.calls.append(('open', app, info['id']))
         self.open_doc[app] = info['doc']
+
+    def invoke_title(self, app, title):
+        self.invoke(app, title)
 
     def invoke(self, app, name, doc=None):
         self.calls.append(('invoke', app, name))

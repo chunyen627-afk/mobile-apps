@@ -71,15 +71,14 @@ struct DeskChatView: View {
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                                 .accessibilityIdentifier("chat-working")
-                            if app == .claude {
-                                Button(role: .destructive) { Task { await stopTurn(force: false) } } label: {
-                                    Label("停止", systemImage: "stop.circle")
-                                }
-                                .font(.footnote)
-                                .buttonStyle(.bordered)
-                                .disabled(stopState != nil && stopState?.hasPrefix("沒有成功") == false)
-                                .accessibilityIdentifier("chat-stop")
+                            // Both apps (Codex's stop button read live 10/27); an older helper answers "not supported".
+                            Button(role: .destructive) { Task { await stopTurn(force: false) } } label: {
+                                Label("停止", systemImage: "stop.circle")
                             }
+                            .font(.footnote)
+                            .buttonStyle(.bordered)
+                            .disabled(stopState != nil && stopState?.hasPrefix("沒有成功") == false)
+                            .accessibilityIdentifier("chat-stop")
                         }
                     }
                     // Stays after the turn ends, so "已停止" is still readable.
