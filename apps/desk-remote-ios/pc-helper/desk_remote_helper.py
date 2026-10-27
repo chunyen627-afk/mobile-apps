@@ -210,6 +210,7 @@ def summarize_input(name, data):
 
 
 QUESTION_TOOL = 'AskUserQuestion'
+INTERRUPTED = '[Request interrupted by user'
 
 
 def is_wrap_up(name):
@@ -276,6 +277,13 @@ class ClaudeParser:
         ts = iso(obj.get('timestamp'))
         out = []
         if kind == 'user':
+            # A stopped turn is written as a user message "[Request interrupted by user…]" (seen live
+            # 10/27): it ends the turn, it is not something the person typed.
+            texts = [content] if isinstance(content, str) else \
+                [b.get('text', '') for b in content or [] if isinstance(b, dict) and b.get('type') == 'text']
+            if texts and all(t.strip().startswith(INTERRUPTED) for t in texts):
+                self.status = 'idle'
+                return [{'kind': 'status', 'text': '已中止', 'ts': ts}]
             if isinstance(content, str):
                 if content.strip() and not is_noise(content):
                     out.append({'kind': 'user', 'text': content, 'ts': ts})

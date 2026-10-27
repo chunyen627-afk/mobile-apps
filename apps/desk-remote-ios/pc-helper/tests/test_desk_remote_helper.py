@@ -826,6 +826,16 @@ class MoreControlsTests(FakeEnvironment):
         run_all(runner)
         self.assertEqual(runner.status(body['id'])['message'], '已停止')
 
+    def test_an_interrupted_turn_ends_as_a_status_not_a_message(self):
+        parser = h.ClaudeParser()
+        parser.feed({'type': 'user', 'message': {'role': 'user', 'content': '請寫長文'}})
+        self.assertEqual(parser.status, 'working')
+        out = parser.feed({'type': 'user', 'message': {'role': 'user', 'content': [
+            {'type': 'text', 'text': '[Request interrupted by user]'}]}})
+        self.assertEqual((out, parser.status), ([{'kind': 'status', 'text': '已中止', 'ts': None}], 'idle'))
+        out = parser.feed({'type': 'user', 'message': {'role': 'user', 'content': '[Request interrupted by user for tool use]'}})
+        self.assertEqual(out[0]['kind'], 'status')
+
     def test_someone_at_the_pc_does_not_block_stop_or_codex_menus(self):
         presence = dict(self.fake.cfg['presence'], idleSeconds=5)
         _, _, _, runner = drive(self.fake, presence)
