@@ -24,6 +24,7 @@ struct DeskChatView: View {
     @State private var openState: String?
     /// A question was seen here, so the list's "needs action" is no longer news.
     @State private var sawPrompt = false
+    @State private var showingMeta = false
     @FocusState private var inputFocused: Bool
 
     var body: some View {
@@ -86,13 +87,21 @@ struct DeskChatView: View {
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
-            if let failure {
-                DeskNotice(text: failure, tint: .red)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(8)
-                    .background(Color(.systemBackground))
-                    .accessibilityIdentifier("chat-error")
+            VStack(spacing: 0) {
+                if let line = DeskText.metaLine(log.meta) {
+                    DeskMetaBar(line: line) { showingMeta = true }
+                }
+                if let failure {
+                    DeskNotice(text: failure, tint: .red)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                        .background(Color(.systemBackground))
+                        .accessibilityIdentifier("chat-error")
+                }
             }
+        }
+        .sheet(isPresented: $showingMeta) {
+            DeskModelSheet(store: store, pcID: pcID, app: app, session: session, meta: log.meta)
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {

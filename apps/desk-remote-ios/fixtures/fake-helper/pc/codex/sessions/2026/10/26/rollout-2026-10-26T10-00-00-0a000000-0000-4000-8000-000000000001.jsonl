@@ -1,4 +1,5 @@
 {"timestamp": "2026-10-26T10:00:00Z", "type": "session_meta", "payload": {"id": "0a000000-0000-4000-8000-000000000001"}}
+{"timestamp": "2026-10-26T10:00:00Z", "type": "turn_context", "payload": {"cwd": "C:\\work\\demo-app", "model": "gpt-6.1-sol", "effort": "high"}}
 {"timestamp": "2026-10-26T10:00:01Z", "type": "event_msg", "payload": {"type": "task_started"}}
 {"timestamp": "2026-10-26T10:00:01Z", "type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "# AGENTS.md instructions for demo"}]}}
 {"timestamp": "2026-10-26T10:00:02Z", "type": "event_msg", "payload": {"type": "item_completed", "item": {"type": "UserMessage", "content": [{"type": "text", "text": "測試：請回覆 A1\n"}]}}}
@@ -11,6 +12,7 @@
 {"timestamp": "2026-10-26T10:01:01Z", "type": "event_msg", "payload": {"type": "item_completed", "item": {"type": "UserMessage", "content": [{"type": "text", "text": "列出目前資料夾的檔案"}]}}}
 {"timestamp": "2026-10-26T10:01:03Z", "type": "event_msg", "payload": {"type": "item_completed", "item": {"type": "CommandExecution", "command": ["pwsh.exe", "-Command", "Get-ChildItem"], "parsed_cmd": [{"type": "unknown", "cmd": "Get-ChildItem -Name"}], "aggregated_output": "README.md\nmain.c\n", "exit_code": 0, "status": "completed"}}}
 {"timestamp": "2026-10-26T10:01:05Z", "type": "event_msg", "payload": {"type": "item_completed", "item": {"type": "AgentMessage", "content": [{"type": "Text", "text": "有 README.md 和 main.c 兩個檔案。"}]}}}
+{"timestamp": "2026-10-26T10:01:05Z", "type": "event_msg", "payload": {"type": "token_count", "info": {"last_token_usage": {"input_tokens": 64600, "cached_input_tokens": 60000, "output_tokens": 120}, "model_context_window": 258400}, "rate_limits": {"limit_id": "codex", "primary": {"used_percent": 5.0, "window_minutes": 10080, "resets_at": 1793616560}, "secondary": null}}}
 {"timestamp": "2026-10-26T10:01:05Z", "type": "event_msg", "payload": {"type": "task_complete"}}
 {"timestamp": "2026-10-26T10:02:00Z", "type": "event_msg", "payload": {"type": "item_completed", "item": {"type": "UserMessage", "content": [{"type": "text", "text": "<heartbeat>\n<automation_id>demo</automation_id>\n"}]}}}
 {"timestamp": "2026-10-26T10:02:01Z", "type": "event_msg", "payload": {"type": "item_completed", "item": {"type": "AgentMessage", "content": [{"type": "Text", "text": "<heartbeat>\n<automation_id>demo</automation_id>\n"}]}}}

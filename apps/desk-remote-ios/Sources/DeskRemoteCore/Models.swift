@@ -44,11 +44,55 @@ public struct HelperState: Decodable, Equatable, Sendable {
     public let warnings: [String]
     /// nil when the PC has no elevated companion installed.
     public let elevate: ElevateSummary?
+    /// Each app's plan limits; missing from helpers before 0.4.0, nil per app when unknown.
+    public let usage: [String: PlanUsage?]?
+    /// Models the phone may switch to, per app (only Claude for now).
+    public let models: [String: [String]]?
 
     public func app(_ app: DeskApp) -> AppState? { apps[app.rawValue] }
+    public func usage(_ app: DeskApp) -> PlanUsage? { usage?[app.rawValue] ?? nil }
+    public func models(_ app: DeskApp) -> [String] { can("model") ? models?[app.rawValue] ?? [] : [] }
 
     /// "read", "send", "permission", "new", "open".
     public func can(_ capability: String) -> Bool { capabilities.contains(capability) }
+}
+
+/// One app's plan limits as the desktop app last read them.
+public struct PlanUsage: Decodable, Equatable, Sendable {
+    public struct Window: Decodable, Equatable, Hashable, Sendable {
+        /// "5 小時", "每週", ...
+        public let label: String
+        public let percent: Int
+        /// ISO time the window resets, when the app's files say.
+        public let resetsAt: String?
+        /// The desktop app's own reset wording, e.g. "週日上午11:00 重設".
+        public let resetsText: String?
+    }
+
+    public let windows: [Window]
+    public let sampledAt: String?
+}
+
+/// Model, effort and context use of one conversation (`meta` of an event page).
+public struct ConversationMeta: Decodable, Equatable, Sendable {
+    public struct Context: Decodable, Equatable, Sendable {
+        public let used: Int
+        /// nil when the helper does not know this model's context window.
+        public let window: Int?
+        public let percent: Int?
+    }
+
+    public let model: String?
+    public let modelId: String?
+    public let effort: String?
+    public let context: Context?
+
+    public init(model: String?, modelId: String? = nil, effort: String?, context: Context?) {
+        self.model = model
+        self.modelId = modelId
+        self.effort = effort
+        self.context = context
+    }
 }
 
 /// `POST` answers and `GET /v1/actions/{id}`: one action the helper runs on the PC's windows.
@@ -76,6 +120,7 @@ struct ActionRequest: Encodable {
     var questionId: String?
     var answers: [QuestionAnswer]?
     var project: String?
+    var model: String?
     var force: Bool?
 }
 
@@ -196,9 +241,12 @@ public struct EventPage: Decodable, Equatable, Sendable {
     public let prompt: PermissionPrompt?
     public let question: OptionQuestion?
     public let suggestions: ReplySuggestions?
+    /// Missing from helpers before 0.4.0.
+    public let meta: ConversationMeta?
 
     public init(epoch: String, reset: Bool, events: [TranscriptEvent], earlier: Bool, cursor: Int, status: String,
-                prompt: PermissionPrompt?, question: OptionQuestion? = nil, suggestions: ReplySuggestions? = nil) {
+                prompt: PermissionPrompt?, question: OptionQuestion? = nil, suggestions: ReplySuggestions? = nil,
+                meta: ConversationMeta? = nil) {
         self.epoch = epoch
         self.reset = reset
         self.events = events
@@ -208,6 +256,7 @@ public struct EventPage: Decodable, Equatable, Sendable {
         self.prompt = prompt
         self.question = question
         self.suggestions = suggestions
+        self.meta = meta
     }
 }
 

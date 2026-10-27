@@ -42,6 +42,15 @@ struct DeskPCView: View {
                     .accessibilityIdentifier("app-row-\(app.rawValue)")
                 }
             }
+            if let state, DeskApp.allCases.contains(where: { state.usage($0) != nil }) {
+                Section("額度") {
+                    ForEach(DeskApp.allCases, id: \.self) { app in
+                        if let usage = state.usage(app) {
+                            DeskUsageRows(app: app, usage: usage)
+                        }
+                    }
+                }
+            }
             if state?.can("elevate") == true {
                 DeskElevateSection(model: elevate, hasKey: store.hasElevateKey(pcID)) { request, allow in
                     Task { await elevate.decide(request, allow: allow, store, pcID) }

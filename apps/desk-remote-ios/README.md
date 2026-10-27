@@ -17,7 +17,8 @@
 | P1 的 CI 證據 | 單元 15、UI 11 項 0 失敗（[run 40339664008](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40339664008)） |
 | P3 `elevate` | 實作完成：提權夥伴（PowerShell）、`elevate` 指令、小幫手轉送、手機核准（Face ID＋HMAC）。小幫手測試 65 項在 Windows 本機通過，其中 2 項直接跑真的 PowerShell 夥伴（未提權）：簽章錯、token 錯被拒，簽章對才執行且 UTF-8 輸出與結束碼正確，同一核准不能用兩次；手機與電腦用同一組測試向量驗 HMAC。另做 8 項變異測試（拿掉夥伴的簽章檢查、token 檢查、內容雜湊、Python 雙胞胎的簽章與逾時、啟動時不重複通知、通知不含指令），全部被抓到。**辦公室電腦已安裝並實測（2026-10-27）**：使用者以系統管理員執行 `install-elevated.ps1`，排程工作 `DeskRemoteElevated` 以最高權限執行、只聽 127.0.0.1。從 Git Bash 執行 `elevate -c 'whoami /groups \| Select-String "Mandatory Label"'`：夥伴收到的內容與送出的一字不差（含引號與管線）、資料夾正確、10 分鐘到期；拒絕後 `elevate` 以 126 結束；錯的提交 token 被拒。**手機核准後以管理員執行也已實測通過（2026-10-27）**：換新核准金鑰後，從 Git Bash 送出唯讀指令，iPhone 上的 0.3.0 用 Face ID 核准，夥伴驗過簽章才執行：`IsInRole(Administrator)` 為 True、列得出只有管理員能讀的 `%ProgramData%\DeskRemote`，結束碼 0，輸出回到 `elevate`。實測發現 Git Bash 下 `elevate` 的中文訊息是亂碼（Python 用主控台字碼頁 cp950 寫管線），已改為在 Git Bash 改用 UTF-8 輸出。實測時發現 Git Bash 找不到 `elevate.cmd` 的短名稱、經 cmd.exe 又會重新解析引號，安裝腳本改為另外放一個直接呼叫 Python 的 `elevate` 殼層檔。使用者同意後，2026-10-27 已在辦公室電腦的全域規則檔（Claude Code 的 CLAUDE.md、Codex 的 AGENTS.md）加入「需要系統管理員權限改用 `elevate`」一節（用法、在背景等待最多 10 分鐘、結束碼的意思、不用 `RunAs` 或改 UAC）；AI 實際照規則使用尚未觀察到 |
 | 實機 | 使用者 2026-10-27 改為先裝**單獨 App**（已自行空出一個名額）。**0.3.0 build 1 已發布**：[Release desk-remote-0.3.0-build1](https://github.com/chunyen627-afk/mobile-apps/releases/tag/desk-remote-0.3.0-build1)（[run 40439161778](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40439161778)：小幫手 67、單元 23、UI 19 項 0 失敗；IPA 342,736 bytes，SHA256 `b0b6a30c…4a6d`）。**已裝到 iPhone 並連上辦公室電腦（2026-10-27，使用者回報）**；手機上實測通過：管理員核准（見 P3 那一列）。手機上尚未實測：開新對話、選項題的「其他」、Codex 選項題。工具箱第三分頁之後再整合 |
-| 局部選字複製（0.3.1） | 實機回報 0.3.0 的訊息只能整段拷貝（SwiftUI 的 `.textSelection` 在 iOS 只給整段）。長按訊息泡泡多了選單「拷貝全部」與「選取文字」，後者打開整則訊息的唯讀 `UITextView`（`DeskSelectableText`／`DeskSelectTextSheet`），可以拖曳選一段再拷貝；工具指令與輸出、權限詢問、管理員指令內容與輸出直接就是可局部選取的文字框。**實作完成**，新增 UI 測試 20：長按回覆出現兩個選項，「選取文字」頁長按要出現「全選」選單；模擬器與實機結果待 CI 與安裝 |
+| 局部選字複製（0.4.0） | 實機回報 0.3.0 的訊息只能整段拷貝（SwiftUI 的 `.textSelection` 在 iOS 只給整段）。長按訊息泡泡多了選單「拷貝全部」與「選取文字」，後者打開整則訊息的唯讀 `UITextView`（`DeskSelectableText`／`DeskSelectTextSheet`），可以拖曳選一段再拷貝；工具指令與輸出、權限詢問、管理員指令內容與輸出直接就是可局部選取的文字框。**實作完成**，新增 UI 測試 20：長按回覆出現兩個選項，「選取文字」頁長按要出現「全選」選單；模擬器與實機結果待 CI 與安裝 |
+| 模型、上下文與額度（0.4.0） | 對話頁頂端顯示「Opus 5.5・高・上下文 18%」，點開可看上下文細節、這個 App 的額度，Claude 對話可切換模型；電腦頁多「額度」區塊。資料來源：Claude 的模型與推理強度讀對話檔 `model`／`effort`（畫面上開著的對話改讀輸入框旁的「模型：」按鈕）；上下文＝逐字稿最後一則回覆的 input＋cache read＋cache write tokens；上限只用桌面版回報過的（Opus 5 系列 100 萬），其他模型只顯示已用量不猜上限（可在 config.json 的 `claude.context_windows` 補）；額度讀 `plan-usage-history.json`（5 小時 `fh`、每週 `sd`，取登入組織最新一筆），每週重設時間讀輸入框旁的「使用量：」按鈕。Codex 讀 rollout 的 `turn_context`（模型、effort）與 `token_count`（上次輸入 tokens、`model_context_window`、`rate_limits`）。切換模型＝打開對話→點「模型：」按鈕→選單裡的單選項 Select（不行再點一次）→按鈕顯示新模型才算數，再確認對話檔的 `model` 已更新。**實作完成**：小幫手測試 74 項本機通過（新增 7 項），真實資料唯讀試讀與桌面版自己回報的一致（本對話上下文 39%、每週 46%）；畫面腳本讀模型／使用量按鈕約 0.1 秒。手機端與實際切換模型待 CI 與實測（切換會換電腦畫面上的對話，實測前先問使用者）。Codex 的模型選單還沒讀過（使用者中止了那次探測），Codex 只顯示不切換 |
 | 小幫手常駐安裝 | `install.ps1` **已在辦公室電腦執行（2026-10-27）**：登入排程工作 `DeskRemoteHelper`（一般權限）常駐 |
 
 ## 結構
@@ -60,9 +61,10 @@ scripts/build.sh           macOS CI：小幫手測試 → 產生專案 → 模�
 
 | 方法與路徑 | 用途 |
 | --- | --- |
-| `GET /health`、`GET /v1/state` | 健康檢查；電腦狀態、閒置、鎖定、能做的事（`capabilities`） |
+| `GET /health`、`GET /v1/state` | 健康檢查；電腦狀態、閒置、鎖定、能做的事（`capabilities`）；0.4.0 起加 `usage`（各 App 的額度：每個時段的 %、重設時間、取樣時間）與 `models`（手機可切換的模型） |
 | `GET /v1/{claude\|codex}/sessions?limit=50` | 對話清單 |
-| `GET /v1/{app}/sessions/{id}/events?after=&epoch=&prompt=&wait=25` | 逐字稿事件與目前的權限詢問（long-poll） |
+| `GET /v1/{app}/sessions/{id}/events?after=&epoch=&prompt=&wait=25` | 逐字稿事件與目前的權限詢問（long-poll）；0.4.0 起加 `meta`（模型、推理強度、上下文已用／上限／%），模型一變就喚醒 |
+| `POST /v1/claude/sessions/{id}/model` | `{model, force?}` 在電腦上的模型選單選 `models` 裡的一個（0.4.0） |
 | `GET /v1/{app}/sessions/{id}/items/{itemId}` | 被截短的工具輸出全文 |
 | `POST /v1/{app}/sessions/{id}/messages` | `{text, clientMsgId, force?}` 送出訊息 |
 | `POST /v1/{app}/sessions/{id}/permission` | `{promptId, decision: allow_once\|deny, force?}` |

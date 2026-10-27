@@ -343,6 +343,39 @@ final class DeskRemoteUITests: XCTestCase {
         XCTAssertTrue(poll(timeout: 5) { !self.element("select-text").exists }, "sheet did not close")
     }
 
+    func test21ChatShowsModelContextAndSwitchesTheModel() throws {
+        try launchWithHelper()
+        openChat("claude", claudeA)
+        let bar = element("chat-meta")
+        XCTAssertTrue(waitFor(bar, labelContains: "Opus 5.5・高・上下文 18%", timeout: 10), "meta bar says \(bar.label)")
+        snapshot("21a-chat-meta")
+        bar.tap()
+        XCTAssertTrue(waitFor(element("meta-context"), labelContains: "18%（18.3 萬 / 100 萬）", timeout: 5),
+                      "context detail missing")
+        XCTAssertTrue(waitFor(element("usage-claude"), labelContains: "每週 46%・週日上午11:00 重設", timeout: 10),
+                      "weekly limit missing: \(element("usage-claude").label)")
+        snapshot("21b-model-sheet")
+        let sonnet = element("model-Sonnet 5.5")
+        XCTAssertTrue(reveal(sonnet), "model choices missing")
+        sonnet.tap()
+        XCTAssertTrue(waitFor(element("model-busy"), labelContains: "已切換為 Sonnet 5.5", timeout: 20),
+                      "switch did not finish: \(element("model-busy").label)")
+        XCTAssertTrue(waitFor(element("meta-model"), labelContains: "Sonnet 5.5", timeout: 30), "sheet still shows the old model")
+        snapshot("21-model-switched")
+        element("meta-done").tap()
+        XCTAssertTrue(waitFor(bar, labelContains: "Sonnet 5.5", timeout: 10), "meta bar says \(bar.label)")
+    }
+
+    func test22PCShowsPlanLimits() throws {
+        try launchWithHelper()
+        openPC()
+        let claude = element("usage-claude"), codex = element("usage-codex")
+        XCTAssertTrue(reveal(codex), "Codex limits missing")
+        XCTAssertTrue(waitFor(codex, labelContains: "每週 5%", timeout: 5), "Codex says \(codex.label)")
+        XCTAssertTrue(claude.exists && claude.label.contains("Claude"), "Claude limits missing: \(claude.label)")
+        snapshot("22-pc-usage")
+    }
+
     // MARK: - Helpers
 
     private struct Helper {

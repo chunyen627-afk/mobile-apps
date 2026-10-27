@@ -1,5 +1,5 @@
 {
-  "_comment": "Names of the desktop apps' controls as UI Automation reports them (Traditional Chinese UI, Claude 3.6556, Codex 26.1016). Change these, not the code, when an app update renames a control. Claude 3.6556 shows allow_once as its own button; more_allow is the fallback for builds that keep it in the dropdown.",
+  "_comment": "Names of the desktop apps' controls as UI Automation reports them (Traditional Chinese UI, Claude 3.6556, Codex 26.1016). Change these, not the code, when an app update renames a control. Claude 3.6556 shows allow_once as its own button; more_allow is the fallback for builds that keep it in the dropdown. The Claude composer's model button reads \"模型：Opus 5.5 高\" and its menu lists the models as radio buttons (models: the ones the phone may pick; read 10/27); its usage button reads \"使用量：每週 · 所有模型：46% 週日上午11:00 重設\".",
   "claude": {
     "edit": "提示詞",
     "deny": "拒絕",
@@ -8,7 +8,10 @@
     "new": "新增",
     "submit": "提交",
     "next": "下一步",
-    "other": "其他"
+    "other": "其他",
+    "model_prefix": "模型：",
+    "usage_prefix": "使用量：",
+    "models": ["Opus 5.5", "Sonnet 5.5", "Haiku 5.5", "Fable 5.1"]
   },
   "codex": {
     "edit": "與 Codex 協作",

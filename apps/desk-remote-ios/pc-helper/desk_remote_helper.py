@@ -36,7 +36,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.3.0'
+VERSION = '0.4.0'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -89,6 +89,69 @@ def folder_name(cwd):
 
 def is_noise(text):
     return text.lstrip().startswith(NOISE_PREFIXES)
+
+
+EFFORT_LABELS = {'low': '低', 'medium': '中', 'high': '高', 'xhigh': '超高', 'max': '最高'}
+# Context window sizes the desktop app itself reported (Claude 10/27: Opus 5.5 has 1M). Models
+# not listed show tokens used without a percentage rather than a guessed size; more can be
+# added under "claude": {"context_windows": {"<model id prefix>": size}} in config.json.
+CONTEXT_WINDOWS = {'claude-opus-5': 1_000_000}
+
+
+def model_label(model_id):
+    """The name the desktop apps show: 'claude-opus-5-5' -> 'Opus 5.5', 'gpt-6.1-sol' ->
+    'GPT-6.1 Sol'. Other shapes are returned as they are."""
+    if not model_id:
+        return None
+    text = re.sub(r'\[[^\]]*\]$', '', str(model_id))
+    match = re.fullmatch(r'claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?', text)
+    if match:
+        return f'{match.group(1).capitalize()} {match.group(2)}' + (f'.{match.group(3)}' if match.group(3) else '')
+    match = re.fullmatch(r'gpt-([\d.]+)(?:-([a-z]+))?', text)
+    if match:
+        return f'GPT-{match.group(1)}' + (f' {match.group(2).capitalize()}' if match.group(2) else '')
+    return text
+
+
+def context_info(used, window):
+    """{used, window, percent} for the phone; window and percent stay None when unknown."""
+    if not isinstance(used, int) or used <= 0:
+        return None
+    if not isinstance(window, int) or window <= 0:
+        return {'used': used, 'window': None, 'percent': None}
+    return {'used': used, 'window': window, 'percent': min(100, round(100 * used / window))}
+
+
+def window_label(minutes):
+    if minutes == 300:
+        return '5 小時'
+    if minutes == 10080:
+        return '每週'
+    if isinstance(minutes, int) and minutes > 0:
+        return f'{minutes // 1440} 天' if minutes % 1440 == 0 else f'{round(minutes / 60)} 小時'
+    return '用量'
+
+
+def ui_usage(name, prefix):
+    """The Claude composer's usage button, e.g. '使用量：每週 · 所有模型：46% 週日上午11:00 重設'
+    -> {label, percent, resetsText}; None when it does not read that way."""
+    if not name or not prefix or not name.startswith(prefix):
+        return None
+    match = re.fullmatch(r'(.+?)[：:]\s*(\d{1,3})%\s*(.*)', name[len(prefix):].strip())
+    if not match:
+        return None
+    return {'label': match.group(1).strip(), 'percent': int(match.group(2)), 'resetsText': match.group(3).strip() or None}
+
+
+def ui_model(name, prefix):
+    """The Claude composer's model button, e.g. '模型：Opus 5.5 高' -> ('Opus 5.5', '高')."""
+    if not name or not prefix or not name.startswith(prefix):
+        return None, None
+    rest = name[len(prefix):].strip()
+    head, _, last = rest.rpartition(' ')
+    if head and last in EFFORT_LABELS.values():
+        return head, last
+    return rest or None, None
 
 
 def flatten(content):
@@ -178,6 +241,8 @@ class ClaudeParser:
         self.queued = []  # messages Claude accepted but holds, e.g. while a question is pending
         self.question = None
         self.suggestions = None
+        self.model = None
+        self.context = None  # tokens the last reply was given: its input plus cache reads and writes
 
     def feed(self, obj):
         kind = obj.get('type')
@@ -220,6 +285,14 @@ class ClaudeParser:
                         out.append({'kind': 'tool_result', 'text': flatten(block.get('content')), 'ts': ts,
                                     'tool': tool, 'isError': bool(block.get('is_error'))})
             return out
+        usage = message.get('usage')
+        if isinstance(usage, dict):
+            parts = [usage.get(k) for k in ('input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens')]
+            total = sum(p for p in parts if isinstance(p, int))
+            if total > 0:
+                self.context = total
+        if isinstance(message.get('model'), str) and message['model'].startswith('claude-'):
+            self.model = message['model']  # not '<synthetic>' (local notices)
         for block in content or []:
             if not isinstance(block, dict):
                 continue
@@ -252,13 +325,30 @@ class CodexParser:
         self.modern = False
         self.calls = {}
         self.status = 'idle'
+        self.model = self.effort = None
+        self.context = self.window = None
+        self.rate_limits = self.rate_ts = None
 
     def feed(self, obj):
         kind = obj.get('type')
         payload = obj.get('payload') or {}
         ts = iso(obj.get('timestamp'))
         ptype = payload.get('type')
+        if kind == 'turn_context':
+            self.model = payload.get('model') or self.model
+            self.effort = payload.get('effort') or self.effort
+            return []
         if kind == 'event_msg':
+            if ptype == 'token_count':
+                info = payload.get('info') or {}
+                last = info.get('last_token_usage') or {}
+                if isinstance(last.get('input_tokens'), int):
+                    self.context = last['input_tokens']  # includes the cached part
+                if isinstance(info.get('model_context_window'), int):
+                    self.window = info['model_context_window']
+                if isinstance(payload.get('rate_limits'), dict):
+                    self.rate_limits, self.rate_ts = payload['rate_limits'], ts
+                return []
             if ptype == 'task_started':
                 self.status = 'working'
                 return []
@@ -460,9 +550,10 @@ class ClaudeSource:
     id_pattern = CLAUDE_ID
     parser = ClaudeParser
 
-    def __init__(self, data_root, projects_dir):
+    def __init__(self, data_root, projects_dir, context_windows=None):
         self.data_root = Path(data_root)
         self.projects_dir = Path(projects_dir)
+        self.context_windows = dict(CONTEXT_WINDOWS, **(context_windows or {}))
         self.cache = {}       # file path -> (mtime, parsed metadata)
         self.paths = {}       # cliSessionId -> transcript path
         self.warning = None
@@ -529,6 +620,46 @@ class ClaudeSource:
         title = (data.get('title') or '').strip()
         return {'id': session_id, 'title': title, 'link': f'claude://claude.ai/epitaxy/{session_id}',
                 'doc': f'{title} - Claude Code'}
+
+    def context_window(self, model_id):
+        if not model_id:
+            return None
+        if '[1m]' in model_id:
+            return 1_000_000
+        hits = [prefix for prefix in self.context_windows if model_id.startswith(prefix)]
+        return self.context_windows[max(hits, key=len)] if hits else None
+
+    def meta(self, session_id, parser):
+        """Model, effort and context use of one conversation. The conversation file holds the
+        model chosen now (it changes when the model is switched); the transcript the last one used."""
+        folder = self.sessions_dir()
+        data = self.metadata(os.path.join(folder, f'{session_id}.json')) if folder and CLAUDE_ID.match(session_id) else None
+        model_id = (data or {}).get('model') or parser.model
+        effort = (data or {}).get('effort')
+        return {'model': model_label(model_id), 'modelId': model_id, 'effort': EFFORT_LABELS.get(effort, effort),
+                'context': context_info(parser.context, self.context_window(model_id))}
+
+    def usage(self):
+        """Plan limits the desktop app last read, from its plan-usage-history.json: the newest
+        sample of the signed-in organisation (the folder name under the account). `fh` is the
+        5-hour window and `sd` the weekly one, in percent; reset times are not in the file."""
+        folder = self.sessions_dir()
+        if not folder:
+            return None
+        org = Path(folder).name
+        try:
+            data = json.loads((Path(folder).parents[2] / 'plan-usage-history.json').read_text(encoding='utf-8'))
+        except (OSError, ValueError, UnicodeDecodeError):
+            return None
+        samples = [s for s in (data.get('samples') or []) if isinstance(s, dict) and s.get('org') == org
+                   and isinstance(s.get('u'), dict) and isinstance(s.get('t'), (int, float))]
+        if not samples:
+            return None
+        latest = max(samples, key=lambda s: s['t'])
+        windows = [{'label': label, 'percent': latest['u'][key], 'resetsAt': None, 'resetsText': None}
+                   for key, label in (('fh', '5 小時'), ('sd', '每週'))
+                   if isinstance(latest['u'].get(key), (int, float))]
+        return {'windows': windows, 'sampledAt': iso(latest['t'])} if windows else None
 
     def list_sessions(self, limit, now=None):
         now = now or time.time()
@@ -647,6 +778,32 @@ class CodexSource:
                         'doc': row['title']}
         return None
 
+    @staticmethod
+    def meta(thread_id, parser):
+        return {'model': model_label(parser.model), 'modelId': parser.model,
+                'effort': EFFORT_LABELS.get(parser.effort, parser.effort),
+                'context': context_info(parser.context, parser.window)}
+
+    def usage(self):
+        """Plan limits from the newest `token_count` event that carries them, in the most recent
+        threads' rollout files (each reply's event repeats the account's limits)."""
+        best = None
+        for row in self.list_sessions(5):
+            path = self.transcript_path(row['id'])
+            found = latest_rate_limits(path) if path else None
+            if found and (best is None or found[0] > best[0]):
+                best = found
+        if not best:
+            return None
+        ts, limits = best
+        windows = []
+        for key in ('primary', 'secondary'):
+            item = limits.get(key)
+            if isinstance(item, dict) and isinstance(item.get('used_percent'), (int, float)):
+                windows.append({'label': window_label(item.get('window_minutes')), 'percent': round(item['used_percent']),
+                                'resetsAt': iso(item.get('resets_at')), 'resetsText': None})
+        return {'windows': windows, 'sampledAt': ts} if windows else None
+
     def list_sessions(self, limit, now=None):
         now = now or time.time()
         self.warning = None
@@ -667,6 +824,28 @@ class CodexSource:
                         'folder': folder_name(row.get('cwd')), 'updatedAt': iso(row['ms']), 'status': status,
                         'permission': None, 'hasTranscript': path is not None})
         return out
+
+
+def latest_rate_limits(path, tail=512 * 1024):
+    """(timestamp, rate_limits) of the last token_count event near the end of a rollout file."""
+    try:
+        size = os.path.getsize(path)
+        with open(path, 'rb') as handle:
+            handle.seek(max(0, size - tail))
+            data = handle.read()
+    except OSError:
+        return None
+    for raw in reversed(data.split(b'\n')):
+        if b'"rate_limits"' not in raw:
+            continue
+        try:
+            obj = json.loads(raw.decode('utf-8'))
+        except (ValueError, UnicodeDecodeError):
+            continue
+        payload = (obj.get('payload') or {}) if isinstance(obj, dict) else {}
+        if isinstance(payload, dict) and payload.get('type') == 'token_count' and isinstance(payload.get('rate_limits'), dict):
+            return iso(obj.get('timestamp')), payload['rate_limits']
+    return None
 
 
 def _mtime(path):
@@ -881,6 +1060,9 @@ class Hub:
         self.info_cache = {}
         self.capabilities = ['read']      # plus send, permission, new and open once windows can be driven
         self.elevate = None               # ElevateRelay once the elevated companion is installed
+        self.ui = lambda app: {}          # what the watcher last read on each app's screen
+        self.strings = {}                 # ui_strings.json, once windows can be driven
+        self.usage_cache = (0.0, None)
         self.lock = threading.Lock()
 
     def state(self):
@@ -896,10 +1078,48 @@ class Hub:
         if self.elevate is not None:
             with self.elevate.lock:
                 elevate = {'available': self.elevate.available, 'pending': len(self.elevate.pending)}
+        models = {app: list(self.strings[app]['models']) for app in APPS
+                  if 'model' in self.capabilities and (self.strings.get(app) or {}).get('models')}
         return {'ok': True, 'pc': {'name': self.pc_name, 'helperVersion': VERSION},
                 'capabilities': self.capabilities + (['elevate'] if self.elevate is not None else []),
                 'apps': apps, 'presence': {'idleSeconds': presence.get('idleSeconds'), 'locked': presence.get('locked')},
-                'warnings': warnings, 'elevate': elevate}
+                'warnings': warnings, 'elevate': elevate, 'usage': self.usage(), 'models': models}
+
+    def usage(self):
+        """Each app's plan limits (percent used per window), read at most every 30 seconds.
+        Claude's weekly reset time comes from its composer's usage button, when the watcher has
+        read one."""
+        now = time.monotonic()
+        stamp, cached = self.usage_cache
+        if cached is not None and now - stamp < 30:
+            return cached
+        out = {}
+        for app, source in self.sources.items():
+            try:
+                out[app] = source.usage()
+            except (OSError, ValueError, sqlite3.Error):
+                logging.exception('usage of %s failed', app)
+                out[app] = None
+        button = ui_usage(self.ui('claude').get('usage'), (self.strings.get('claude') or {}).get('usage_prefix'))
+        if button and out.get('claude'):
+            for window in out['claude']['windows']:
+                if window['label'] == '每週' and button['label'].startswith('每週'):
+                    window['resetsText'] = button['resetsText']
+        self.usage_cache = (now, out)
+        return out
+
+    def meta(self, app, session_id, transcript):
+        """Model, effort and context use; for the conversation open on Claude's screen, the model
+        button there is the freshest answer (the conversation file is written a little later)."""
+        with transcript.lock:
+            meta = self.sources[app].meta(session_id, transcript.parser)
+        if app == 'claude':
+            seen = self.ui('claude')
+            info = self.info(app, session_id)
+            label, effort = ui_model(seen.get('model'), (self.strings.get('claude') or {}).get('model_prefix'))
+            if label and info and seen.get('docs') == [info['doc']]:
+                meta['model'], meta['effort'] = label, effort or meta['effort']
+        return meta
 
     def sessions(self, app, limit):
         source = self.sources[app]
@@ -937,6 +1157,7 @@ class Hub:
         deadline = time.monotonic() + max(0, min(wait, MAX_WAIT))
         transcript.refresh()
         waiting = transcript.waiting_key()
+        meta = self.meta(app, session_id, transcript)
         while True:
             transcript.refresh()
             page = transcript.page(after, epoch)
@@ -947,8 +1168,11 @@ class Hub:
                 changed = True
             if now_waiting != waiting:
                 changed = True
+            now_meta = self.meta(app, session_id, transcript)
+            if now_meta['model'] != meta['model'] or now_meta['effort'] != meta['effort']:
+                changed = True  # a model switched from the phone shows without waiting for a reply
             if page['events'] or page['reset'] or changed or time.monotonic() >= deadline or (stop and stop()):
-                page.update({'ok': True, 'prompt': prompt})
+                page.update({'ok': True, 'prompt': prompt, 'meta': now_meta})
                 return page
             time.sleep(1)
 
@@ -1099,6 +1323,12 @@ class WindowsDriver:
                  for q, a in zip(question['questions'], answers)]
         return self.ask(app, cmd='choose', doc=doc, questions=items).get('how')
 
+    def set_model(self, app, doc, label):
+        """Picks `label` in the model menu of the open conversation; 'already' if it was chosen."""
+        if app != 'claude':
+            raise ActionError('not-supported', 'only Claude models can be switched')
+        return self.ask(app, cmd='model', doc=doc, model=label).get('how')
+
 
 def codex_package_exe():
     """ChatGPT.exe of the installed OpenAI.Codex package (its folder changes with each update)."""
@@ -1165,7 +1395,8 @@ class UiWatcher:
                       'doc': docs[0]}
         with self.lock:
             old = (self.state.get(app) or {}).get('prompt')
-            self.state[app] = {'docs': docs, 'prompt': prompt, 'window': answer.get('window')}
+            self.state[app] = {'docs': docs, 'prompt': prompt, 'window': answer.get('window'),
+                               'model': answer.get('model'), 'usage': answer.get('usage')}
         if prompt and (not old or old['promptId'] != prompt['promptId']):
             title = prompt['doc'].removesuffix(' - Claude Code')
             self.send(f'🔔 {APP_NAMES[app]} 在等你核准', f'{self.pc_name}・「{title}」：{prompt["text"][:120]}', 4, ['bell'])
@@ -1275,8 +1506,14 @@ class ActionRunner:
                 return 400, error('bad-request', '訊息是空的')
             if len(text) > self.MAX_TEXT:
                 return 400, error('bad-request', f'訊息太長（上限 {self.MAX_TEXT} 字）')
+        if kind == 'model':
+            models = (self.strings.get(app) or {}).get('models') or []
+            if app != 'claude' or not models:
+                return 400, error('not-supported', '這個 App 還不能從手機切換模型')
+            if payload.get('model') not in models:
+                return 400, error('bad-request', '沒有這個模型')
         info = None
-        if kind in ('send', 'open', 'permission', 'answer'):
+        if kind in ('send', 'open', 'permission', 'answer', 'model'):
             info = self.hub.info(app, session_id)
             if info is None:
                 return 404, error('not-found', '找不到這個對話')
@@ -1308,7 +1545,7 @@ class ActionRunner:
             action = {'id': secrets.token_hex(6), 'kind': kind, 'app': app, 'sessionId': session_id, 'info': info,
                       'text': text, 'decision': payload.get('decision'), 'promptId': payload.get('promptId'),
                       'questionId': payload.get('questionId'), 'answers': payload.get('answers'),
-                      'project': payload.get('project'), 'force': force, 'state': 'queued', 'message': '排隊中',
+                      'project': payload.get('project'), 'model': payload.get('model'), 'force': force, 'state': 'queued', 'message': '排隊中',
                       'error': None, 'verified': None, 'created': self.clock()}
             self.actions[action['id']] = action
             if isinstance(client_id, str) and len(client_id) <= 100:
@@ -1390,7 +1627,7 @@ class ActionRunner:
     def run(self, action):
         self.update(action, state='running', message='處理中')
         handler = {'send': self.do_send, 'permission': self.do_permission, 'new': self.do_new,
-                   'open': self.do_open, 'answer': self.do_answer}[action['kind']]
+                   'open': self.do_open, 'answer': self.do_answer, 'model': self.do_model}[action['kind']]
         try:
             handler(action)
         except ActionError as exc:
@@ -1410,9 +1647,11 @@ class ActionRunner:
         if not self.notify:
             return
         verb = {'send': '送出訊息', 'permission': '回覆權限', 'new': '開新對話', 'open': '打開對話',
-                'answer': '回答選項題'}[action['kind']]
+                'answer': '回答選項題', 'model': '切換模型'}[action['kind']]
         if action['kind'] == 'permission' and not failed:
             verb = '允許一次' if action['decision'] == 'allow_once' else '拒絕'
+        if action['kind'] == 'model' and not failed:
+            verb = f"切換模型為 {action['model']}"
         title = (action.get('info') or {}).get('title') or action.get('title') or ''
         head = f"{'⚠️ 手機' + verb + '失敗' if failed else '📱 手機' + verb}：{APP_NAMES[action['app']]}"
         body = f"{self.pc_name}・「{title}」" + (f"：{action['message']}" if failed else '')
@@ -1554,6 +1793,34 @@ class ActionRunner:
                 raise ActionError('still-asking', '')
             time.sleep(0.5)
 
+    def do_model(self, action):
+        """Picks the model in the conversation's own menu. The worker checks the model button
+        afterwards; the conversation file then has to show the new model too."""
+        app, info, label = action['app'], action['info'], action['model']
+        self.open_conversation(action)
+        self.recheck(action)
+        self.presence.begin_own()
+        how = self.driver.set_model(app, info['doc'], label)
+        self.presence.end_own()
+        logging.info('model %s %s by %s', app, label, how)
+        if how == 'already':
+            self.update(action, state='done', verified=True, message=f'本來就是 {label}')
+            return
+        self.update(action, message='已切換，確認中')
+        source = self.hub.sources[app]
+        deadline = self.clock() + self.verify_seconds
+        while True:
+            folder = source.sessions_dir()
+            data = source.metadata(os.path.join(folder, f"{action['sessionId']}.json")) if folder else None
+            if model_label((data or {}).get('model')) == label:
+                self.update(action, state='done', verified=True, message=f'已切換為 {label}')
+                return
+            if self.clock() >= deadline:
+                self.update(action, state='done', verified=False,
+                            message=f'畫面上已是 {label}，但電腦端紀錄 {self.verify_seconds} 秒內還沒更新')
+                return
+            time.sleep(0.5)
+
     def do_new(self, action):
         app, text, project = action['app'], action['text'], action.get('project')
         source = self.hub.sources[app]
@@ -1673,6 +1940,7 @@ FAILURE_TEXT = {
     'still-asking': '按了之後電腦上仍在詢問，可能沒有按到',
     'question-changed': '這個選項題已經回答過或換了一題',
     'toggle-failed': '選項按了沒有反應',
+    'model-failed': '模型選單沒有照預期切換，電腦上的模型沒有變',
     'not-supported': '這台電腦的小幫手還不支援這個動作',
     'not-found': '畫面上找不到需要的按鈕',
     'not-invokable': '按鈕按不下去',
@@ -1789,7 +2057,8 @@ def handler_for(hub, gate, networks, runner=None):
                 app = parts[0]
                 if len(parts) == 2:
                     return self.send_json(*runner.submit('new', app, None, body))
-                kinds = {'messages': 'send', 'permission': 'permission', 'open': 'open', 'answer': 'answer'}
+                kinds = {'messages': 'send', 'permission': 'permission', 'open': 'open', 'answer': 'answer',
+                         'model': 'model'}
                 if len(parts) == 4 and parts[3] in kinds and hub.sources[app].id_pattern.match(parts[2]):
                     return self.send_json(*runner.submit(kinds[parts[3]], app, parts[2], body))
             return self.send_json(404, error('not-found', '沒有這個路徑'))
@@ -1858,7 +2127,8 @@ def real_sources(cfg):
     claude = cfg.get('claude') or {}
     codex = cfg.get('codex') or {}
     return {'claude': ClaudeSource(claude.get('data_root') or local / 'Claude-Data',
-                                   claude.get('projects_dir') or home / '.claude' / 'projects'),
+                                   claude.get('projects_dir') or home / '.claude' / 'projects',
+                                   claude.get('context_windows')),
             'codex': CodexSource(codex.get('home') or home / '.codex')}
 
 
@@ -2032,8 +2302,38 @@ class FakeDriver:
 
     def inspect(self, app):
         _, prompt = self.pending_prompt(app)
-        return {'ok': True, 'window': True, 'docs': [self.open_doc.get(app)], 'edit': prompt is None,
-                'prompt': {'text': prompt['text'], 'buttons': ['拒絕', '允許一次']} if prompt else None}
+        answer = {'ok': True, 'window': True, 'docs': [self.open_doc.get(app)], 'edit': prompt is None,
+                  'prompt': {'text': prompt['text'], 'buttons': ['拒絕', '允許一次']} if prompt else None}
+        strings = self.hub.strings.get(app) or {}
+        if strings.get('model_prefix'):
+            data = self.session_file(app, self.open_doc.get(app))[1] or {}
+            answer['model'] = (f"{strings['model_prefix']}{model_label(data.get('model')) or 'Opus 5.5'} "
+                               f"{EFFORT_LABELS.get(data.get('effort'), '高')}")
+            answer['usage'] = f"{strings['usage_prefix']}每週 · 所有模型：46% 週日上午11:00 重設"
+        return answer
+
+    def session_file(self, app, doc):
+        """(path, data) of the Claude conversation file behind the page `doc`."""
+        session_id = self.session_for_doc(app, doc)
+        folder = self.hub.sources[app].sessions_dir() if app == 'claude' and session_id else None
+        if not folder:
+            return None, None
+        path = Path(folder) / f'{session_id}.json'
+        return path, json.loads(path.read_text(encoding='utf-8'))
+
+    def set_model(self, app, doc, label):
+        self.calls.append(('set_model', app, label))
+        if app != 'claude':
+            raise ActionError('not-supported', '')
+        if self.open_doc.get(app) != doc:
+            raise ActionError('title-mismatch', '')
+        path, data = self.session_file(app, doc)
+        if model_label(data.get('model')) == label:
+            return 'already'
+        data['model'] = 'claude-' + label.lower().replace(' ', '-').replace('.', '-')
+        with self.lock:
+            path.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8')
+        return 'fake'
 
     def docs(self, app):
         return [self.open_doc.get(app)]
@@ -2143,9 +2443,11 @@ def build_driving(hub, driver, notify, pc_name, cfg, interval, verify_seconds):
     """Watcher and action runner over `driver`, both on their own threads."""
     watcher = UiWatcher(hub, driver, notify, pc_name, interval=interval)
     hub.prompts = watcher.prompt_for
-    runner = ActionRunner(hub, driver, hub.presence, watcher, notify, pc_name, load_strings(),
+    hub.ui = watcher.current
+    hub.strings = load_strings()
+    runner = ActionRunner(hub, driver, hub.presence, watcher, notify, pc_name, hub.strings,
                           idle_seconds=int(cfg.get('idle_seconds', 60)), verify_seconds=verify_seconds)
-    hub.capabilities = ['read', 'send', 'permission', 'new', 'open', 'question']
+    hub.capabilities = ['read', 'send', 'permission', 'new', 'open', 'question', 'model']
     threading.Thread(target=watcher.run_forever, daemon=True).start()
     threading.Thread(target=runner.run_forever, daemon=True).start()
     return runner
@@ -2171,6 +2473,7 @@ def main(argv=None):
             cfg['port'] = args.fake_port
         networks = [ipaddress.ip_network(item) for item in cfg['allowed_networks']]
         hub = Hub(cfg['pc_name'], fake.sources(), FixedPresence(presence), on_events=fake.on_events)
+        hub.strings = load_strings()  # FakeDriver reads the model button's prefix before build_driving
         runner = build_driving(hub, FakeDriver(fake, hub), None, cfg['pc_name'], cfg, interval=1, verify_seconds=10)
         hub.elevate = fake.elevate_relay()
         gate = AuthGate(cfg['token'], None, cfg['pc_name'])

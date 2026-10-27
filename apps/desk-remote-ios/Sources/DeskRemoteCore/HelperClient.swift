@@ -137,6 +137,11 @@ public struct HelperClient: Sendable {
                        ActionRequest(text: text, clientMsgId: clientMsgId, force: force ? true : nil))
     }
 
+    /// Picks `model` (one of `HelperState.models(app)`) in the conversation's model menu on the PC.
+    public func setModel(_ app: DeskApp, session id: String, model: String, force: Bool = false) async throws -> ActionStatus {
+        try await post(["v1", app.rawValue, "sessions", id, "model"], ActionRequest(model: model, force: force ? true : nil))
+    }
+
     /// Brings the conversation up on the PC (to answer a question it is waiting on).
     public func openOnPC(_ app: DeskApp, session id: String, force: Bool = false) async throws -> ActionStatus {
         try await post(["v1", app.rawValue, "sessions", id, "open"], ActionRequest(force: force ? true : nil))

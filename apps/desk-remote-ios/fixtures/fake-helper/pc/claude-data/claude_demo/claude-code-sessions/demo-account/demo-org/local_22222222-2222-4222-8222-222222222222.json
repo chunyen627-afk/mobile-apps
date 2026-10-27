@@ -6,7 +6,8 @@
   "_minutesAgo": 30,
   "isArchived": false,
   "permissionMode": "default",
-  "model": "demo-model",
+  "model": "claude-sonnet-5-5",
+  "effort": "medium",
   "postTurnSummary": {
     "status_category": "needs_action",
     "needs_action": "等待權限"

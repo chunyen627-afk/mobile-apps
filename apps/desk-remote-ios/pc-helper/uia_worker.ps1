@@ -20,6 +20,7 @@ public static class DeskWin {
   [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint x, uint y, uint d, UIntPtr e);
   [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT p);
   [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr hWnd, uint flags);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
   [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X; public int Y; }
 }
 "@
@@ -211,14 +212,19 @@ function Menu-Item($w, $name) {
 # on the dropdown's centre, only when Claude's window is the top window at that point (Chromium
 # reports only unnamed groups there, so the element itself cannot be checked); then the menu
 # item is invoked.
-# One real click on the centre of $e, only when $w is the top window at that point.
+# One real click on the centre of $e, only when $w (or a popup of the same app, such as a menu)
+# is the top window at that point.
 function Click-Element($w, $e, $what) {
   $r = $e.Current.BoundingRectangle
   if ($r.IsEmpty -or $r.Width -lt 2) { Fail 'menu-failed' "$what has no position on screen" }
   $pt = New-Object DeskWin+POINT
   $pt.X = [int]($r.X + $r.Width / 2); $pt.Y = [int]($r.Y + $r.Height / 2)
   $top = [DeskWin]::GetAncestor([DeskWin]::WindowFromPoint($pt), 2)  # GA_ROOT
-  if ($top -ne [IntPtr]$w.Current.NativeWindowHandle) { Fail 'focus-failed' "another window covers $what" }
+  if ($top -ne [IntPtr]$w.Current.NativeWindowHandle) {
+    $owner = [uint32]0
+    $null = [DeskWin]::GetWindowThreadProcessId($top, [ref]$owner)
+    if ($owner -ne [uint32]$w.Current.ProcessId) { Fail 'focus-failed' "another window covers $what" }
+  }
   [DeskWin]::SetCursorPos($pt.X, $pt.Y) | Out-Null
   [DeskWin]::mouse_event(2, 0, 0, 0, [UIntPtr]::Zero); [DeskWin]::mouse_event(4, 0, 0, 0, [UIntPtr]::Zero)
 }
@@ -415,6 +421,94 @@ function Paste-Text($w, $edit, $text) {
   }
 }
 
+# The first button in $scope whose name starts with $prefix (the composer's model and usage
+# buttons); $null without a prefix or a match.
+function Prefixed-Button($scope, $prefix) {
+  if (-not $prefix) { return $null }
+  $buttons = $scope.FindAll($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Button)))
+  foreach ($b in $buttons) { if ($b.Current.Name.StartsWith($prefix)) { return $b } }
+  return $null
+}
+
+# The model button names the model, then the effort: "<prefix>Opus 5.5 <effort>".
+function Shows-Model($button, $s, $label) {
+  $rest = $button.Current.Name.Substring($s.model_prefix.Length).Trim()
+  return ($rest -eq $label -or $rest.StartsWith("$label "))
+}
+
+# Elements named $name in the app's window or in its other top-level windows (menus may open in
+# a popup window of their own).
+function Find-InApp($w, $type, $name) {
+  $hit = Find-ByName $w $type $name
+  if ($hit) { return $hit }
+  foreach ($other in $AE::RootElement.FindAll($Tree::Children, [System.Windows.Automation.Condition]::TrueCondition)) {
+    if ($other.Current.ProcessId -eq $w.Current.ProcessId -and -not (Same-Element $other $w)) {
+      $hit = Find-ByName $other $type $name
+      if ($hit) { return $hit }
+    }
+  }
+  return $null
+}
+
+function Radio-Names($w) {
+  return @($w.FindAll($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::RadioButton))) |
+    ForEach-Object { $_.Current.Name })
+}
+
+# Picks $label in the model menu of the conversation $page: one checked click opens the menu
+# (read live 10/27: models are radio buttons there), the radio is selected (Select, else one
+# checked click), and only a model button that then names $label counts.
+function Set-Model($w, $page, $s, $label) {
+  $button = Prefixed-Button $page $s.model_prefix
+  if (-not $button) { $button = Prefixed-Button $w $s.model_prefix }
+  if (-not $button) { Fail 'not-found' 'no model button on screen' }
+  if (Shows-Model $button $s $label) { return 'already' }
+  $before = [DeskWin]::GetForegroundWindow()
+  $cursor = New-Object DeskWin+POINT
+  [DeskWin]::GetCursorPos([ref]$cursor) | Out-Null
+  try {
+    Bring-Front $w
+    Click-Element $w $button 'the model button'
+    $radio = $null
+    for ($i = 0; $i -lt 12 -and -not $radio; $i++) {
+      Start-Sleep -Milliseconds 250
+      $radio = Find-InApp $w $CT::RadioButton $label
+    }
+    if (-not $radio) {
+      $seen = (Radio-Names $w) -join ' | '
+      [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+      Fail 'model-failed' ("the model is not in the menu; radio buttons: " + $seen)
+    }
+    $how = 'select'
+    $p = $null
+    if ($radio.TryGetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern, [ref]$p)) { $p.Select() }
+    else { $how = 'none' }
+    for ($i = 0; $i -lt 6; $i++) {
+      Start-Sleep -Milliseconds 250
+      $now = Prefixed-Button $w $s.model_prefix
+      if ($now -and (Shows-Model $now $s $label)) { return $how }
+    }
+    $radio = Find-InApp $w $CT::RadioButton $label
+    if ($radio) {
+      Click-Element $w $radio 'the model choice'
+      $how = 'click'
+      for ($i = 0; $i -lt 12; $i++) {
+        Start-Sleep -Milliseconds 250
+        $now = Prefixed-Button $w $s.model_prefix
+        if ($now -and (Shows-Model $now $s $label)) { return $how }
+      }
+    }
+    if (Find-InApp $w $CT::RadioButton $label) { [System.Windows.Forms.SendKeys]::SendWait('{ESC}') }
+    Fail 'model-failed' 'the model button does not show the chosen model'
+  } finally {
+    # A menu left open would swallow the next keystrokes.
+    Start-Sleep -Milliseconds 200
+    if (Find-InApp $w $CT::RadioButton $label) { [System.Windows.Forms.SendKeys]::SendWait('{ESC}') }
+    [DeskWin]::SetCursorPos($cursor.X, $cursor.Y) | Out-Null
+    if ($before -ne [IntPtr]::Zero) { [DeskWin]::SetForegroundWindow($before) | Out-Null }
+  }
+}
+
 function Run-Command($c) {
   $s = $c.strings
   switch ($c.cmd) {
@@ -424,7 +518,23 @@ function Run-Command($c) {
       if (-not $w) { return @{ ok = $true; window = $false } }
       $prompt = Get-Prompt $w $s
       $edit = Find-ByName $w $CT::Edit $s.edit
-      return @{ ok = $true; window = $true; docs = @(Get-Docs $w); edit = [bool]$edit; prompt = $prompt }
+      # The composer's model and usage buttons, in one pass over the buttons (Claude only).
+      $model = $null; $usage = $null
+      if ($s.model_prefix -or $s.usage_prefix) {
+        $buttons = $w.FindAll($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Button)))
+        foreach ($b in $buttons) {
+          $n = $b.Current.Name
+          if (-not $model -and $s.model_prefix -and $n.StartsWith($s.model_prefix)) { $model = $n }
+          if (-not $usage -and $s.usage_prefix -and $n.StartsWith($s.usage_prefix)) { $usage = $n }
+        }
+      }
+      return @{ ok = $true; window = $true; docs = @(Get-Docs $w); edit = [bool]$edit; prompt = $prompt
+        model = $model; usage = $usage }
+    }
+    'model' {
+      $w = Need-Window $c.app
+      $page = Need-Doc $w $c.doc
+      return @{ ok = $true; how = (Set-Model $w $page $s $c.model) }
     }
     'docs' {
       $w = Find-Window $c.app

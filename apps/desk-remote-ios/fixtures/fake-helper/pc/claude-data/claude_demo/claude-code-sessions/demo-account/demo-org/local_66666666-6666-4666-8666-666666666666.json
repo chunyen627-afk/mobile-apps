@@ -6,5 +6,5 @@
   "_minutesAgo": 60,
   "isArchived": false,
   "permissionMode": "auto",
-  "model": "demo-model"
+  "model": "claude-fable-5-1"
 }

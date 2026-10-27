@@ -259,6 +259,66 @@ final class ElevateTests: XCTestCase {
     }
 }
 
+final class MetaAndUsageTests: XCTestCase {
+    private func data(_ text: String) -> Data { Data(text.utf8) }
+
+    func testDecodesUsageModelsAndMetaAndToleratesOlderHelpers() throws {
+        let state = try HelperClient.decode(HelperState.self, status: 200, data: data("""
+        {"ok":true,"pc":{"name":"P","helperVersion":"0.4.0"},"capabilities":["read","model"],"apps":{},
+         "presence":{"idleSeconds":1,"locked":false},"warnings":[],"elevate":null,
+         "usage":{"claude":{"windows":[{"label":"每週","percent":46,"resetsAt":null,"resetsText":"週日上午11:00 重設"}],
+                            "sampledAt":"2026-10-27T04:49:26Z"},"codex":null},
+         "models":{"claude":["Opus 5.5","Sonnet 5.5"]}}
+        """))
+        XCTAssertEqual(state.usage(.claude)?.windows.first?.percent, 46)
+        XCTAssertNil(state.usage(.codex))
+        XCTAssertEqual(state.models(.claude), ["Opus 5.5", "Sonnet 5.5"])
+        XCTAssertEqual(state.models(.codex), [])
+        let old = try HelperClient.decode(HelperState.self, status: 200, data: data("""
+        {"ok":true,"pc":{"name":"P","helperVersion":"0.3.0"},"capabilities":["read"],"apps":{},
+         "presence":{"idleSeconds":1,"locked":false},"warnings":[]}
+        """))
+        XCTAssertNil(old.usage(.claude))
+        XCTAssertEqual(old.models(.claude), [])
+        let page = try HelperClient.decode(EventPage.self, status: 200, data: data("""
+        {"ok":true,"epoch":"e","reset":true,"events":[],"earlier":false,"cursor":0,"status":"idle","prompt":null,
+         "meta":{"model":"Opus 5.5","modelId":"claude-opus-5-5","effort":"高",
+                 "context":{"used":183203,"window":1000000,"percent":18}}}
+        """))
+        XCTAssertEqual(page.meta?.context?.percent, 18)
+    }
+
+    func testMetaAndUsageText() {
+        let full = ConversationMeta(model: "Opus 5.5", effort: "高",
+                                    context: ConversationMeta.Context(used: 183_203, window: 1_000_000, percent: 18))
+        XCTAssertEqual(DeskText.metaLine(full), "Opus 5.5・高・上下文 18%")
+        XCTAssertEqual(DeskText.context(full.context!), "上下文 18%（18.3 萬 / 100 萬）")
+        let unknown = ConversationMeta(model: "Sonnet 5.5", effort: nil,
+                                       context: ConversationMeta.Context(used: 9_800, window: nil, percent: nil))
+        XCTAssertEqual(DeskText.metaLine(unknown), "Sonnet 5.5・上下文 9,800")
+        XCTAssertEqual(DeskText.context(unknown.context!), "上下文已用 9,800 tokens")
+        XCTAssertNil(DeskText.metaLine(ConversationMeta(model: nil, effort: nil, context: nil)))
+        XCTAssertNil(DeskText.metaLine(nil))
+        let weekly = PlanUsage.Window(label: "每週", percent: 46, resetsAt: nil, resetsText: "週日上午11:00 重設")
+        XCTAssertEqual(DeskText.usageWindow(weekly), "每週 46%・週日上午11:00 重設")
+        let codex = PlanUsage.Window(label: "每週", percent: 5, resetsAt: "2026-11-02T10:49:20Z", resetsText: nil)
+        XCTAssertEqual(DeskText.usageWindow(codex, timeZone: TimeZone(identifier: "Asia/Taipei")!), "每週 5%・11/2 18:49 重設")
+    }
+
+    func testLogKeepsMetaWhenAPageHasNone() {
+        var log = TranscriptLog()
+        let meta = ConversationMeta(model: "Opus 5.5", effort: "高", context: nil)
+        XCTAssertTrue(log.apply(EventPage(epoch: "e", reset: true, events: [], earlier: false, cursor: 0, status: "idle",
+                                          prompt: nil, meta: meta)))
+        XCTAssertFalse(log.apply(EventPage(epoch: "e", reset: false, events: [], earlier: false, cursor: 0, status: "idle",
+                                           prompt: nil)))
+        XCTAssertEqual(log.meta, meta)
+        let switched = ConversationMeta(model: "Sonnet 5.5", effort: "高", context: nil)
+        XCTAssertTrue(log.apply(EventPage(epoch: "e", reset: false, events: [], earlier: false, cursor: 0, status: "idle",
+                                          prompt: nil, meta: switched)), "a model switch alone must redraw")
+    }
+}
+
 final class TextTests: XCTestCase {
     func testPresenceText() {
         typealias P = HelperState.Presence

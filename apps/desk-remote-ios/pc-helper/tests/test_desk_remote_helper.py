@@ -282,10 +282,12 @@ def drive(fake, presence=None, driver_class=None, notify=None):
     """Hub, fake driver, watcher and runner without threads; tests run actions themselves."""
     sources = fake.sources()
     hub = h.Hub('示範電腦', sources, h.FixedPresence(presence or fake.cfg['presence']), on_events=fake.on_events)
+    hub.strings = h.load_strings()
     driver = (driver_class or h.FakeDriver)(fake, hub, reply_after=0.2)
     watcher = h.UiWatcher(hub, driver, notify, '示範電腦')
     hub.prompts = watcher.prompt_for
-    runner = h.ActionRunner(hub, driver, hub.presence, watcher, notify, '示範電腦', h.load_strings(),
+    hub.ui = watcher.current
+    runner = h.ActionRunner(hub, driver, hub.presence, watcher, notify, '示範電腦', hub.strings,
                             verify_seconds=3, doc_wait=1, settle_seconds=0)
     watcher.tick()
     return hub, driver, watcher, runner
@@ -643,6 +645,90 @@ class HttpTests(FakeEnvironment):
     def test_requests_from_outside_allowed_networks_are_forbidden(self):
         self.start_server([ipaddress.ip_network('10.0.0.0/8')])
         self.assertEqual(self.get('/health', token=None)[0], 403)
+
+
+class MetaTests(FakeEnvironment):
+    """Model, effort, context use and plan limits (read from files the desktop apps write)."""
+
+    def test_labels_read_like_the_desktop_apps(self):
+        self.assertEqual(h.model_label('claude-opus-5-5'), 'Opus 5.5')
+        self.assertEqual(h.model_label('claude-fable-5-1[1m]'), 'Fable 5.1')
+        self.assertEqual(h.model_label('claude-haiku-4-5-20251001'), 'Haiku 4.5')
+        self.assertEqual(h.model_label('gpt-6.1-sol'), 'GPT-6.1 Sol')
+        self.assertEqual(h.model_label('something-else'), 'something-else')
+        self.assertIsNone(h.model_label(None))
+        self.assertEqual(h.ui_model('模型：Opus 5.5 高', '模型：'), ('Opus 5.5', '高'))
+        self.assertEqual(h.ui_model('模型：Sonnet 5.5', '模型：'), ('Sonnet 5.5', None))
+        self.assertEqual(h.ui_model('別的按鈕', '模型：'), (None, None))
+        self.assertEqual(h.ui_usage('使用量：每週 · 所有模型：46% 週日上午11:00 重設', '使用量：'),
+                         {'label': '每週 · 所有模型', 'percent': 46, 'resetsText': '週日上午11:00 重設'})
+        self.assertIsNone(h.ui_usage('使用量：讀不懂', '使用量：'))
+        self.assertEqual(h.context_info(250, 1000), {'used': 250, 'window': 1000, 'percent': 25})
+        self.assertEqual(h.context_info(250, None), {'used': 250, 'window': None, 'percent': None})
+        self.assertIsNone(h.context_info(None, 1000))
+        self.assertEqual([h.window_label(m) for m in (300, 10080, 2880, 120)], ['5 小時', '每週', '2 天', '2 小時'])
+
+    def meta(self, app, session_id):
+        transcript = h.Transcript(self.sources[app].transcript_path(session_id), self.sources[app].parser)
+        transcript.refresh()
+        return self.sources[app].meta(session_id, transcript.parser)
+
+    def test_claude_meta_from_conversation_file_and_last_reply(self):
+        self.assertEqual(self.meta('claude', A), {
+            'model': 'Opus 5.5', 'modelId': 'claude-opus-5-5', 'effort': '高',
+            'context': {'used': 183203, 'window': 1_000_000, 'percent': 18}})
+        # No confirmed window for this model, and no reply with usage: tokens only, no guess.
+        meta = self.meta('claude', B)
+        self.assertEqual((meta['model'], meta['effort'], meta['context']), ('Sonnet 5.5', '中', None))
+        self.assertIsNone(self.sources['claude'].context_window('claude-sonnet-5-5'))
+        self.assertEqual(h.ClaudeSource('x', 'y', {'claude-sonnet-5': 200000}).context_window('claude-sonnet-5-5'), 200000)
+
+    def test_codex_meta_and_limits_from_the_rollout(self):
+        self.assertEqual(self.meta('codex', X), {
+            'model': 'GPT-6.1 Sol', 'modelId': 'gpt-6.1-sol', 'effort': '高',
+            'context': {'used': 64600, 'window': 258400, 'percent': 25}})
+        usage = self.sources['codex'].usage()
+        self.assertEqual(usage['windows'], [{'label': '每週', 'percent': 5, 'resetsAt': h.iso(1793616560), 'resetsText': None}])
+        self.assertEqual(usage['sampledAt'], '2026-10-26T10:01:05Z')
+
+    def test_claude_limits_are_the_signed_in_organisations_newest(self):
+        usage = self.sources['claude'].usage()
+        self.assertEqual([(w['label'], w['percent']) for w in usage['windows']], [('5 小時', 3), ('每週', 46)])
+        self.assertEqual(usage['sampledAt'], h.iso(1793060000000))
+
+    def test_state_and_events_carry_usage_meta_and_the_weekly_reset_from_the_screen(self):
+        hub, _, _, _ = drive(self.fake)
+        hub.capabilities = hub.capabilities + ['model']
+        state = hub.state()
+        weekly = state['usage']['claude']['windows'][1]
+        self.assertEqual(weekly['resetsText'], '週日上午11:00 重設')
+        self.assertEqual(state['usage']['codex']['windows'][0]['percent'], 5)
+        self.assertEqual(state['models']['claude'], ['Opus 5.5', 'Sonnet 5.5', 'Haiku 5.5', 'Fable 5.1'])
+        self.assertNotIn('codex', state['models'])
+        page = hub.events('claude', A, 0, '', 0)
+        self.assertEqual((page['meta']['model'], page['meta']['context']['percent']), ('Opus 5.5', 18))
+
+    def test_switching_the_model_picks_it_on_screen_and_checks_the_conversation_file(self):
+        hub, driver, watcher, runner = drive(self.fake)
+        self.assertEqual(runner.submit('model', 'claude', A, {'model': 'GPT-9'})[0], 400)
+        self.assertEqual(runner.submit('model', 'codex', X, {'model': 'Opus 5.5'})[1]['error'], 'not-supported')
+        code, body = runner.submit('model', 'claude', A, {'model': 'Sonnet 5.5'})
+        self.assertEqual(code, 202, body)
+        run_all(runner)
+        status = runner.status(body['id'])
+        self.assertEqual((status['state'], status['verified'], status['message']), ('done', True, '已切換為 Sonnet 5.5'))
+        self.assertEqual([c[0] for c in driver.calls], ['open', 'set_model'])
+        watcher.tick()
+        self.assertEqual(hub.events('claude', A, 0, '', 0)['meta']['model'], 'Sonnet 5.5')
+        code, body = runner.submit('model', 'claude', A, {'model': 'Sonnet 5.5'})
+        run_all(runner)
+        self.assertEqual(runner.status(body['id'])['message'], '本來就是 Sonnet 5.5')
+
+    def test_a_model_switch_waits_for_an_idle_pc(self):
+        presence = dict(self.fake.cfg['presence'], idleSeconds=5)
+        _, _, _, runner = drive(self.fake, presence)
+        self.assertEqual(runner.submit('model', 'claude', A, {'model': 'Haiku 5.5'})[0], 409)
+        self.assertEqual(runner.submit('model', 'claude', A, {'model': 'Haiku 5.5', 'force': True})[0], 202)
 
 
 class StringsTests(unittest.TestCase):

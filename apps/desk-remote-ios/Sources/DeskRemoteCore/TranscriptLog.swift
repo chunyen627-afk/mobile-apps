@@ -27,6 +27,8 @@ public struct TranscriptLog: Equatable, Sendable {
     public private(set) var prompt: PermissionPrompt?
     public private(set) var question: OptionQuestion?
     public private(set) var suggestions: ReplySuggestions?
+    /// Model, effort and context use; kept when a page (from an older helper) has none.
+    public private(set) var meta: ConversationMeta?
     public private(set) var loaded = false
     static let maxEvents = 1000
 
@@ -37,7 +39,7 @@ public struct TranscriptLog: Equatable, Sendable {
     /// visible changed.
     @discardableResult
     public mutating func apply(_ page: EventPage) -> Bool {
-        let waitingBefore = (question, suggestions)
+        let waitingBefore = (question, suggestions, meta)
         let before = (events.last?.seq, events.count, prompt, status, earlier, loaded)
         if page.reset || page.epoch != epoch {
             events = page.events
@@ -56,9 +58,10 @@ public struct TranscriptLog: Equatable, Sendable {
         prompt = page.prompt
         question = page.question
         suggestions = page.suggestions
+        if let pageMeta = page.meta { meta = pageMeta }
         loaded = true
         let after = (events.last?.seq, events.count, prompt, status, earlier, loaded)
-        return before != after || waitingBefore != (question, suggestions)
+        return before != after || waitingBefore != (question, suggestions, meta)
     }
 
     /// Whether a user message starting like `text` arrived after event `seq`: a message sent

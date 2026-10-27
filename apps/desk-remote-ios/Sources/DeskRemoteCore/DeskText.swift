@@ -74,6 +74,46 @@ public enum DeskText {
         }
     }
 
+    /// "9,800", "18.3 萬", "100 萬": token counts the way the phone shows them.
+    public static func tokens(_ count: Int) -> String {
+        if count < 10_000 { return count.formatted(.number.locale(Locale(identifier: "en_US"))) }
+        let tenThousands = Double(count) / 10_000
+        return String(format: tenThousands < 100 ? "%.1f 萬" : "%.0f 萬", tenThousands)
+    }
+
+    /// "上下文 18%（18.3 萬 / 100 萬）", or "上下文已用 12.3 萬 tokens" when the window is unknown.
+    public static func context(_ context: ConversationMeta.Context) -> String {
+        guard let window = context.window, let percent = context.percent else {
+            return "上下文已用 \(tokens(context.used)) tokens"
+        }
+        return "上下文 \(percent)%（\(tokens(context.used)) / \(tokens(window))）"
+    }
+
+    /// The chat's subtitle: "Opus 5.5・高・上下文 18%"; nil when the helper sent nothing.
+    public static func metaLine(_ meta: ConversationMeta?) -> String? {
+        guard let meta else { return nil }
+        var parts = [meta.model, meta.effort].compactMap { $0 }
+        if let context = meta.context {
+            parts.append(context.percent.map { "上下文 \($0)%" } ?? "上下文 \(tokens(context.used))")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: "・")
+    }
+
+    /// "每週 46%・週日上午11:00 重設" or "每週 5%・11/2 18:49 重設".
+    public static func usageWindow(_ window: PlanUsage.Window, timeZone: TimeZone = .current) -> String {
+        var text = "\(window.label) \(window.percent)%"
+        if let reset = window.resetsText {
+            text += "・\(reset)"
+        } else if let iso = window.resetsAt, let date = parse(iso) {
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "zh_Hant_TW")
+            formatter.timeZone = timeZone
+            formatter.dateFormat = "M/d HH:mm"
+            text += "・\(formatter.string(from: date)) 重設"
+        }
+        return text
+    }
+
     /// "剛剛", "5 分鐘前", "3 小時前", "2 天前"; nil for a missing or unreadable time.
     public static func relative(_ iso: String?, now: Date = Date()) -> String? {
         guard let iso, let date = parse(iso) else { return nil }
