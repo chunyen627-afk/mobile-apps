@@ -438,7 +438,9 @@ final class DeskRemoteUITests: XCTestCase {
         XCTAssertTrue(reveal(element("mode-busy")), "no mode progress shown")
         XCTAssertTrue(waitFor(element("mode-busy"), labelContains: "權限模式已切換為 計畫", timeout: 20),
                       "mode switch did not finish: \(said(element("mode-busy")))")
-        XCTAssertTrue(waitFor(element("meta-permission"), labelContains: "計畫", timeout: 30), "sheet still shows the old mode")
+        // The mode row is at the top of the sheet, scrolled away while picking: scroll back to it.
+        XCTAssertTrue(poll(timeout: 40) { self.reveal(self.element("meta-permission")) && self.element("meta-permission").label.contains("計畫") },
+                      "sheet still shows the old mode: \(said(element("meta-permission")))")
         snapshot("26-effort-and-mode")
     }
 
