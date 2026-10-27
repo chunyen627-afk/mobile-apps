@@ -361,20 +361,20 @@ struct DeskBubble: View {
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(Array(DeskText.segments(event.text).enumerated()), id: \.offset) { _, segment in
                     if segment.code {
-                        Text(segment.text)
-                            .font(.system(.footnote, design: .monospaced))
+                        DeskSelectableText(segment.text, style: .footnote, monospaced: true)
+                            .accessibilityLabel(segment.text)
                             .padding(8)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 6))
                     } else {
-                        Text(Self.markdown(segment.text))
+                        DeskSelectableText(Self.markdown(segment.text))
+                            .accessibilityLabel(segment.text)
                     }
                 }
                 if event.truncated == true {
                     Text("（內容太長，只顯示前段）").font(.caption).foregroundStyle(.secondary)
                 }
             }
-            .textSelection(.enabled)
             .padding(10)
             .background(mine ? Color.accentColor.opacity(0.18) : Color(.secondarySystemBackground),
                         in: RoundedRectangle(cornerRadius: 12))
@@ -422,16 +422,15 @@ struct DeskToolRow: View {
             .accessibilityIdentifier("tool-\(tool)")
             if expanded {
                 if let call, !call.text.isEmpty {
-                    Text(call.text)
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
+                    DeskSelectableText(call.text, style: .caption1, monospaced: true)
+                        .accessibilityLabel(call.text)
                 }
                 if let result {
+                    let output = fullText ?? (result.text.isEmpty ? "（沒有輸出）" : result.text)
                     // Long output scrolls inside a box instead of filling the whole chat.
                     ScrollView {
-                        Text(fullText ?? (result.text.isEmpty ? "（沒有輸出）" : result.text))
-                            .font(.system(.caption2, design: .monospaced))
-                            .textSelection(.enabled)
+                        DeskSelectableText(output, style: .caption2, monospaced: true)
+                            .accessibilityLabel(output)
                             .padding(6)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .accessibilityIdentifier("tool-output")
@@ -463,7 +462,8 @@ struct DeskPromptCard: View {
             Label("\(app.displayName) 正在詢問權限", systemImage: "hand.raised.fill")
                 .font(.subheadline.bold())
                 .foregroundStyle(.orange)
-            Text(prompt.text).font(.callout).textSelection(.enabled)
+            DeskSelectableText(prompt.text, style: .callout)
+                .accessibilityLabel(prompt.text)
                 .accessibilityIdentifier("prompt-text")
             if let busy {
                 Text(busy).font(.caption).foregroundStyle(.secondary)

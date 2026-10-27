@@ -108,9 +108,8 @@ struct DeskElevateCard: View {
                 .font(.subheadline.bold())
                 .foregroundStyle(.red)
             ScrollView {
-                Text(request.content)
-                    .font(.system(.caption, design: .monospaced))
-                    .textSelection(.enabled)
+                DeskSelectableText(request.content, style: .caption1, monospaced: true)
+                    .accessibilityLabel(request.content)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(6)
                     .accessibilityIdentifier("elevate-content")
@@ -176,9 +175,8 @@ struct DeskElevateResultRow: View {
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier("elevate-result")
             if expanded {
-                Text(result.output.isEmpty ? "（沒有輸出）" : result.output)
-                    .font(.system(.caption2, design: .monospaced))
-                    .textSelection(.enabled)
+                DeskSelectableText(result.output.isEmpty ? "（沒有輸出）" : result.output, style: .caption2, monospaced: true)
+                    .accessibilityLabel(result.output.isEmpty ? "（沒有輸出）" : result.output)
                     .padding(6)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 6))

@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 # Includes 2 tests of the real PowerShell companion, which are skipped (and counted) on macOS.
 EXPECTED_HELPER_TESTS="${EXPECTED_HELPER_TESTS:-67}"
 EXPECTED_TESTS="${EXPECTED_TESTS:-23}"
-EXPECTED_UI_TESTS="${EXPECTED_UI_TESTS:-19}"
+EXPECTED_UI_TESTS="${EXPECTED_UI_TESTS:-20}"
 FIXTURES=fixtures/fake-helper
 HELPER_PORT=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["port"])' "$FIXTURES/fake-config.json")
 # A second fake helper that reports someone at the keyboard (5 s idle), for "send anyway".

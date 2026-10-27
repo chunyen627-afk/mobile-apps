@@ -317,6 +317,21 @@ final class DeskRemoteUITests: XCTestCase {
         snapshot("19-elevate-denied")
     }
 
+    /// A long press selects a word inside a reply and offers the text-view edit menu ("Select All"),
+    /// not just the whole-text copy that SwiftUI's text selection gives on iOS (reported 10/27).
+    func test20ReplyTextSelectsPart() throws {
+        try launchWithHelper()
+        openChat("claude", claudeA)
+        let reply = text("整理好了，安裝段落改成三步")
+        XCTAssertTrue(reply.waitForExistence(timeout: 10), "reply missing")
+        reply.press(forDuration: 1.2)
+        let selectAll = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label IN %@", ["Select All", "全選", "選取全部"])).firstMatch
+        XCTAssertTrue(selectAll.waitForExistence(timeout: 5),
+                      "no partial-selection menu; menu: " + app.menuItems.allElementsBoundByIndex.prefix(8).map(\.label).joined(separator: " | "))
+        snapshot("20-select-part")
+    }
+
     // MARK: - Helpers
 
     private struct Helper {
