@@ -11,7 +11,7 @@
 | 項目 | 說明 |
 | --- | --- |
 | Windows 10／11，一般使用者帳號 | 小幫手以這個帳號登入時啟動 |
-| Python 3.11 以上 | 只用標準函式庫；要有 `python.exe` 與 `pythonw.exe` |
+| Python 3.11 以上 | 只用標準函式庫；要有 `python.exe` 與 `pythonw.exe`。用獨立安裝的直譯器（python.org 版或 uv 管理的 `cpython-3.11.*`），不要用 Hermes 等其他工具的 venv，也不要往裡面裝東西 |
 | Claude 桌面版、Codex 桌面版 | 都登入好；Codex 的權限慣例是「代我核准」，Claude 是「自動」 |
 | ZeroTier | 加入同一個私人網路，記下這台電腦的 ZeroTier 位址與網段 |
 | Google 遠端桌面 | 裝成服務（重開機停在登入畫面時也連得到） |
@@ -34,7 +34,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -BindIp <ZeroTie
 ```
 
 - 產生 `%LOCALAPPDATA%\DeskRemote\config.json`（只有本人可讀），裡面的 `token` 就是手機要填的連線密碼。
-- 註冊登入時啟動的排程工作 `DeskRemoteHelper` 並立刻啟動。
+- 註冊登入時啟動的排程工作 `DeskRemoteHelper` 並立刻啟動。啟動後約 30 秒才開始監聽（先讀完對話清單），之後 `helper.log` 會出現 `listening on the configured address`。
+- `-Python` 要指向 `pythonw.exe`（不帶時找 PATH 上的第一個；PATH 上是別的工具的 venv 時一定要指定）。
+- 也可以從另一台電腦用 SSH 以那個使用者身分安裝（2026-10-27 家用電腦就是這樣裝的）：用 `-EncodedCommand` 傳指令，免得中文被編碼弄壞；那個使用者要在主控台登入中，小幫手才會跑在桌面工作階段。
+
+**防火牆**：小幫手跑的是 `pythonw.exe`，跟 `python.exe` 是不同的程式，既有的 Python 允許規則不算數。在系統管理員 PowerShell（或有管理員權限的 SSH）加一條只開這個埠、只接受 ZeroTier 網段的規則：
+
+```powershell
+New-NetFirewallRule -DisplayName 'Desk remote helper (ZeroTier only)' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 18790 -RemoteAddress <ZeroTier 網段> -Program '<pythonw.exe 完整路徑>' -Profile Any
+```
 - 其他設定參考 [pc-helper/config.example.json](pc-helper/config.example.json)：`notify`（ntfy 伺服器與私人頻道，頻道名稱當密碼看）、`idle_seconds`、`alerts`、`screen`、`drive_windows`、`claude.context_windows`。改完 `config.json` 要重啟小幫手：
 
 ```powershell

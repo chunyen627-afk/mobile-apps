@@ -10,8 +10,8 @@
 | --- | --- |
 | 手機 App | **0.5.2 build 5**（Bundle ID `org.personal.deskremote.app`，主畫面名稱「桌面遙控」）：[Release desk-remote-0.5.2-build5](https://github.com/chunyen627-afk/mobile-apps/releases/tag/desk-remote-0.5.2-build5)（發布紀錄見下方「驗證紀錄」） |
 | 手機上已安裝 | 0.5.2 build 5（2026-10-27，使用者回報；App 畫面上沒有顯示自己的版本，從 SideStore 的 My Apps 看） |
-| 電腦端小幫手 | 0.5.2（小幫手測試 88 項），已裝在辦公室電腦（登入時啟動的排程工作 `DeskRemoteHelper`）；電腦頁「小幫手」那一欄是這個版本，不是 App 的 |
-| 提權夥伴 | 已裝在辦公室電腦（排程工作 `DeskRemoteElevated`，最高權限、只聽 127.0.0.1） |
+| 電腦端小幫手 | 0.5.2（小幫手測試 88 項），裝在兩台：辦公室電腦、家用電腦（2026-10-27 經 SSH 安裝；從辦公室實測讀到兩個桌面版的對話、模型、上下文、額度與截圖，畫面操作還沒在這台實測）。都是登入時啟動的排程工作 `DeskRemoteHelper`；電腦頁「小幫手」那一欄是這個版本，不是 App 的 |
+| 提權夥伴 | 只裝在辦公室電腦（排程工作 `DeskRemoteElevated`，最高權限、只聽 127.0.0.1）；家用電腦使用者決定先不裝 |
 | 程式所在 | 分支 `claude/desk-remote`，尚未合併 main；之後會成為工具箱的第三個分頁 |
 
 ## 功能與驗證程度
@@ -66,6 +66,7 @@
 - **選項題**：位置還在捲動時點錯選項 → 先捲到可見再點，送出前核對開著的選項恰好等於手機的選擇；「其他」的開關狀態不可信 → 以出現「其他選項」輸入框為準；單選題要先開「其他」（已選的選項不能單獨取消）。
 - **停止**：Claude 把中斷寫成使用者訊息「[Request interrupted by user]」→ 改成「已中止」狀態並回到閒置；手機上「已停止」會跟著執行中那一列消失 → 改成留著。
 - **`elevate`**：Git Bash 找不到 `elevate.cmd`、經 cmd 會重新解析引號 → 另放一個直接呼叫 Python 的 `elevate`；Git Bash 下中文亂碼 → 在 Git Bash 改用 UTF-8 輸出。
+- **第二台電腦（家用電腦）**：經 SSH 執行 `install.ps1` 時 `USERDOMAIN` 是 `WORKGROUP`，排程工作的帳號組錯而註冊失敗 → 兩個安裝腳本改用 Windows 目前的身分；小幫手跑的 `pythonw.exe` 不在既有的 Python 防火牆規則內 → 另加只開 18790、只接受 ZeroTier 網段的規則（見 [RESTORE.md](RESTORE.md)）。
 - **截圖**：畫面操作程式不能宣告高 DPI（點擊座標會變），截圖改由獨立的 DPI-aware 程序做。
 - **UI 測試**：清單不排出畫面外的列；在彈出頁頂端往下滑會把它關掉；從外部開自訂網址 iOS 會先問 → 測試改用只往上捲、啟動參數帶連結。
 

@@ -45,7 +45,9 @@ New-Item -ItemType Directory -Force -Path $userDir | Out-Null
 $submit = Join-Path $userDir 'elevate-submit.json'
 $submitCfg = [ordered]@{ port = [int]$cfg.port; submit_token = "$($cfg.submit_token)" }
 [IO.File]::WriteAllText($submit, ($submitCfg | ConvertTo-Json), (New-Object Text.UTF8Encoding $false))
-icacls $submit /inheritance:r /grant:r "$($env:USERDOMAIN)\$($env:USERNAME):(R,W)" '*S-1-5-18:(F)' | Out-Null
+# The signed-in account, not $env:USERDOMAIN: over SSH that is WORKGROUP, which is no account.
+$user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+icacls $submit /inheritance:r /grant:r "$($user):(R,W)" '*S-1-5-18:(F)' | Out-Null
 
 if (-not $Python) { $Python = (Get-Command python.exe -ErrorAction SilentlyContinue | Select-Object -First 1).Source }
 if ($Python) {
@@ -62,7 +64,6 @@ if ($Python) {
 
 $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $action = New-ScheduledTaskAction -Execute $ps -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$(Join-Path $bin 'desk_remote_elevated.ps1')`""
-$user = "$env:USERDOMAIN\$env:USERNAME"
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
 $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Highest
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
