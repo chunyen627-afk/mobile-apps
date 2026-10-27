@@ -120,6 +120,16 @@ UI 測試與截圖找到並修正的畫面問題：
 - App：清單的「開挖建議」區塊、資料格式加選填 `advice`（feature `advice`）
 - [run 40279093799](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40279093799)（`1cd5dc9`）：單元測試 `Executed 121 tests, with 0 failures`、UI 測試 `Executed 17 tests, with 0 failures`；截圖確認「開挖建議」區塊顯示關機中的示範筆電「建議挖礦」（綠）與虧損機器「建議停挖」（橘、NT$-35）。IPA 393,533 bytes（runner 內，未上傳）
 
+## 0.6.2（build 10，開發中）：挖另一種幣的機器也算收益
+
+- 使用者要求：App 也要看到 FPGA 的收益。來源原本只有一組幣價（`market`），挖另一種幣（例如 QTC）的機器會被當成同一種幣計價而算錯，所以來源先不給它收益。
+- 資料格式：每台的 `earnings` 加選填 `coin`、`coinUsd`（feature `coins`，只有挖的幣跟 `market` 不同的機器才有）。舊版 App 不會要這個 feature，收到的資料不變。
+- App：有自己幣種的機器用它自己的幣價換算台幣（匯率仍用 `market`）；有幣種但沒價格時收益顯示「—」，不會改用 `market` 的幣價。詳情頁「挖到的幣」與「幣價」顯示該機器自己的幣。
+- 示範資料：示範礦機 B 改成挖 QTC（150 MH/s、每天 0.0084 QTC、US$73），收益約 NT$20／天。
+- 詳情頁「礦池認列算力」改成依大小用 TH/s、GH/s、MH/s 顯示（原本固定 TH/s，FPGA 的 150 MH/s 會變成 0.0 TH/s）；今日估算的說明改成近 30 分鐘平均與礦池公布的每單位收益（電腦端改成跟礦池網頁同一算法）。
+- 測試：單元測試多兩項（自己的幣價換算、幣種格式檢查），UI 測試多一項（test20：B 那列與詳情頁用 QTC 計價）。
+- [run 40541544053](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40541544053)（`e23865e`）：單元測試 `Executed 123 tests, with 0 failures`、UI 測試 `Executed 20 tests, with 0 failures`；截圖確認 B 那列「收益 ≈ NT$20/天・電費不計」、詳情頁「挖到的幣 0.008 QTC」，但「礦池認列算力」顯示成 0.0 TH/s，下一個 commit 修正。
+
 ## 0.6.1（build 9，開發中）：被 iOS 關掉後自動接回來源
 
 - 使用者回報：放久一點再進 App，有時會跳回示範畫面。原因：iOS 會把放在背景太久的 App 關掉，而 App 每次啟動都從示範開始。

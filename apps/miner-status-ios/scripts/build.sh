@@ -4,8 +4,8 @@
 # this script installs nothing.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-EXPECTED_TESTS="${EXPECTED_TESTS:-121}"
-EXPECTED_UI_TESTS="${EXPECTED_UI_TESTS:-19}"
+EXPECTED_TESTS="${EXPECTED_TESTS:-123}"
+EXPECTED_UI_TESTS="${EXPECTED_UI_TESTS:-20}"
 # Local feed for the custom-source UI tests: fixtures served on the build Mac's loopback, plus a
 # port nothing listens on for the failure case. The simulator shares the Mac's network.
 UI_FEED_PORT="${UI_FEED_PORT:-8765}"

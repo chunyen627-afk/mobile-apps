@@ -62,7 +62,7 @@ struct EarningsSummarySection: View {
             }
             .textCase(nil)
         } footer: {
-            Text("依礦池近 3 小時平均算力與目前幣價估算，不是實際入帳金額；電費依台電簡易型二段式與目前耗電推算一整天。")
+            Text("依礦池近 30 分鐘平均算力、礦池公布的每單位收益與目前幣價估算（與礦池網頁的算法相同），不是實際入帳金額；電費依台電簡易型二段式與目前耗電推算一整天。")
         }
     }
 }
@@ -75,7 +75,7 @@ struct EarningsDetailSection: View {
 
     var body: some View {
         Section("收益（估算，每天）") {
-            LabeledContent("挖到的幣", value: EarningsText.coin(earnings.coinPerDay, market?.coin ?? "PRL"))
+            LabeledContent("挖到的幣", value: EarningsText.coin(earnings.coinPerDay, earnings.coin ?? "PRL"))
             LabeledContent("約等於", value: EarningsText.btc(earnings.btcPerDay))
             LabeledContent("收益", value: EarningsText.twd(earnings.revenueTwdPerDay))
             LabeledContent("耗電（顯卡＋額外）", value: earnings.powerW.map { "\(Int($0.rounded())) W" } ?? DisplayText.noData)
@@ -84,7 +84,8 @@ struct EarningsDetailSection: View {
         }
         if let market {
             Section("幣價") {
-                LabeledContent(market.coin, value: EarningsText.usd(market.coinUsd))
+                // The coin this machine mines: its own (an FPGA on QTC) or the market coin.
+                LabeledContent(earnings.coin ?? market.coin, value: EarningsText.usd(earnings.coinUsd))
                 LabeledContent("BTC", value: EarningsText.usd(market.btcUsd))
                 LabeledContent("美元兌台幣", value: market.usdTwd.map { $0.formatted(.number.precision(.fractionLength(2))) } ?? DisplayText.noData)
                 LabeledContent("價格時間", value: DisplayText.clock(market.observedAt, now: now) ?? DisplayText.noData)

@@ -408,10 +408,7 @@ public struct MarketReport: Codable, Hashable, Sendable {
         try rejectUnknownKeys(decoder, allowed: CodingKeys.self)
         let c = try decoder.container(keyedBy: CodingKeys.self)
         coin = try c.decode(String.self, forKey: .coin)
-        let coinIsValid = (2 ... 10).contains(coin.count) && coin.unicodeScalars.allSatisfy {
-            $0.isASCII && (CharacterSet.uppercaseLetters.contains($0) || CharacterSet.decimalDigits.contains($0))
-        }
-        guard coinIsValid else {
+        guard isCoinSymbol(coin) else {
             throw DecodingError.dataCorruptedError(forKey: .coin, in: c, debugDescription: "coin must match ^[A-Z0-9]{2,10}$")
         }
         coinUsd = try c.decodeNumber(forKey: .coinUsd, minimum: 0)
@@ -427,6 +424,13 @@ public struct MarketReport: Codable, Hashable, Sendable {
         try c.encode(btcUsd, forKey: .btcUsd)
         try c.encode(usdTwd, forKey: .usdTwd)
         try c.encode(observedAt, forKey: .observedAt)
+    }
+}
+
+/// ^[A-Z0-9]{2,10}$, the ticker form used for every coin in the feed.
+func isCoinSymbol(_ value: String) -> Bool {
+    (2 ... 10).contains(value.count) && value.unicodeScalars.allSatisfy {
+        $0.isASCII && (CharacterSet.uppercaseLetters.contains($0) || CharacterSet.decimalDigits.contains($0))
     }
 }
 
@@ -515,9 +519,13 @@ public struct EarningsReport: Codable, Hashable, Sendable {
     /// Publisher's default; the app lets the user override it.
     public let electricityBilled: Bool?
     public let observedAt: Timestamp?
+    /// Feature `coins`: a machine mining another coin than the feed's `market` (an FPGA on QTC)
+    /// names it and its USD price. nil for a machine on the market coin, or from older sources.
+    public let coin: String?
+    public let coinUsd: Double?
 
     enum CodingKeys: String, CodingKey, CaseIterable {
-        case coinPerDay, poolHashrate, electricityBilled, observedAt
+        case coinPerDay, poolHashrate, electricityBilled, observedAt, coin, coinUsd
     }
 
     public init(from decoder: Decoder) throws {
@@ -527,6 +535,11 @@ public struct EarningsReport: Codable, Hashable, Sendable {
         poolHashrate = try c.decodeNumber(forKey: .poolHashrate, minimum: 0)
         electricityBilled = try c.decodeNullable(Bool.self, forKey: .electricityBilled)
         observedAt = try c.decodeNullable(Timestamp.self, forKey: .observedAt)
+        coin = c.contains(.coin) ? try c.decode(String.self, forKey: .coin) : nil
+        if let coin, !isCoinSymbol(coin) {
+            throw DecodingError.dataCorruptedError(forKey: .coin, in: c, debugDescription: "coin must match ^[A-Z0-9]{2,10}$")
+        }
+        coinUsd = c.contains(.coinUsd) ? try c.decodeNumber(forKey: .coinUsd, minimum: 0) : nil
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -535,6 +548,8 @@ public struct EarningsReport: Codable, Hashable, Sendable {
         try c.encode(poolHashrate, forKey: .poolHashrate)
         try c.encode(electricityBilled, forKey: .electricityBilled)
         try c.encode(observedAt, forKey: .observedAt)
+        try c.encodeIfPresent(coin, forKey: .coin)
+        try c.encodeIfPresent(coinUsd, forKey: .coinUsd)
     }
 }
 

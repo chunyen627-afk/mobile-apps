@@ -286,7 +286,9 @@
         "coinPerDay": { "type": ["number", "null"], "minimum": 0 },
         "poolHashrate": { "description": "H/s, the pool's recent average for this worker.", "type": ["number", "null"], "minimum": 0 },
         "electricityBilled": { "description": "Publisher's default for whether this machine's electricity costs money; the app lets the user override it.", "type": ["boolean", "null"] },
-        "observedAt": { "$ref": "#/$defs/timestampOrNull" }
+        "observedAt": { "$ref": "#/$defs/timestampOrNull" },
+        "coin": { "description": "OPTIONAL, sent only with feature `coins`, and only for a machine mining another coin than `market` (an FPGA on QTC). The app prices that machine with coinUsd instead of the market coin.", "type": "string", "pattern": "^[A-Z0-9]{2,10}$" },
+        "coinUsd": { "description": "OPTIONAL, with `coin`: that coin's USD price; null when unknown.", "type": ["number", "null"], "minimum": 0 }
       }
     },
     "assessment": {

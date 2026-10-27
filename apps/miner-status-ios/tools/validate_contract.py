@@ -301,6 +301,8 @@ def build_cases(base: dict) -> tuple[list, list]:
         ("earnings and market present", [(("market",), market), (M + ("earnings",), earnings)]),
         ("earnings and market null", [(("market",), None), (M + ("earnings",), None)]),
         ("earnings fields null", [(M + ("earnings",), dict.fromkeys(earnings))]),
+        ("earnings on its own coin (feature coins)", [(M + ("earnings",), dict(earnings, coin="QTC", coinUsd=73.1))]),
+        ("earnings own coin without a price", [(M + ("earnings",), dict(earnings, coin="QTC", coinUsd=None))]),
     ]
     negative += [
         ("market extra key", [(("market",), dict(market, wallet="x"))]),
@@ -313,6 +315,9 @@ def build_cases(base: dict) -> tuple[list, list]:
         ("earnings negative coin per day", [(M + ("earnings",), dict(earnings, coinPerDay=-0.1))]),
         ("earnings billed as string", [(M + ("earnings",), dict(earnings, electricityBilled="yes"))]),
         ("earnings missing observedAt", [(M + ("earnings",), {k: v for k, v in earnings.items() if k != "observedAt"})]),
+        ("earnings lowercase own coin", [(M + ("earnings",), dict(earnings, coin="qtc", coinUsd=73.1))]),
+        ("earnings own coin null", [(M + ("earnings",), dict(earnings, coin=None))]),
+        ("earnings negative own coin price", [(M + ("earnings",), dict(earnings, coin="QTC", coinUsd=-1))]),
     ]
 
     # Optional tariff extension.

@@ -108,6 +108,30 @@ final class MinerStatusUITests: XCTestCase {
         snapshot("13-earnings-summary")
     }
 
+    func test20MachineOnAnotherCoinShowsItsOwnEarnings() throws {
+        // Demo B stands for the FPGA on QTC: 0.0084 QTC × US$73 × 32.5 ≈ NT$20 a day, not priced as PRL.
+        let row = element("machine-demo-rig-b")
+        XCTAssertTrue(row.waitForExistence(timeout: 5), "machine row B missing")
+        XCTAssertTrue(waitFor(row, labelContains: "收益 ≈ NT$20/天", timeout: 5), "row B is not priced in QTC: \(row.label)")
+        row.tap()
+        XCTAssertTrue(app.navigationBars["詳情（示範）"].waitForExistence(timeout: 5), "detail screen did not open")
+        // The pool's view in the machine's own scale, not "0.0 TH/s".
+        XCTAssertTrue(app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "148.0 MH/s", "148.0 MH/s")).firstMatch
+            .waitForExistence(timeout: 5), "pool hashrate not shown in MH/s")
+        let mined = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "0.008 QTC", "0.008 QTC")).firstMatch
+        let price = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "US$73", "US$73")).firstMatch
+        for _ in 0 ..< 3 where !mined.waitForExistence(timeout: 2) {
+            app.swipeUp()  // The machine section sits above the earnings section.
+        }
+        XCTAssertTrue(mined.exists, "QTC amount not shown on detail")
+        snapshot("20-other-coin-earnings")
+        for _ in 0 ..< 2 where !price.waitForExistence(timeout: 2) { app.swipeUp() }
+        XCTAssertTrue(price.exists, "QTC price not shown on detail")
+    }
+
     func test13ElectricityToggleChangesTotals() throws {
         let summary = element("earnings-summary")
         XCTAssertTrue(reveal(summary), "earnings summary missing")

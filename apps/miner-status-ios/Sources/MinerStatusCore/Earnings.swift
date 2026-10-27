@@ -146,6 +146,9 @@ public extension Calendar {
 /// One machine's estimated day, in NT$ where prices allow.
 public struct MachineEarnings: Hashable, Sendable {
     public let coinPerDay: Double?
+    /// The coin mined and its USD price: the machine's own (feature `coins`) or the feed's market.
+    public let coin: String?
+    public let coinUsd: Double?
     public let btcPerDay: Double?
     public let revenueTwdPerDay: Double?
     /// Reported GPU watts plus the user's extra watts; nil without GPU power data.
@@ -162,9 +165,13 @@ public enum EarningsCalculator {
         tariff: TouTariff, day: Date, calendar: Calendar = .taipei
     ) -> MachineEarnings {
         let coinPerDay = status?.earnings?.coinPerDay
+        // A machine on another coin brings its own price; never price it in the market coin.
+        let ownCoin = status?.earnings?.coin
+        let symbol = ownCoin ?? market?.coin
+        let price = ownCoin != nil ? status?.earnings?.coinUsd : market?.coinUsd
         var btcPerDay: Double?
         var revenue: Double?
-        if let coin = coinPerDay, let coinUsd = market?.coinUsd {
+        if let coin = coinPerDay, let coinUsd = price {
             if let btcUsd = market?.btcUsd { btcPerDay = coin * coinUsd / btcUsd }
             if let usdTwd = market?.usdTwd { revenue = coin * coinUsd * usdTwd }
         }
@@ -172,7 +179,7 @@ public enum EarningsCalculator {
         let power = gpuWatts.flatMap { $0.isEmpty ? nil : $0.reduce(0, +) + max(0, extraWatts) }
         let electricity: Double? = billed ? power.map { tariff.costPerDay(watts: $0, day: day, calendar: calendar) } : 0
         let net: Double? = revenue.flatMap { value in electricity.map { value - $0 } }
-        return MachineEarnings(coinPerDay: coinPerDay, btcPerDay: btcPerDay, revenueTwdPerDay: revenue,
+        return MachineEarnings(coinPerDay: coinPerDay, coin: symbol, coinUsd: price, btcPerDay: btcPerDay, revenueTwdPerDay: revenue,
                                powerW: power, electricityBilled: billed, electricityTwdPerDay: electricity,
                                netTwdPerDay: net)
     }
