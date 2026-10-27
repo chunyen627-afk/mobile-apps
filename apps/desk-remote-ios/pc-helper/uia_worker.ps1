@@ -168,8 +168,11 @@ function Paste-Send($w, $scope, $editName, $text) {
     $edit.SetFocus()
     Start-Sleep -Milliseconds 300
     if (-not $edit.Current.HasKeyboardFocus) { Fail 'focus-failed' 'the message box did not take focus' }
+    # An empty Codex box reads back its placeholder, which is also its name (found live 10/27).
     $already = Box-Text $edit
-    if ($already -and $already.Trim()) { Fail 'box-not-empty' 'the message box already holds unsent text' }
+    if ($already -and $already.Trim() -and $already.Trim() -ne $editName.Trim()) {
+      Fail 'box-not-empty' 'the message box already holds unsent text'
+    }
     Set-PrivateText $text
     [System.Windows.Forms.SendKeys]::SendWait('^v')
     Start-Sleep -Milliseconds 500

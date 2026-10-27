@@ -340,6 +340,32 @@ class DrivingTests(FakeEnvironment):
         code, body = runner.submit('send', 'claude', A, {'text': 'x', 'force': True})
         self.assertEqual((code, body['error']), (423, 'locked'))
 
+    def test_app_closed_to_the_tray_is_brought_back_by_the_link(self):
+        class TrayDriver(h.FakeDriver):
+            hidden = True
+
+            def docs(self, app):
+                return None if self.hidden else super().docs(app)
+
+            def open(self, app, info):
+                self.hidden = False  # the link shows the window again
+                super().open(app, info)
+        _, driver, _, runner = drive(self.fake, driver_class=TrayDriver)
+        body = runner.submit('send', 'codex', X, {'text': 'hello'})[1]
+        run_all(runner)
+        self.assertEqual(runner.status(body['id'])['state'], 'done', runner.status(body['id']))
+        self.assertEqual([c[0] for c in driver.calls], ['open', 'send'])
+
+    def test_app_that_never_shows_a_window_is_reported(self):
+        class GoneDriver(h.FakeDriver):
+            def docs(self, app):
+                return None
+        _, driver, _, runner = drive(self.fake, driver_class=GoneDriver)
+        body = runner.submit('send', 'codex', X, {'text': 'hello'})[1]
+        run_all(runner)
+        self.assertEqual(runner.status(body['id'])['error'], 'app-not-running')
+        self.assertNotIn('send', [c[0] for c in driver.calls])
+
     def test_wrong_conversation_open_never_types(self):
         class StuckDriver(h.FakeDriver):
             def open(self, app, info):

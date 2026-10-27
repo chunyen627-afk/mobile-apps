@@ -1058,7 +1058,26 @@ class WindowsDriver:
         return answer.get('docs') or [] if answer.get('window') else None
 
     def open(self, app, info):
-        os.startfile(info['link'])  # Each desktop app opens its own conversation link.
+        """Each desktop app opens its own conversation link. When Windows cannot activate the
+        link (Codex started outside its package after the 0x80070020 container fault, found live
+        10/27), start the installed package's ChatGPT.exe with the link the way the package
+        does (`--single-argument <link>`): it hands the link to the running instance and exits.
+        The running instance's own, older exe could not be started (WinError 14001)."""
+        try:
+            os.startfile(info['link'])
+            return
+        except OSError:
+            if app != 'codex':
+                raise ActionError('app-not-running', 'the conversation link could not be opened')
+        if not running_images('chatgpt.exe'):
+            raise ActionError('app-not-running', 'Codex is not running')
+        exe = codex_package_exe()
+        if not exe:
+            raise ActionError('app-not-running', 'the Codex package was not found')
+        try:
+            os.startfile(exe, arguments=f'--single-argument {info["link"]}')
+        except OSError as exc:
+            raise ActionError('app-not-running', f'Codex could not take the link: {exc}')
 
     def invoke(self, app, name, doc=None):
         self.ask(app, cmd='invoke', name=name, doc=doc)
@@ -1079,6 +1098,43 @@ class WindowsDriver:
         items = [{'question': q['question'], 'labels': a.get('labels') or [], 'other': a.get('other') or ''}
                  for q, a in zip(question['questions'], answers)]
         return self.ask(app, cmd='choose', doc=doc, questions=items).get('how')
+
+
+def codex_package_exe():
+    """ChatGPT.exe of the installed OpenAI.Codex package (its folder changes with each update)."""
+    import subprocess
+    try:
+        done = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command',
+                               '(Get-AppxPackage -Name OpenAI.Codex).InstallLocation'],
+                              capture_output=True, timeout=30, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    folder = done.stdout.decode('utf-8', 'replace').strip().splitlines()
+    exe = Path(folder[-1].strip()) / 'app' / 'ChatGPT.exe' if folder else None
+    return str(exe) if exe and exe.exists() else None
+
+
+def running_images(name):
+    """Full paths of running processes whose executable is `name` (case-insensitive)."""
+    psapi, kernel32 = ctypes.windll.psapi, ctypes.windll.kernel32
+    pids = (ctypes.c_uint * 4096)()
+    needed = ctypes.c_uint()
+    if not psapi.EnumProcesses(ctypes.byref(pids), ctypes.sizeof(pids), ctypes.byref(needed)):
+        return []
+    found = []
+    for pid in pids[:needed.value // ctypes.sizeof(ctypes.c_uint)]:
+        handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            continue
+        try:
+            buffer = ctypes.create_unicode_buffer(1024)
+            size = ctypes.c_uint(1024)
+            if kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
+                if buffer.value.lower().endswith('\\' + name.lower()) and buffer.value not in found:
+                    found.append(buffer.value)
+        finally:
+            kernel32.CloseHandle(handle)
+    return found
 
 
 def prompt_id(app, doc, text):
@@ -1187,7 +1243,7 @@ class ActionRunner:
     MAX_TEXT = 20000
 
     def __init__(self, hub, driver, presence, watcher, notify=None, pc_name='', strings=None,
-                 idle_seconds=60, verify_seconds=20, doc_wait=8, settle_seconds=2.0, clock=time.monotonic):
+                 idle_seconds=60, verify_seconds=20, doc_wait=15, settle_seconds=2.0, clock=time.monotonic):
         self.hub, self.driver, self.presence, self.watcher = hub, driver, presence, watcher
         self.settle_seconds = settle_seconds
         self.notify, self.pc_name, self.strings = notify, pc_name, strings or {}
@@ -1371,23 +1427,25 @@ class ActionRunner:
             raise ActionError(denied[1]['error'], denied[1]['message'])
 
     def wait_doc(self, app, doc):
+        """True once exactly one page has this title. A missing window counts as not yet: the
+        link may still be bringing the app up from the tray."""
         deadline = self.clock() + self.doc_wait
         while True:
             docs = self.driver.docs(app)
-            if docs is None:
-                raise ActionError('app-not-running', '')
-            if docs.count(doc) == 1:
+            if docs is not None and docs.count(doc) == 1:
                 return True
             if self.clock() >= deadline:
+                if docs is None:
+                    raise ActionError('app-not-running', '')
                 return False
             time.sleep(0.25)
 
     def open_conversation(self, action):
+        """Opens the conversation by its own link. The app may be closed to the tray (Codex was,
+        live 10/27): the link brings its window back, so no window is not a reason to stop yet."""
         app, info = action['app'], action['info']
         docs = self.driver.docs(app)
-        if docs is None:
-            raise ActionError('app-not-running', '')
-        if docs.count(info['doc']) == 1:
+        if docs is not None and docs.count(info['doc']) == 1:
             return
         self.recheck(action)
         self.presence.begin_own()
