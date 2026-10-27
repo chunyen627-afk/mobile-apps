@@ -56,7 +56,7 @@ struct DeskModelSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var state: HelperState?
     @State private var failure: String?
-    @State private var busy: String?
+    @State private var busy: [DeskPick: String] = [:]
     @State private var working = false
     @State private var confirm: DeskConfirm?
 
@@ -68,6 +68,10 @@ struct DeskModelSheet: View {
                         .accessibilityIdentifier("meta-model")
                     if let effort = meta?.effort {
                         LabeledContent("推理強度", value: effort)
+                    }
+                    if let permission = meta?.permission {
+                        LabeledContent("權限模式", value: permission)
+                            .accessibilityIdentifier("meta-permission")
                     }
                     if let context = meta?.context {
                         VStack(alignment: .leading, spacing: 4) {
@@ -83,28 +87,32 @@ struct DeskModelSheet: View {
                         Text("上下文用量：還沒有回覆可以計算").font(.footnote).foregroundStyle(.secondary)
                     }
                 }
-                let models = state?.models(app) ?? []
-                if !models.isEmpty {
-                    Section {
-                        ForEach(models, id: \.self) { model in
-                            Button { Task { await pick(model, force: false) } } label: {
-                                HStack {
-                                    Text(model).foregroundStyle(.primary)
-                                    Spacer()
-                                    if model == meta?.model { Image(systemName: "checkmark").foregroundStyle(Color.accentColor) }
+                ForEach(DeskPick.allCases, id: \.self) { kind in
+                    let options = state.map { kind.options($0, app) } ?? []
+                    if !options.isEmpty {
+                        Section {
+                            ForEach(options, id: \.self) { option in
+                                Button { Task { await pick(kind, option, force: false) } } label: {
+                                    HStack {
+                                        Text(option).foregroundStyle(.primary)
+                                        Spacer()
+                                        if option == kind.current(meta) {
+                                            Image(systemName: "checkmark").foregroundStyle(Color.accentColor)
+                                        }
+                                    }
                                 }
+                                .disabled(working)
+                                .accessibilityIdentifier("\(kind.rawValue)-\(option)")
                             }
-                            .disabled(working)
-                            .accessibilityIdentifier("model-\(model)")
+                            if let note = busy[kind] {
+                                Text(note).font(.caption).foregroundStyle(.secondary)
+                                    .accessibilityIdentifier("\(kind.rawValue)-busy")
+                            }
+                        } header: {
+                            Text(kind.title)
+                        } footer: {
+                            Text(kind.footer(app))
                         }
-                        if let busy {
-                            Text(busy).font(.caption).foregroundStyle(.secondary)
-                                .accessibilityIdentifier("model-busy")
-                        }
-                    } header: {
-                        Text("切換模型")
-                    } footer: {
-                        Text("會在電腦上打開這個對話、點開模型選單選好；只影響這個對話之後的回覆。")
                     }
                 }
                 Section("額度") {
@@ -149,27 +157,73 @@ struct DeskModelSheet: View {
         }
     }
 
-    private func pick(_ model: String, force: Bool) async {
+    private func pick(_ kind: DeskPick, _ option: String, force: Bool) async {
         guard let client = store.client(pcID) else { return }
-        busy = "正在電腦上切換為 \(model)…"
+        busy[kind] = "正在電腦上切換為 \(option)…"
         working = true
         defer { working = false }
         do {
-            let start = try await client.setModel(app, session: session.id, model: model, force: force)
-            let end = try await client.follow(start, timeout: 60) { status in busy = status.message }
-            busy = end.state == "failed" ? "沒有成功：\(end.message)" : end.message
+            let start: ActionStatus
+            switch kind {
+            case .model: start = try await client.setModel(app, session: session.id, model: option, force: force)
+            case .effort: start = try await client.setEffort(app, session: session.id, effort: option, force: force)
+            case .mode: start = try await client.setMode(app, session: session.id, mode: option, force: force)
+            }
+            let end = try await client.follow(start, timeout: 60) { status in busy[kind] = status.message }
+            busy[kind] = end.state == "failed" ? "沒有成功：\(end.message)" : end.message
         } catch HelperFailure.busyUser(let seconds) {
-            busy = nil
+            busy[kind] = nil
             confirm = DeskConfirm(
                 title: "電腦有人在用",
-                message: "\(seconds.map { "\($0) 秒前" } ?? "剛剛")有人操作過這台電腦。切換模型會切換電腦畫面上的對話並點選選單。",
+                message: "\(seconds.map { "\($0) 秒前" } ?? "剛剛")有人操作過這台電腦。切換會切換電腦畫面上的對話並點選選單。",
                 confirmLabel: "仍要切換",
-                run: { await pick(model, force: true) },
+                run: { await pick(kind, option, force: true) },
                 cancel: {})
         } catch let error as HelperFailure {
-            busy = "沒有成功：\(DeskText.failure(error))"
+            busy[kind] = "沒有成功：\(DeskText.failure(error))"
         } catch {
-            busy = "沒有成功：\(DeskText.failure(.unreachable))"
+            busy[kind] = "沒有成功：\(DeskText.failure(.unreachable))"
+        }
+    }
+}
+
+/// What the model sheet can switch on the PC, each from its own menu there.
+enum DeskPick: String, CaseIterable, Hashable {
+    case model, effort, mode
+
+    var title: String {
+        switch self {
+        case .model: return "切換模型"
+        case .effort: return "推理強度"
+        case .mode: return "權限模式"
+        }
+    }
+
+    func options(_ state: HelperState, _ app: DeskApp) -> [String] {
+        switch self {
+        case .model: return state.models(app)
+        case .effort: return state.efforts(app)
+        case .mode: return state.modes(app)
+        }
+    }
+
+    /// The option the conversation uses now; effort options read "中" while the menu also says "推薦".
+    func current(_ meta: ConversationMeta?) -> String? {
+        switch self {
+        case .model: return meta?.model
+        case .effort: return meta?.effort
+        case .mode: return meta?.permission
+        }
+    }
+
+    func footer(_ app: DeskApp) -> String {
+        switch self {
+        case .model: return "會在電腦上打開這個對話、點開模型選單選好；只影響這個對話之後的回覆。"
+        case .effort: return "越高回答越仔細，但越慢、越耗額度。"
+        case .mode:
+            return app == .codex
+                ? "Codex 不會在畫面上顯示目前的模式，選了之後從下一則回覆起生效。"
+                : "「略過權限確認」與「自動」不會再問你；「手動」每次變更都會問。"
         }
     }
 }

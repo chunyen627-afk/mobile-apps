@@ -20,6 +20,7 @@
 | 局部選字複製（0.4.0） | 實機回報 0.3.0 的訊息只能整段拷貝（SwiftUI 的 `.textSelection` 在 iOS 只給整段）。長按訊息泡泡多了選單「拷貝全部」與「選取文字」，後者打開整則訊息的唯讀 `UITextView`（`DeskSelectableText`／`DeskSelectTextSheet`），可以拖曳選一段再拷貝；工具指令與輸出、權限詢問、管理員指令內容與輸出直接就是可局部選取的文字框。**實作完成**，新增 UI 測試 20：長按回覆出現兩個選項，「選取文字」頁長按要出現「全選」選單；**模擬器測試通過**（[run 40455358550](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40455358550)：小幫手 76、單元 26、UI 22 項 0 失敗，截圖已檢視；長按後是選到一個詞的選單「拷貝／查詢／翻譯」，這就是局部選取）；實機待安裝 0.4.0 |
 | 模型、上下文與額度（0.4.0） | 對話頁頂端顯示「Opus 5.5・高・上下文 18%」，點開可看上下文細節、這個 App 的額度，Claude 對話可切換模型；電腦頁多「額度」區塊。資料來源：Claude 的模型與推理強度讀對話檔 `model`／`effort`（畫面上開著的對話改讀輸入框旁的「模型：」按鈕）；上下文＝逐字稿最後一則回覆的 input＋cache read＋cache write tokens；上限只用桌面版回報過的（Opus 5 系列 100 萬），其他模型只顯示已用量不猜上限（可在 config.json 的 `claude.context_windows` 補）；額度讀 `plan-usage-history.json`（5 小時 `fh`、每週 `sd`，取登入組織最新一筆），每週重設時間讀輸入框旁的「使用量：」按鈕。Codex 讀 rollout 的 `turn_context`（模型、effort）與 `token_count`（上次輸入 tokens、`model_context_window`、`rate_limits`）。切換模型＝打開對話→點「模型：」按鈕→選單裡的單選項 Select（不行再點一次）→按鈕顯示新模型才算數，再確認對話檔的 `model` 已更新。**實作完成**：小幫手測試 74 項本機通過（新增 7 項），真實資料唯讀試讀與桌面版自己回報的一致（本對話上下文 39%、每週 46%）；畫面腳本讀模型／使用量按鈕約 0.1 秒。手機端模擬器測試通過（同一 run 40455358550，截圖已檢視）；在真的電腦上切換模型尚未實測（切換會換電腦畫面上的對話，實測前先問使用者）。**Codex 也能切換**（使用者同意後 10/27 讀過選單）：模型按鈕「GPT-6.1 Sol 高」只用 UI Automation 操作（Expand → 「選取模型」Invoke → 模型單選項 Invoke → 按鈕顯示新模型），不用滑鼠、視窗最小化也行；Codex 要到下一則回覆才把模型寫進 rollout，所以以按鈕為準。探測時兩個失誤已改進寫法：①Codex 視窗最小化時腳本仍點座標，點到了蓋在上面的 Chrome（正式流程的點擊會先檢查最上層視窗，Codex 改成完全不點）；②為關選單把所有展開的元件都收合，連側邊欄與專案資料夾也收起來（已用名稱逐一展開復原大部分，正式流程只收合自己開的選單）。Codex 的預設模型在 `~/.codex/config.toml`（`model`、`model_reasoning_effort`），目前是 GPT-6.1 Sol／高 |
 | 通知（0.4.0 小幫手） | 使用者 10/27 要求只通知需要處理的事：權限詢問、新的選項題（新增）、管理員指令等核准、手機操作失敗、一輪完成、密碼錯誤鎖定；不再通知手機操作成功與管理員指令結果。小幫手測試 76 項本機通過，已裝到辦公室電腦 |
+| 更多遙控（0.5.0） | 使用者 10/27 要「全都要」：①**停止**：Claude 正在處理時對話裡多一個「停止」，小幫手 Invoke 輸入框旁的「停止」按鈕，畫面上不再執行才算數（Codex 的停止按鈕還沒看過，先不做）；②**點通知直接打開**：ntfy 的通知帶 `deskremote://open?pc=…&app=…&session=…` 連結，App 以電腦名稱（只有一台時就用那台）找到電腦並打開對話，管理員請求打開電腦頁；③**傳照片**：輸入列「照片」選圖，手機縮到長邊 2048 的 JPEG，小幫手寫到只有使用者讀得到的暫存檔、以剪貼簿（不進剪貼簿記錄）貼上後刪除，再貼文字送出；④**看電腦畫面**：電腦頁「看電腦畫面」，`screen_capture.ps1` 以獨立的 DPI-aware 程序截整個桌面（1600 寬 JPEG 約 110 KB；畫面操作程式不能 DPI-aware，否則點擊座標會變），鎖定時拒絕；⑤**提醒**：額度任一時段 ≥80%、對話上下文 ≥80% 各通知一次（降回去後再超過才再通知；小幫手啟動時已超過的不通知；門檻可在 config.json 的 `alerts` 改）；⑥**推理強度**（Claude）：模型選單的「投入程度」子選單只在滑鼠停在上面時展開（不點擊），選低／中／高／超高／最高／Ultracode；Codex 的推理強度是要用方向鍵的滑桿，要把視窗叫到前面，先不做；⑦**權限模式**：Claude 的模式按鈕以目前模式命名，展開後選手動／接受編輯／計畫／自動／略過權限確認；Codex「變更權限」選要求核准／代我核准（只用 UI Automation，畫面不顯示目前模式，從下一則回覆起生效，目前模式從 rollout 的 `approvals_reviewer` 讀）。停止、Codex 的模型與權限不需要電腦閒置（純 UI Automation）。**實作完成**：小幫手測試 84 項本機通過，已裝到辦公室電腦並重啟，真實 API 回報正確（權限模式、可選項、截圖 113 KB）；手機端與實際切換待 CI 與實測。家裡那台電腦使用者決定先不做 |
 | 小幫手常駐安裝 | `install.ps1` **已在辦公室電腦執行（2026-10-27）**：登入排程工作 `DeskRemoteHelper`（一般權限）常駐 |
 
 ## 結構
@@ -65,7 +66,11 @@ scripts/build.sh           macOS CI：小幫手測試 → 產生專案 → 模�
 | `GET /health`、`GET /v1/state` | 健康檢查；電腦狀態、閒置、鎖定、能做的事（`capabilities`）；0.4.0 起加 `usage`（各 App 的額度：每個時段的 %、重設時間、取樣時間）與 `models`（手機可切換的模型） |
 | `GET /v1/{claude\|codex}/sessions?limit=50` | 對話清單 |
 | `GET /v1/{app}/sessions/{id}/events?after=&epoch=&prompt=&wait=25` | 逐字稿事件與目前的權限詢問（long-poll）；0.4.0 起加 `meta`（模型、推理強度、上下文已用／上限／%），模型一變就喚醒 |
-| `POST /v1/claude/sessions/{id}/model` | `{model, force?}` 在電腦上的模型選單選 `models` 裡的一個（0.4.0） |
+| `POST /v1/{app}/sessions/{id}/model` | `{model, force?}` 在電腦上的模型選單選 `models` 裡的一個（0.4.0） |
+| `POST /v1/claude/sessions/{id}/effort`、`POST /v1/{app}/sessions/{id}/mode` | `{effort}`／`{mode}`，選 `efforts`／`modes` 裡的一個（0.5.0） |
+| `POST /v1/claude/sessions/{id}/stop` | 按下正在執行那一輪的「停止」（0.5.0） |
+| `POST /v1/{app}/sessions/{id}/messages` 帶 `image` | base64 JPEG／PNG（解碼後 ≤ 8 MB，這個路徑的請求上限 12 MB），先貼照片再貼文字（0.5.0） |
+| `GET /v1/screen` | 電腦整個桌面的 JPEG；鎖定時 423（0.5.0） |
 | `GET /v1/{app}/sessions/{id}/items/{itemId}` | 被截短的工具輸出全文 |
 | `POST /v1/{app}/sessions/{id}/messages` | `{text, clientMsgId, force?}` 送出訊息 |
 | `POST /v1/{app}/sessions/{id}/permission` | `{promptId, decision: allow_once\|deny, force?}` |

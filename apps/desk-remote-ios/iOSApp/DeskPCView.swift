@@ -41,6 +41,12 @@ struct DeskPCView: View {
                     }
                     .accessibilityIdentifier("app-row-\(app.rawValue)")
                 }
+                if state?.can("screen") == true {
+                    NavigationLink(value: DeskRoute.screen(pcID)) {
+                        Label("看電腦畫面", systemImage: "display")
+                    }
+                    .accessibilityIdentifier("pc-screen")
+                }
             }
             if let state, DeskApp.allCases.contains(where: { state.usage($0) != nil }) {
                 Section("額度") {

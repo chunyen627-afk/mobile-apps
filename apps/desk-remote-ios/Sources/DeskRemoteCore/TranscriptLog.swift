@@ -68,7 +68,11 @@ public struct TranscriptLog: Equatable, Sendable {
     /// from the phone is shown as pending until the transcript itself has it.
     public func hasUserText(_ text: String, after seq: Int) -> Bool {
         let want = String(Self.normalized(text).prefix(40))
-        return events.contains { $0.seq > seq && $0.kind == "user" && Self.normalized($0.text).hasPrefix(want) }
+        // Codex records a photo and its caption as one message: "[圖片]\n<caption>".
+        return events.contains {
+            let seen = Self.normalized($0.text)
+            return $0.seq > seq && $0.kind == "user" && (seen.hasPrefix(want) || (seen.hasPrefix("[圖片]") && seen.contains(want)))
+        }
     }
 
     static func normalized(_ text: String) -> String {

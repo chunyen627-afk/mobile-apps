@@ -20,9 +20,25 @@ struct DeskRemoteRootView: View {
                         }
                     case .chat(let id, let app, let session):
                         DeskChatView(store: store, pcID: id, app: app, session: session)
+                    case .screen(let id):
+                        DeskScreenView(store: store, pcID: id)
                     }
                 }
         }
+        .onOpenURL { url in open(url) }
+    }
+
+    /// A notification's link: straight to that PC's conversation (or its administrator
+    /// requests, which are on the PC page). The PC is matched by name, else the only PC.
+    private func open(_ url: URL) {
+        guard let link = DeskLink(url) else { return }
+        guard let pc = store.pcs.first(where: { $0.name == link.pc }) ?? (store.pcs.count == 1 ? store.pcs.first : nil)
+        else { return }
+        var route: [DeskRoute] = [.pc(pc.id)]
+        if let app = link.app, let session = link.session {
+            route += [.sessions(pc.id, app), .chat(pc.id, app, SessionSummary(id: session, title: link.title ?? "對話"))]
+        }
+        path = route
     }
 }
 
@@ -30,6 +46,7 @@ enum DeskRoute: Hashable {
     case pc(UUID)
     case sessions(UUID, DeskApp)
     case chat(UUID, DeskApp, SessionSummary)
+    case screen(UUID)
 }
 
 extension View {

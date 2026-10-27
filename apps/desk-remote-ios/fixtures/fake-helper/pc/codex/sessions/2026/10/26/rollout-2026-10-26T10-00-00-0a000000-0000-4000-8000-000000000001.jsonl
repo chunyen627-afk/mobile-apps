@@ -1,5 +1,5 @@
 {"timestamp": "2026-10-26T10:00:00Z", "type": "session_meta", "payload": {"id": "0a000000-0000-4000-8000-000000000001"}}
-{"timestamp": "2026-10-26T10:00:00Z", "type": "turn_context", "payload": {"cwd": "C:\\work\\demo-app", "model": "gpt-6.1-sol", "effort": "high"}}
+{"timestamp": "2026-10-26T10:00:00Z", "type": "turn_context", "payload": {"cwd": "C:\\work\\demo-app", "model": "gpt-6.1-sol", "effort": "high", "approvals_reviewer": "auto_review"}}
 {"timestamp": "2026-10-26T10:00:01Z", "type": "event_msg", "payload": {"type": "task_started"}}
 {"timestamp": "2026-10-26T10:00:01Z", "type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "# AGENTS.md instructions for demo"}]}}
 {"timestamp": "2026-10-26T10:00:02Z", "type": "event_msg", "payload": {"type": "item_completed", "item": {"type": "UserMessage", "content": [{"type": "text", "text": "測試：請回覆 A1\n"}]}}}

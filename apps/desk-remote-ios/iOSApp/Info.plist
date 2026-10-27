@@ -12,6 +12,10 @@
 <key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
 <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
 <key>LSRequiresIPhoneOS</key><true/>
+<key>CFBundleURLTypes</key><array><dict>
+<key>CFBundleURLName</key><string>$(PRODUCT_BUNDLE_IDENTIFIER).open</string>
+<key>CFBundleURLSchemes</key><array><string>deskremote</string></array>
+</dict></array>
 <key>NSLocalNetworkUsageDescription</key><string>連到您在私人網路裡設定的電腦，讀取 Claude 與 Codex 桌面版的對話。</string>
 <key>NSFaceIDUsageDescription</key><string>核准電腦上需要系統管理員權限的指令前，確認是您本人。</string>
 <key>NSAppTransportSecurity</key><dict>

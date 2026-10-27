@@ -46,12 +46,20 @@ public struct HelperState: Decodable, Equatable, Sendable {
     public let elevate: ElevateSummary?
     /// Each app's plan limits; missing from helpers before 0.4.0, nil per app when unknown.
     public let usage: [String: PlanUsage?]?
-    /// Models the phone may switch to, per app (only Claude for now).
+    /// Models the phone may switch to, per app.
     public let models: [String: [String]]?
+    /// Reasoning efforts and permission modes the phone may pick, per app (helper 0.5.0).
+    public let efforts: [String: [String]]?
+    public let modes: [String: [String]]?
+    /// Apps whose running turn the phone can stop.
+    public let stop: [String]?
 
     public func app(_ app: DeskApp) -> AppState? { apps[app.rawValue] }
     public func usage(_ app: DeskApp) -> PlanUsage? { usage?[app.rawValue] ?? nil }
     public func models(_ app: DeskApp) -> [String] { can("model") ? models?[app.rawValue] ?? [] : [] }
+    public func efforts(_ app: DeskApp) -> [String] { can("effort") ? efforts?[app.rawValue] ?? [] : [] }
+    public func modes(_ app: DeskApp) -> [String] { can("mode") ? modes?[app.rawValue] ?? [] : [] }
+    public func canStop(_ app: DeskApp) -> Bool { can("stop") && (stop ?? []).contains(app.rawValue) }
 
     /// "read", "send", "permission", "new", "open".
     public func can(_ capability: String) -> Bool { capabilities.contains(capability) }
@@ -86,12 +94,15 @@ public struct ConversationMeta: Decodable, Equatable, Sendable {
     public let modelId: String?
     public let effort: String?
     public let context: Context?
+    /// The permission mode in the desktop app's own words ("自動", "代我核准", ...).
+    public let permission: String?
 
-    public init(model: String?, modelId: String? = nil, effort: String?, context: Context?) {
+    public init(model: String?, modelId: String? = nil, effort: String?, context: Context?, permission: String? = nil) {
         self.model = model
         self.modelId = modelId
         self.effort = effort
         self.context = context
+        self.permission = permission
     }
 }
 
@@ -121,6 +132,10 @@ struct ActionRequest: Encodable {
     var answers: [QuestionAnswer]?
     var project: String?
     var model: String?
+    var effort: String?
+    var mode: String?
+    /// A photo (JPEG, base64) pasted into the conversation before the text.
+    var image: String?
     var force: Bool?
 }
 

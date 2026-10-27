@@ -144,6 +144,16 @@ function Restore-Clipboard($saved) {
   if ($any) { [System.Windows.Forms.Clipboard]::SetDataObject($obj, $true) } else { [System.Windows.Forms.Clipboard]::Clear() }
 }
 
+# An image plus the same keep-it-private formats as Set-PrivateText.
+function Set-PrivateImage($image) {
+  $obj = New-Object System.Windows.Forms.DataObject
+  $obj.SetImage($image)
+  $obj.SetData('ExcludeClipboardContentFromMonitorProcessing', (New-Object System.IO.MemoryStream (, [byte[]](0))))
+  $obj.SetData('CanIncludeInClipboardHistory', (New-Object System.IO.MemoryStream (, [byte[]](0, 0, 0, 0))))
+  $obj.SetData('CanUploadToCloudClipboard', (New-Object System.IO.MemoryStream (, [byte[]](0, 0, 0, 0))))
+  [System.Windows.Forms.Clipboard]::SetDataObject($obj, $true)
+}
+
 # Text plus the formats that keep it out of clipboard history and cloud clipboard.
 function Set-PrivateText($text) {
   $obj = New-Object System.Windows.Forms.DataObject
@@ -157,7 +167,7 @@ function Set-PrivateText($text) {
 # Pastes into the message box of $scope (the expected page) and presses Enter only after the box
 # reads back the pasted text, when it can be read at all. A box found elsewhere in the window
 # (a page still being replaced after a switch) is never used.
-function Paste-Send($w, $scope, $editName, $text) {
+function Paste-Send($w, $scope, $editName, $text, $imagePath = $null) {
   $edit = Find-ByName $scope $CT::Edit $editName
   if (-not $edit) { Fail 'no-prompt-box' 'the message box is not on screen (a question may be pending)' }
   $saved = Save-Clipboard
@@ -173,6 +183,20 @@ function Paste-Send($w, $scope, $editName, $text) {
     $already = Box-Text $edit
     if ($already -and $already.Trim() -and $already.Trim() -ne $editName.Trim()) {
       Fail 'box-not-empty' 'the message box already holds unsent text'
+    }
+    if ($imagePath) {
+      # A photo from the phone: pasted as a bitmap first; the app attaches it to the message.
+      Add-Type -AssemblyName System.Drawing
+      $image = [System.Drawing.Image]::FromFile($imagePath)
+      try { Set-PrivateImage $image } finally { $image.Dispose() }
+      [System.Windows.Forms.SendKeys]::SendWait('^v')
+      Start-Sleep -Milliseconds 1500
+      if ([DeskWin]::GetForegroundWindow() -ne [IntPtr]$w.Current.NativeWindowHandle) { Fail 'focus-failed' 'focus moved after pasting the image' }
+      if (-not $text.Trim()) {
+        [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+        Start-Sleep -Milliseconds 300
+        return
+      }
     }
     Set-PrivateText $text
     [System.Windows.Forms.SendKeys]::SendWait('^v')
@@ -563,6 +587,155 @@ function Set-Model($w, $page, $s, $label) {
   }
 }
 
+# Rests the cursor on the centre of $e (no click), only when $w or a popup of the same app is
+# the top window there: Claude's effort submenu opens on hover only (read live 10/27).
+function Hover-Element($w, $e, $what) {
+  $r = $e.Current.BoundingRectangle
+  if ($r.IsEmpty -or $r.Width -lt 2) { Fail 'menu-failed' "$what has no position on screen" }
+  $pt = New-Object DeskWin+POINT
+  $pt.X = [int]($r.X + $r.Width / 2); $pt.Y = [int]($r.Y + $r.Height / 2)
+  $top = [DeskWin]::GetAncestor([DeskWin]::WindowFromPoint($pt), 2)
+  $owner = [uint32]0
+  $null = [DeskWin]::GetWindowThreadProcessId($top, [ref]$owner)
+  if ($owner -ne [uint32]$w.Current.ProcessId) { Fail 'focus-failed' "another window covers $what" }
+  [DeskWin]::SetCursorPos($pt.X, $pt.Y) | Out-Null
+}
+
+# The radio button (or menu item) named "<label>" or "<label> <description>" in the app's windows.
+function Find-Labelled($w, $type, $label) {
+  foreach ($win in $AE::RootElement.FindAll($Tree::Children, [System.Windows.Automation.Condition]::TrueCondition)) {
+    if ($win.Current.ProcessId -ne $w.Current.ProcessId) { continue }
+    foreach ($e in $win.FindAll($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $type)))) {
+      $n = $e.Current.Name
+      if ($n -eq $label -or $n.StartsWith("$label ")) { return $e }
+    }
+  }
+  return $null
+}
+
+function Wait-Labelled($w, $type, $label, $tries) {
+  for ($i = 0; $i -lt $tries; $i++) {
+    $hit = Find-Labelled $w $type $label
+    if ($hit) { return $hit }
+    Start-Sleep -Milliseconds 250
+  }
+  return $null
+}
+
+# Opens a menu button: its ExpandCollapse pattern first, else one checked click.
+function Open-Menu($w, $button, $what) {
+  $p = $null
+  if ($button.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$p)) { $p.Expand(); return }
+  Click-Element $w $button $what
+}
+
+# Esc closes Claude's menus; only while Claude is the foreground window.
+function Close-Claude-Menus($w) {
+  for ($i = 0; $i -lt 2; $i++) {
+    $open = $w.FindFirst($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Menu)))
+    if (-not $open) { return }
+    if ([DeskWin]::GetForegroundWindow() -ne [IntPtr]$w.Current.NativeWindowHandle) { return }
+    [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+    Start-Sleep -Milliseconds 300
+  }
+}
+
+# The model button ends with the effort: "<prefix>Opus 5.5 <effort>".
+function Shows-Effort($button, $label) { return $button.Current.Name.EndsWith(" $label") }
+
+# Claude's effort: model menu -> rest the cursor on the effort item -> its radio button.
+function Set-Effort($w, $page, $s, $label) {
+  $button = Prefixed-Button $page $s.model_prefix
+  if (-not $button) { $button = Prefixed-Button $w $s.model_prefix }
+  if (-not $button) { Fail 'not-found' 'no model button on screen' }
+  if (Shows-Effort $button $label) { return 'already' }
+  $before = [DeskWin]::GetForegroundWindow()
+  $cursor = New-Object DeskWin+POINT
+  [DeskWin]::GetCursorPos([ref]$cursor) | Out-Null
+  try {
+    Bring-Front $w
+    Open-Menu $w $button 'the model button'
+    $item = Wait-Labelled $w $CT::MenuItem $s.effort_item 12
+    if (-not $item) { Fail 'model-failed' 'the effort item is not in the model menu' }
+    Hover-Element $w $item 'the effort item'
+    $radio = Wait-Labelled $w $CT::RadioButton $label 12
+    if (-not $radio) { Fail 'model-failed' ("the effort is not in the menu; radio buttons: " + ((Radio-Names $w) -join ' | ')) }
+    if (-not (Invoke-Element $radio)) { Fail 'not-invokable' 'the effort could not be chosen' }
+    for ($i = 0; $i -lt 12; $i++) {
+      Start-Sleep -Milliseconds 250
+      $now = Prefixed-Button $w $s.model_prefix
+      if ($now -and (Shows-Effort $now $label)) { return 'invoke' }
+    }
+    Fail 'model-failed' 'the model button does not show the chosen effort'
+  } finally {
+    Start-Sleep -Milliseconds 200
+    Close-Claude-Menus $w
+    [DeskWin]::SetCursorPos($cursor.X, $cursor.Y) | Out-Null
+    if ($before -ne [IntPtr]::Zero) { [DeskWin]::SetForegroundWindow($before) | Out-Null }
+  }
+}
+
+# Claude's permission mode button is named after the current mode.
+function Mode-Button($scope, $s) {
+  $buttons = $scope.FindAll($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Button)))
+  foreach ($b in $buttons) { if (@($s.modes) -contains $b.Current.Name) { return $b } }
+  return $null
+}
+
+function Set-ClaudeMode($w, $page, $s, $label) {
+  $button = Mode-Button $page $s
+  if (-not $button) { $button = Mode-Button $w $s }
+  if (-not $button) { Fail 'not-found' 'no permission mode button on screen' }
+  if ($button.Current.Name -eq $label) { return 'already' }
+  $before = [DeskWin]::GetForegroundWindow()
+  $cursor = New-Object DeskWin+POINT
+  [DeskWin]::GetCursorPos([ref]$cursor) | Out-Null
+  try {
+    Bring-Front $w
+    Open-Menu $w $button 'the permission mode button'
+    $radio = Wait-Labelled $w $CT::RadioButton $label 12
+    if (-not $radio) { Fail 'model-failed' ("the mode is not in the menu; radio buttons: " + ((Radio-Names $w) -join ' | ')) }
+    if (-not (Invoke-Element $radio)) { Fail 'not-invokable' 'the mode could not be chosen' }
+    for ($i = 0; $i -lt 12; $i++) {
+      Start-Sleep -Milliseconds 250
+      $now = Mode-Button $w $s
+      if ($now -and $now.Current.Name -eq $label) { return 'invoke' }
+    }
+    Fail 'model-failed' 'the permission mode button does not show the chosen mode'
+  } finally {
+    Start-Sleep -Milliseconds 200
+    Close-Claude-Menus $w
+    [DeskWin]::SetCursorPos($cursor.X, $cursor.Y) | Out-Null
+    if ($before -ne [IntPtr]::Zero) { [DeskWin]::SetForegroundWindow($before) | Out-Null }
+  }
+}
+
+# Codex: UI Automation only. Its permission button does not show the current mode, so a pick
+# can only be checked by the next turn; 'invoke' means the menu item was pressed.
+function Set-CodexMode($w, $page, $s, $label) {
+  $button = Find-ByName $page $CT::Button $s.permission_button
+  if (-not $button) { $button = Find-ByName $w $CT::Button $s.permission_button }
+  if (-not $button) { Fail 'not-found' 'no permission button on screen' }
+  $p = $null
+  if (-not $button.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$p)) { Fail 'not-invokable' 'the permission button does not expand' }
+  $p.Expand()
+  $item = Wait-Labelled $w $CT::MenuItem $label 16
+  if (-not $item) { Fail 'model-failed' 'the mode is not in the permission menu' }
+  if (-not (Invoke-Element $item)) { Fail 'not-invokable' 'the mode could not be chosen' }
+  Start-Sleep -Milliseconds 600
+  return 'invoke'
+}
+
+# The stop button Claude shows while a turn runs, inside the conversation's page.
+function Stop-Turn($w, $page, $s) {
+  if (-not $s.stop) { Fail 'not-supported' 'no stop button name for this app' }
+  $b = Find-ByName $page $CT::Button $s.stop
+  if (-not $b) { $b = Find-ByName $w $CT::Button $s.stop }
+  if (-not $b) { Fail 'not-running' 'no stop button: nothing is running' }
+  if (-not (Invoke-Element $b)) { Fail 'not-invokable' 'the stop button could not be pressed' }
+  return 'invoke'
+}
+
 function Run-Command($c) {
   $s = $c.strings
   switch ($c.cmd) {
@@ -573,23 +746,41 @@ function Run-Command($c) {
       $prompt = Get-Prompt $w $s
       $edit = Find-ByName $w $CT::Edit $s.edit
       # The composer's model and usage buttons, in one pass over the buttons (Claude only).
-      $model = $null; $usage = $null
-      if ($s.model_prefix -or $s.usage_prefix) {
+      $model = $null; $usage = $null; $mode = $null; $running = $false
+      if ($s.model_prefix -or $s.usage_prefix -or $s.modes -or $s.stop) {
         $buttons = $w.FindAll($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Button)))
         foreach ($b in $buttons) {
           $n = $b.Current.Name
           if (-not $model -and $s.model_prefix -and $n.StartsWith($s.model_prefix)) { $model = $n }
           if (-not $usage -and $s.usage_prefix -and $n.StartsWith($s.usage_prefix)) { $usage = $n }
+          if (-not $mode -and $s.modes -and -not $s.permission_button -and (@($s.modes) -contains $n)) { $mode = $n }
+          if ($s.stop -and $n -eq $s.stop) { $running = $true }
         }
       }
       return @{ ok = $true; window = $true; docs = @(Get-Docs $w); edit = [bool]$edit; prompt = $prompt
-        model = $model; usage = $usage }
+        model = $model; usage = $usage; mode = $mode; running = $running }
     }
     'model' {
       $w = Need-Window $c.app
       $page = Need-Doc $w $c.doc
       if ($c.app -eq 'codex') { return @{ ok = $true; how = (Set-CodexModel $w $page $s $c.model) } }
       return @{ ok = $true; how = (Set-Model $w $page $s $c.model) }
+    }
+    'effort' {
+      $w = Need-Window $c.app
+      $page = Need-Doc $w $c.doc
+      return @{ ok = $true; how = (Set-Effort $w $page $s $c.effort) }
+    }
+    'mode' {
+      $w = Need-Window $c.app
+      $page = Need-Doc $w $c.doc
+      if ($c.app -eq 'codex') { return @{ ok = $true; how = (Set-CodexMode $w $page $s $c.mode) } }
+      return @{ ok = $true; how = (Set-ClaudeMode $w $page $s $c.mode) }
+    }
+    'stop' {
+      $w = Need-Window $c.app
+      $page = Need-Doc $w $c.doc
+      return @{ ok = $true; how = (Stop-Turn $w $page $s) }
     }
     'docs' {
       $w = Find-Window $c.app
@@ -607,7 +798,7 @@ function Run-Command($c) {
     'send' {
       $w = Need-Window $c.app
       $page = Need-Doc $w $c.doc
-      Paste-Send $w $page $s.edit $c.text
+      Paste-Send $w $page $s.edit $c.text $c.image
       return @{ ok = $true }
     }
     'new_send' {

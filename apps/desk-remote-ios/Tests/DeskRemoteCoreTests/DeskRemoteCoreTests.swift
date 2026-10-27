@@ -1,4 +1,5 @@
 @testable import DeskRemoteCore
+import UIKit
 import XCTest
 
 final class EndpointTests: XCTestCase {
@@ -316,6 +317,64 @@ final class MetaAndUsageTests: XCTestCase {
         let switched = ConversationMeta(model: "Sonnet 5.5", effort: "高", context: nil)
         XCTAssertTrue(log.apply(EventPage(epoch: "e", reset: false, events: [], earlier: false, cursor: 0, status: "idle",
                                           prompt: nil, meta: switched)), "a model switch alone must redraw")
+    }
+}
+
+final class MoreControlsTests: XCTestCase {
+    func testNotificationLinks() throws {
+        let link = try XCTUnwrap(DeskLink(URL(string:
+            "deskremote://open?pc=%E8%BE%A6%E5%85%AC%E5%AE%A4&app=claude&session=local_1&title=%E6%95%B4%E7%90%86")!))
+        XCTAssertEqual(link.pc, "辦公室")
+        XCTAssertEqual(link.app, .claude)
+        XCTAssertEqual(link.session, "local_1")
+        XCTAssertEqual(link.title, "整理")
+        XCTAssertFalse(link.elevate)
+        let elevate = try XCTUnwrap(DeskLink(URL(string: "deskremote://open?pc=PC&elevate=1")!))
+        XCTAssertTrue(elevate.elevate)
+        XCTAssertNil(elevate.session)
+        XCTAssertNil(DeskLink(URL(string: "deskremote://open?app=claude")!), "no PC")
+        XCTAssertNil(DeskLink(URL(string: "https://open?pc=PC")!), "other scheme")
+        XCTAssertNil(DeskLink(URL(string: "deskremote://open?pc=PC&app=other&session=x")!)?.app)
+    }
+
+    func testDecodesChoicesAndPermission() throws {
+        let state = try HelperClient.decode(HelperState.self, status: 200, data: Data("""
+        {"ok":true,"pc":{"name":"P","helperVersion":"0.5.0"},"capabilities":["read","effort","mode","stop","screen"],
+         "apps":{},"presence":{"idleSeconds":1,"locked":false},"warnings":[],
+         "efforts":{"claude":["低","高"]},"modes":{"claude":["手動"],"codex":["要求核准","代我核准"]},"stop":["claude"]}
+        """.utf8))
+        XCTAssertEqual(state.efforts(.claude), ["低", "高"])
+        XCTAssertEqual(state.efforts(.codex), [])
+        XCTAssertEqual(state.modes(.codex), ["要求核准", "代我核准"])
+        XCTAssertTrue(state.canStop(.claude))
+        XCTAssertFalse(state.canStop(.codex))
+        XCTAssertTrue(state.can("screen"))
+        let page = try HelperClient.decode(EventPage.self, status: 200, data: Data("""
+        {"epoch":"e","reset":true,"events":[],"earlier":false,"cursor":0,"status":"idle","prompt":null,
+         "meta":{"model":"Opus 5.5","effort":"高","context":null,"permission":"自動"}}
+        """.utf8))
+        XCTAssertEqual(page.meta?.permission, "自動")
+    }
+
+    func testPhotosAreShrunkToJPEG() throws {
+        let big = UIGraphicsImageRenderer(size: CGSize(width: 4000, height: 1000)).pngData { context in
+            UIColor.orange.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 4000, height: 1000))
+        }
+        let data = try XCTUnwrap(DeskPhoto.prepare(big))
+        XCTAssertTrue(data.starts(with: [0xFF, 0xD8, 0xFF]), "not a JPEG")
+        let image = try XCTUnwrap(UIImage(data: data))
+        XCTAssertEqual(image.size.width * image.scale, 2048, accuracy: 1)
+        XCTAssertEqual(image.size.height * image.scale, 512, accuracy: 1)
+        XCTAssertNil(DeskPhoto.prepare(Data("not an image".utf8)))
+    }
+
+    func testCodexPhotoCaptionClearsThePendingBubble() {
+        var log = TranscriptLog()
+        log.apply(EventPage(epoch: "e", reset: true, events: [TranscriptEvent(seq: 5, kind: "user", text: "[圖片]\n看這張圖")],
+                            earlier: false, cursor: 5, status: "working", prompt: nil))
+        XCTAssertTrue(log.hasUserText("看這張圖", after: 4))
+        XCTAssertFalse(log.hasUserText("別的", after: 4))
     }
 }
 

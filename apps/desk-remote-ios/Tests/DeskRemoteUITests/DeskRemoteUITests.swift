@@ -379,6 +379,64 @@ final class DeskRemoteUITests: XCTestCase {
         snapshot("22-pc-usage")
     }
 
+    func test23StopARunningTurn() throws {
+        try launchWithHelper()
+        openChat("claude", claudeC)
+        type("長任務：請慢慢整理", into: element("chat-input"))
+        app.buttons["chat-send"].tap()
+        let stop = app.buttons["chat-stop"]
+        XCTAssertTrue(stop.waitForExistence(timeout: 20), "no stop button while the turn runs")
+        snapshot("23a-running")
+        stop.tap()
+        XCTAssertTrue(waitFor(element("chat-stop-state"), labelContains: "已停止", timeout: 20),
+                      "stop did not finish: \(element("chat-stop-state").label)")
+        XCTAssertTrue(text("（已停止）").waitForExistence(timeout: 20), "the stopped turn is not in the transcript")
+        snapshot("23-stopped")
+    }
+
+    func test24ScreenView() throws {
+        try launchWithHelper()
+        openPC()
+        XCTAssertTrue(element("pc-presence").waitForExistence(timeout: 10), "PC state did not load")
+        let row = element("pc-screen")
+        XCTAssertTrue(reveal(row), "screen row missing")
+        row.tap()
+        XCTAssertTrue(element("screen-image").waitForExistence(timeout: 15), "the screen picture did not load")
+        snapshot("24-screen")
+    }
+
+    func test25NotificationLinkOpensTheConversation() throws {
+        try launchWithHelper()
+        XCTAssertTrue(element("pc-row-示範電腦").waitForExistence(timeout: 10), "preset PC missing")
+        let link = "deskremote://open?pc=%E7%A4%BA%E7%AF%84%E9%9B%BB%E8%85%A6&app=claude&session=\(claudeB)"
+            + "&title=%E4%BF%AE%E6%AD%A3%E5%BB%BA%E7%BD%AE%E9%8C%AF%E8%AA%A4"
+        app.open(try XCTUnwrap(URL(string: link)))
+        XCTAssertTrue(app.navigationBars["修正建置錯誤"].waitForExistence(timeout: 15), "the linked conversation did not open")
+        // test12 already answered this conversation's question on the shared fake helper.
+        XCTAssertTrue(text("要修改 main.c 第 42 行").waitForExistence(timeout: 15), "its transcript is not shown")
+        snapshot("25-opened-from-link")
+    }
+
+    func test26EffortAndPermissionMode() throws {
+        try launchWithHelper()
+        openChat("claude", claudeA)
+        let bar = element("chat-meta")
+        XCTAssertTrue(bar.waitForExistence(timeout: 10), "meta bar missing")
+        bar.tap()
+        let effort = element("effort-超高")
+        XCTAssertTrue(reveal(effort), "effort choices missing")
+        effort.tap()
+        XCTAssertTrue(waitFor(element("effort-busy"), labelContains: "推理強度已切換為 超高", timeout: 20),
+                      "effort switch did not finish: \(element("effort-busy").label)")
+        let mode = element("mode-計畫")
+        XCTAssertTrue(reveal(mode), "mode choices missing")
+        mode.tap()
+        XCTAssertTrue(waitFor(element("mode-busy"), labelContains: "權限模式已切換為 計畫", timeout: 20),
+                      "mode switch did not finish: \(element("mode-busy").label)")
+        XCTAssertTrue(waitFor(element("meta-permission"), labelContains: "計畫", timeout: 30), "sheet still shows the old mode")
+        snapshot("26-effort-and-mode")
+    }
+
     // MARK: - Helpers
 
     private struct Helper {

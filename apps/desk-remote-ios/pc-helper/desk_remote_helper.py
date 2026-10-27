@@ -36,7 +36,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.4.0'
+VERSION = '0.5.0'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -150,9 +150,24 @@ def ui_model(name, strip):
         return None, None
     rest = name[len(strip):].strip()
     head, _, last = rest.rpartition(' ')
-    if head and last in EFFORT_LABELS.values():
+    if head and (last in EFFORT_LABELS.values() or last == 'Ultracode'):
         return head, last
     return rest or None, None
+
+
+# Codex's approvals_reviewer in turn_context -> the permission menu's wording.
+CODEX_MODES = {'user': '要求核准', 'auto_review': '代我核准'}
+
+
+def open_link(pc_name, app=None, session_id=None, title=None, elevate=False):
+    """The phone app's link a notification opens: straight to the conversation (or the
+    administrator requests) on this PC."""
+    query = {'pc': pc_name}
+    if elevate:
+        query['elevate'] = '1'
+    if app and session_id:
+        query.update({'app': app, 'session': session_id, 'title': title or ''})
+    return 'deskremote://open?' + urllib.parse.urlencode(query, quote_via=urllib.parse.quote)
 
 
 def flatten(content):
@@ -276,6 +291,8 @@ class ClaudeParser:
                     self.suggestions = None
                 elif block.get('type') == 'image':
                     out.append({'kind': 'user', 'text': '[圖片]', 'ts': ts})
+                    self.status = 'working'
+                    self.suggestions = None
                 elif block.get('type') == 'tool_result':
                     tool = self.tool_names.get(block.get('tool_use_id'), '')
                     if tool == QUESTION_TOOL:
@@ -326,7 +343,7 @@ class CodexParser:
         self.modern = False
         self.calls = {}
         self.status = 'idle'
-        self.model = self.effort = None
+        self.model = self.effort = self.mode = None
         self.context = self.window = None
         self.rate_limits = self.rate_ts = None
 
@@ -338,6 +355,7 @@ class CodexParser:
         if kind == 'turn_context':
             self.model = payload.get('model') or self.model
             self.effort = payload.get('effort') or self.effort
+            self.mode = CODEX_MODES.get(payload.get('approvals_reviewer'), self.mode)
             return []
         if kind == 'event_msg':
             if ptype == 'token_count':
@@ -546,8 +564,9 @@ class ClaudeSource:
     %LOCALAPPDATA%/Claude-Data/claude_<package>/claude-code-sessions/<account>/<org>/local_<id>.json.
     This is an internal format: anything unexpected is skipped and counted, never guessed."""
 
-    PERMISSION_LABELS = {'default': '手動核准', 'acceptEdits': '自動接受編輯', 'plan': '規劃模式',
-                         'auto': '自動', 'bypassPermissions': '略過權限', 'dontAsk': '不詢問'}
+    # The desktop app's own names for the modes (its permission mode menu, read 10/27).
+    PERMISSION_LABELS = {'default': '手動', 'acceptEdits': '接受編輯', 'plan': '計畫',
+                         'auto': '自動', 'bypassPermissions': '略過權限確認', 'dontAsk': '不詢問'}
     id_pattern = CLAUDE_ID
     parser = ClaudeParser
 
@@ -637,8 +656,10 @@ class ClaudeSource:
         data = self.metadata(os.path.join(folder, f'{session_id}.json')) if folder and CLAUDE_ID.match(session_id) else None
         model_id = (data or {}).get('model') or parser.model
         effort = (data or {}).get('effort')
+        mode = (data or {}).get('permissionMode')
         return {'model': model_label(model_id), 'modelId': model_id, 'effort': EFFORT_LABELS.get(effort, effort),
-                'context': context_info(parser.context, self.context_window(model_id))}
+                'context': context_info(parser.context, self.context_window(model_id)),
+                'permission': self.PERMISSION_LABELS.get(mode, mode)}
 
     def usage(self):
         """Plan limits the desktop app last read, from its plan-usage-history.json: the newest
@@ -783,7 +804,7 @@ class CodexSource:
     def meta(thread_id, parser):
         return {'model': model_label(parser.model), 'modelId': parser.model,
                 'effort': EFFORT_LABELS.get(parser.effort, parser.effort),
-                'context': context_info(parser.context, parser.window)}
+                'context': context_info(parser.context, parser.window), 'permission': parser.mode}
 
     def usage(self):
         """Plan limits from the newest `token_count` event that carries them, in the most recent
@@ -992,11 +1013,15 @@ class Notifier:
     def __init__(self, cfg):
         self.cfg = cfg.get('notify') or {}
 
-    def post(self, title, message, priority=3, tags=None):
+    def post(self, title, message, priority=3, tags=None, click=None):
+        """`click` is the phone app's link (open_link): tapping the notification opens it there."""
         if not self.cfg.get('topic') or not self.cfg.get('server'):
             return
-        body = json.dumps({'topic': self.cfg['topic'], 'title': title, 'message': message,
-                           'priority': priority, 'tags': tags or []}, ensure_ascii=False).encode('utf-8')
+        payload = {'topic': self.cfg['topic'], 'title': title, 'message': message, 'priority': priority,
+                   'tags': tags or []}
+        if click:
+            payload['click'] = click
+        body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
         request = urllib.request.Request(self.cfg['server'], data=body, method='POST',
                                          headers={'Content-Type': 'application/json'})
         with urllib.request.urlopen(request, timeout=10) as response:
@@ -1064,6 +1089,8 @@ class Hub:
         self.ui = lambda app: {}          # what the watcher last read on each app's screen
         self.strings = {}                 # ui_strings.json, once windows can be driven
         self.usage_cache = (0.0, None)
+        self.screen = None                # () -> JPEG bytes of the PC's screen, when it can be read
+        self.alerts = {'usage_percent': 80, 'context_percent': 80}
         self.lock = threading.Lock()
 
     def state(self):
@@ -1079,12 +1106,16 @@ class Hub:
         if self.elevate is not None:
             with self.elevate.lock:
                 elevate = {'available': self.elevate.available, 'pending': len(self.elevate.pending)}
-        models = {app: list(self.strings[app]['models']) for app in APPS
-                  if 'model' in self.capabilities and (self.strings.get(app) or {}).get('models')}
+        def choices(capability, key):
+            return {app: list(self.strings[app][key]) for app in APPS
+                    if capability in self.capabilities and (self.strings.get(app) or {}).get(key)}
+        stop = [app for app in APPS if 'stop' in self.capabilities and (self.strings.get(app) or {}).get('stop')]
+        extra = (['elevate'] if self.elevate is not None else []) + (['screen'] if self.screen is not None else [])
         return {'ok': True, 'pc': {'name': self.pc_name, 'helperVersion': VERSION},
-                'capabilities': self.capabilities + (['elevate'] if self.elevate is not None else []),
+                'capabilities': self.capabilities + extra,
                 'apps': apps, 'presence': {'idleSeconds': presence.get('idleSeconds'), 'locked': presence.get('locked')},
-                'warnings': warnings, 'elevate': elevate, 'usage': self.usage(), 'models': models}
+                'warnings': warnings, 'elevate': elevate, 'usage': self.usage(), 'models': choices('model', 'models'),
+                'efforts': choices('effort', 'efforts'), 'modes': choices('mode', 'modes'), 'stop': stop}
 
     def usage(self):
         """Each app's plan limits (percent used per window), read at most every 30 seconds.
@@ -1117,10 +1148,21 @@ class Hub:
             meta = self.sources[app].meta(session_id, transcript.parser)
         seen = self.ui(app)
         info = self.info(app, session_id)
-        label, effort = ui_model(seen.get('model'), (self.strings.get(app) or {}).get('model_strip'))
-        if label and info and seen.get('docs') == [info['doc']]:
-            meta['model'], meta['effort'] = label, effort or meta['effort']
+        if info and seen.get('docs') == [info['doc']]:
+            label, effort = ui_model(seen.get('model'), (self.strings.get(app) or {}).get('model_strip'))
+            if label:
+                meta['model'], meta['effort'] = label, effort or meta['effort']
+            if seen.get('mode'):
+                meta['permission'] = seen['mode']
         return meta
+
+    def session_for_doc(self, app, doc):
+        """(id, title) of the listed conversation whose page title is `doc`, for notification links."""
+        for row in self.sources[app].list_sessions(50):
+            info = self.info(app, row['id'])
+            if info and info['doc'] == doc:
+                return row['id'], row['title']
+        return None, None
 
     def sessions(self, app, limit):
         source = self.sources[app]
@@ -1170,8 +1212,8 @@ class Hub:
             if now_waiting != waiting:
                 changed = True
             now_meta = self.meta(app, session_id, transcript)
-            if now_meta['model'] != meta['model'] or now_meta['effort'] != meta['effort']:
-                changed = True  # a model switched from the phone shows without waiting for a reply
+            if any(now_meta.get(k) != meta.get(k) for k in ('model', 'effort', 'permission')):
+                changed = True  # a switch made from the phone shows without waiting for a reply
             if page['events'] or page['reset'] or changed or time.monotonic() >= deadline or (stop and stop()):
                 page.update({'ok': True, 'prompt': prompt, 'meta': now_meta})
                 return page
@@ -1307,8 +1349,9 @@ class WindowsDriver:
     def invoke(self, app, name, doc=None):
         self.ask(app, cmd='invoke', name=name, doc=doc)
 
-    def send(self, app, doc, text):
-        self.ask(app, cmd='send', doc=doc, text=text)
+    def send(self, app, doc, text, image=None):
+        """Pastes `image` (a file path) first when given, then `text`, then Enter."""
+        self.ask(app, cmd='send', doc=doc, text=text, image=image)
 
     def new_send(self, app, button, text):
         self.ask(app, cmd='new_send', name=button, text=text)
@@ -1327,6 +1370,17 @@ class WindowsDriver:
     def set_model(self, app, doc, label):
         """Picks `label` in the model menu of the open conversation; 'already' if it was chosen."""
         return self.ask(app, cmd='model', doc=doc, model=label).get('how')
+
+    def set_effort(self, app, doc, label):
+        if app != 'claude':
+            raise ActionError('not-supported', 'only Claude effort can be switched')
+        return self.ask(app, cmd='effort', doc=doc, effort=label).get('how')
+
+    def set_mode(self, app, doc, label):
+        return self.ask(app, cmd='mode', doc=doc, mode=label).get('how')
+
+    def stop(self, app, doc):
+        return self.ask(app, cmd='stop', doc=doc).get('how')
 
 
 def codex_package_exe():
@@ -1380,6 +1434,9 @@ class UiWatcher:
         self.turns = {}         # (app, id) -> last parser status
         self.questions = {}     # (app, id) -> option question waiting at the last look
         self.checked_once = False
+        self.context_alerted, self.usage_alerted = set(), set()
+        self.last_usage_check = 0.0
+        self.usage_checked_once = False
         self.last_turn_check = 0.0
         self.lock = threading.Lock()
 
@@ -1397,10 +1454,13 @@ class UiWatcher:
         with self.lock:
             old = (self.state.get(app) or {}).get('prompt')
             self.state[app] = {'docs': docs, 'prompt': prompt, 'window': answer.get('window'),
-                               'model': answer.get('model'), 'usage': answer.get('usage')}
+                               'model': answer.get('model'), 'usage': answer.get('usage'),
+                               'mode': answer.get('mode'), 'running': answer.get('running')}
         if prompt and (not old or old['promptId'] != prompt['promptId']):
             title = prompt['doc'].removesuffix(' - Claude Code')
-            self.send(f'🔔 {APP_NAMES[app]} 在等你核准', f'{self.pc_name}・「{title}」：{prompt["text"][:120]}', 4, ['bell'])
+            session_id, _ = self.hub.session_for_doc(app, prompt['doc'])
+            self.send(f'🔔 {APP_NAMES[app]} 在等你核准', f'{self.pc_name}・「{title}」：{prompt["text"][:120]}', 4, ['bell'],
+                      open_link(self.pc_name, app, session_id, title) if session_id else open_link(self.pc_name))
 
     def prompt_for(self, app, session_id):
         info = self.hub.info(app, session_id)
@@ -1428,19 +1488,57 @@ class UiWatcher:
                 transcript.refresh()
                 status = transcript.parser.status
                 question = (getattr(transcript.parser, 'question', None) or {}).get('questionId')
+                link = open_link(self.pc_name, app, row['id'], row['title'])
                 # Questions already waiting when the helper started are not news.
                 if question and self.checked_once and question != self.questions.get(key):
-                    self.send(f'❓ {APP_NAMES[app]} 在等你選擇', f'{self.pc_name}・「{row["title"]}」', 4, ['question'])
+                    self.send(f'❓ {APP_NAMES[app]} 在等你選擇', f'{self.pc_name}・「{row["title"]}」', 4, ['question'], link)
                 elif self.turns.get(key) == 'working' and status == 'idle':
-                    self.send(f'✅ {APP_NAMES[app]} 完成一輪', f'{self.pc_name}・「{row["title"]}」', 3, ['white_check_mark'])
+                    self.send(f'✅ {APP_NAMES[app]} 完成一輪', f'{self.pc_name}・「{row["title"]}」', 3, ['white_check_mark'], link)
                 self.turns[key] = status
                 self.questions[key] = question
+                self.check_context(app, row, transcript, link)
         self.checked_once = True
+        if time.monotonic() - self.last_usage_check > 300:
+            self.last_usage_check = time.monotonic()
+            self.check_usage()
 
-    def send(self, title, message, priority, tags):
+    def check_context(self, app, row, transcript, link):
+        """Once per conversation when its context passes the threshold (again after it drops,
+        e.g. compacted)."""
+        key = (app, row['id'])
+        context = self.hub.meta(app, row['id'], transcript).get('context') or {}
+        percent, limit = context.get('percent'), self.hub.alerts['context_percent']
+        if percent is None or percent < limit:
+            self.context_alerted.discard(key)
+            return
+        if key not in self.context_alerted:
+            self.context_alerted.add(key)
+            if self.checked_once:  # already past it when the helper started: not news
+                self.send(f'⚠️ {APP_NAMES[app]} 上下文快滿了', f'{self.pc_name}・「{row["title"]}」已用 {percent}%', 4,
+                          ['warning'], link)
+
+    def check_usage(self):
+        """Once per window when a plan limit passes the threshold (again after it resets)."""
+        limit = self.hub.alerts['usage_percent']
+        for app, usage in (self.hub.usage() or {}).items():
+            for window in (usage or {}).get('windows') or []:
+                key = (app, window['label'])
+                if window['percent'] < limit:
+                    self.usage_alerted.discard(key)
+                elif key not in self.usage_alerted:
+                    self.usage_alerted.add(key)
+                    if not self.usage_checked_once:
+                        continue  # already past it when the helper started: not news
+                    reset = window.get('resetsText') or ''
+                    self.send(f'⚠️ {APP_NAMES[app]} 額度已用 {window["percent"]}%',
+                              f'{self.pc_name}・{window["label"]}{"・" + reset if reset else ""}', 4, ['warning'],
+                              open_link(self.pc_name))
+        self.usage_checked_once = True
+
+    def send(self, title, message, priority, tags, click=None):
         if self.notify:
             try:
-                self.notify(title, message, priority, tags)
+                self.notify(title, message, priority, tags, click)
             except OSError:
                 logging.exception('notification failed')
 
@@ -1463,6 +1561,21 @@ class UiWatcher:
 APP_NAMES = {'claude': 'Claude', 'codex': 'Codex'}
 
 
+def decode_image(value, limit=8 * 1024 * 1024):
+    """Bytes of a base64 JPEG or PNG from the phone, or None when it is not one or too big."""
+    import base64
+    import binascii
+    if not isinstance(value, str) or len(value) > limit * 4 // 3 + 8:
+        return None
+    try:
+        data = base64.b64decode(value, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    if len(data) > limit or not (data.startswith(b'\xff\xd8\xff') or data.startswith(b'\x89PNG\r\n\x1a\n')):
+        return None
+    return data
+
+
 def normalized(text):
     return re.sub(r'\s+', ' ', text or '').strip()
 
@@ -1480,6 +1593,7 @@ class ActionRunner:
     KEEP = 1800        # seconds an action's result stays readable
     MAX_QUEUED = 5
     MAX_TEXT = 20000
+    MAX_IMAGE = 8 * 1024 * 1024   # a photo from the phone, after decoding
 
     def __init__(self, hub, driver, presence, watcher, notify=None, pc_name='', strings=None,
                  idle_seconds=60, verify_seconds=20, doc_wait=15, settle_seconds=2.0, clock=time.monotonic):
@@ -1509,19 +1623,29 @@ class ActionRunner:
     def submit(self, kind, app, session_id, payload):
         force = bool(payload.get('force'))
         text = payload.get('text')
+        image = None
+        if kind == 'send' and payload.get('image') is not None:
+            image = decode_image(payload.get('image'))
+            if image is None:
+                return 400, error('bad-request', f'照片要是 JPEG 或 PNG，最大 {self.MAX_IMAGE // 1048576} MB')
+            text = text or ''
         if kind in ('send', 'new'):
-            if not isinstance(text, str) or not text.strip():
+            if not isinstance(text, str) or (not text.strip() and image is None):
                 return 400, error('bad-request', '訊息是空的')
             if len(text) > self.MAX_TEXT:
                 return 400, error('bad-request', f'訊息太長（上限 {self.MAX_TEXT} 字）')
-        if kind == 'model':
-            models = (self.strings.get(app) or {}).get('models') or []
-            if not models:
-                return 400, error('not-supported', '這個 App 還不能從手機切換模型')
-            if payload.get('model') not in models:
-                return 400, error('bad-request', '沒有這個模型')
+        strings = self.strings.get(app) or {}
+        choice_keys = {'model': ('models', '模型'), 'effort': ('efforts', '推理強度'), 'mode': ('modes', '權限模式')}
+        if kind in choice_keys:
+            key, what = choice_keys[kind]
+            if not strings.get(key):
+                return 400, error('not-supported', f'這個 App 還不能從手機切換{what}')
+            if payload.get(kind) not in strings[key]:
+                return 400, error('bad-request', f'沒有這個{what}')
+        if kind == 'stop' and not strings.get('stop'):
+            return 400, error('not-supported', '這個 App 還不能從手機停止')
         info = None
-        if kind in ('send', 'open', 'permission', 'answer', 'model'):
+        if kind in ('send', 'open', 'permission', 'answer', 'model', 'effort', 'mode', 'stop'):
             info = self.hub.info(app, session_id)
             if info is None:
                 return 404, error('not-found', '找不到這個對話')
@@ -1537,6 +1661,9 @@ class ActionRunner:
             if not current or current['promptId'] != payload.get('promptId'):
                 return 409, error('prompt-changed', '電腦上的權限詢問已經不一樣了，請重新整理')
             needs_front = app == 'claude' and decision == 'allow_once'
+        elif kind == 'stop' or (app == 'codex' and kind in ('model', 'mode')):
+            # Pressed through UI Automation alone; opening another conversation still checks.
+            needs_front = False
         else:
             needs_front = True
         denied = self.gate(force, needs_front)
@@ -1553,7 +1680,8 @@ class ActionRunner:
             action = {'id': secrets.token_hex(6), 'kind': kind, 'app': app, 'sessionId': session_id, 'info': info,
                       'text': text, 'decision': payload.get('decision'), 'promptId': payload.get('promptId'),
                       'questionId': payload.get('questionId'), 'answers': payload.get('answers'),
-                      'project': payload.get('project'), 'model': payload.get('model'), 'force': force, 'state': 'queued', 'message': '排隊中',
+                      'project': payload.get('project'), 'model': payload.get('model'), 'effort': payload.get('effort'),
+                      'mode': payload.get('mode'), 'image': image, 'needsFront': needs_front, 'force': force, 'state': 'queued', 'message': '排隊中',
                       'error': None, 'verified': None, 'created': self.clock()}
             self.actions[action['id']] = action
             if isinstance(client_id, str) and len(client_id) <= 100:
@@ -1635,7 +1763,8 @@ class ActionRunner:
     def run(self, action):
         self.update(action, state='running', message='處理中')
         handler = {'send': self.do_send, 'permission': self.do_permission, 'new': self.do_new,
-                   'open': self.do_open, 'answer': self.do_answer, 'model': self.do_model}[action['kind']]
+                   'open': self.do_open, 'answer': self.do_answer, 'model': self.do_model,
+                   'effort': self.do_effort, 'mode': self.do_mode, 'stop': self.do_stop}[action['kind']]
         try:
             handler(action)
         except ActionError as exc:
@@ -1657,12 +1786,15 @@ class ActionRunner:
         if not self.notify or not failed:
             return
         verb = {'send': '送出訊息', 'permission': '回覆權限', 'new': '開新對話', 'open': '打開對話',
-                'answer': '回答選項題', 'model': '切換模型'}[action['kind']]
+                'answer': '回答選項題', 'model': '切換模型', 'effort': '切換推理強度', 'mode': '切換權限模式',
+                'stop': '停止'}[action['kind']]
         title = (action.get('info') or {}).get('title') or action.get('title') or ''
         head = f"⚠️ 手機{verb}失敗：{APP_NAMES[action['app']]}"
         body = f"{self.pc_name}・「{title}」：{action['message']}"
+        session_id = action.get('sessionId')
         try:
-            self.notify(head, body, 4, ['iphone'])
+            self.notify(head, body, 4, ['iphone'],
+                        open_link(self.pc_name, action['app'], session_id, title) if session_id else open_link(self.pc_name))
         except OSError:
             logging.exception('action notification failed')
 
@@ -1722,11 +1854,25 @@ class ActionRunner:
         mark = transcript.seq if transcript is not None else 0
         self.open_conversation(action)
         self.recheck(action)
-        self.presence.begin_own()
-        self.driver.send(app, info['doc'], text)
-        self.presence.end_own()
+        image_path = None
+        if action.get('image'):
+            # The worker pastes the photo from a file only this user can read; removed right after.
+            handle, image_path = tempfile.mkstemp(prefix='desk-remote-photo-', suffix='.img')
+            with os.fdopen(handle, 'wb') as out:
+                out.write(action['image'])
+        try:
+            self.presence.begin_own()
+            self.driver.send(app, info['doc'], text, image_path)
+        finally:
+            self.presence.end_own()
+            if image_path:
+                try:
+                    os.remove(image_path)
+                except OSError:
+                    logging.warning('could not remove the photo file')
+            action['image'] = None
         self.update(action, message='已送出，確認中')
-        verified = self.verify(transcript, mark, text)
+        verified = self.verify(transcript, mark, text if text.strip() else '[圖片]')
         message = {True: '已送出', 'queued': '已送出，排在等待中的權限詢問之後'}.get(
             verified, f'已送出，但 {self.verify_seconds} 秒內還沒在對話紀錄看到')
         self.update(action, state='done', verified=bool(verified), message=message)
@@ -1743,7 +1889,9 @@ class ActionRunner:
             with transcript.lock:
                 fresh = [e for e in transcript.events if e['seq'] > mark and e['kind'] == 'user']
                 queued = list(getattr(transcript.parser, 'queued', []))
-            if any(normalized(e['text']).startswith(want) for e in fresh):
+            # Codex records a photo and its caption as one message: "[圖片]\n<caption>".
+            if any(normalized(e['text']).startswith(want) or ('[圖片]' in e['text'] and want in normalized(e['text']))
+                   for e in fresh):
                 return True
             if any(normalized(q).startswith(want) for q in queued):
                 return 'queued'
@@ -1804,7 +1952,7 @@ class ActionRunner:
         afterwards; the conversation file then has to show the new model too."""
         app, info, label = action['app'], action['info'], action['model']
         self.open_conversation(action)
-        self.recheck(action)
+        self.recheck(action, action['needsFront'])
         self.presence.begin_own()
         how = self.driver.set_model(app, info['doc'], label)
         self.presence.end_own()
@@ -1829,6 +1977,55 @@ class ActionRunner:
             if self.clock() >= deadline:
                 self.update(action, state='done', verified=False,
                             message=f'畫面上已是 {label}，但電腦端紀錄 {self.verify_seconds} 秒內還沒更新')
+                return
+            time.sleep(0.5)
+
+    def do_effort(self, action):
+        """Claude's effort, in the model menu's effort submenu; the worker checks the model button."""
+        app, info, label = action['app'], action['info'], action['effort']
+        self.open_conversation(action)
+        self.recheck(action, action['needsFront'])
+        self.presence.begin_own()
+        how = self.driver.set_effort(app, info['doc'], label)
+        self.presence.end_own()
+        logging.info('effort %s %s by %s', app, label, how)
+        self.update(action, state='done', verified=True,
+                    message=f'本來就是 {label}' if how == 'already' else f'推理強度已切換為 {label}')
+
+    def do_mode(self, action):
+        """The permission mode. Claude's mode button names the mode, so the worker checks it;
+        Codex's does not, so its pick shows only from the next turn on."""
+        app, info, label = action['app'], action['info'], action['mode']
+        self.open_conversation(action)
+        self.recheck(action, action['needsFront'])
+        self.presence.begin_own()
+        how = self.driver.set_mode(app, info['doc'], label)
+        self.presence.end_own()
+        logging.info('mode %s %s by %s', app, label, how)
+        if how == 'already':
+            self.update(action, state='done', verified=True, message=f'本來就是 {label}')
+        elif app == 'codex':
+            self.update(action, state='done', verified=False, message=f'已選「{label}」（下一則回覆起生效）')
+        else:
+            self.update(action, state='done', verified=True, message=f'權限模式已切換為 {label}')
+
+    def do_stop(self, action):
+        """Presses the stop button of the running turn; done once the turn is no longer running."""
+        app, info = action['app'], action['info']
+        transcript = self.hub.transcript(app, action['sessionId'])
+        self.open_conversation(action)
+        self.driver.stop(app, info['doc'])
+        deadline = self.clock() + self.verify_seconds
+        while True:
+            self.watcher.look(app)
+            if transcript is not None:
+                transcript.refresh()
+            running = self.watcher.current(app).get('running')
+            if not running or (transcript is not None and transcript.parser.status == 'idle'):
+                self.update(action, state='done', verified=True, message='已停止')
+                return
+            if self.clock() >= deadline:
+                self.update(action, state='done', verified=False, message='已按停止，但畫面上仍在執行')
                 return
             time.sleep(0.5)
 
@@ -1892,12 +2089,13 @@ class ElevateRelay:
         # Only what needs the person: a request to approve. Results are not sent (the user asked on
         # 10/27 to be told only about things that need them); the phone shows them.
         for _ in fresh:
-            self.send('🔐 需要管理員權限', f'{self.pc_name}：有指令在等你核准，打開桌面遙控查看', 5, ['closed_lock_with_key'])
+            self.send('🔐 需要管理員權限', f'{self.pc_name}：有指令在等你核准，打開桌面遙控查看', 5, ['closed_lock_with_key'],
+                      open_link(self.pc_name, elevate=True))
 
-    def send(self, title, message, priority, tags):
+    def send(self, title, message, priority, tags, click=None):
         if self.notify:
             try:
-                self.notify(title, message, priority, tags)
+                self.notify(title, message, priority, tags, click)
             except OSError:
                 logging.exception('elevate notification failed')
 
@@ -1947,7 +2145,8 @@ FAILURE_TEXT = {
     'still-asking': '按了之後電腦上仍在詢問，可能沒有按到',
     'question-changed': '這個選項題已經回答過或換了一題',
     'toggle-failed': '選項按了沒有反應',
-    'model-failed': '模型選單沒有照預期切換，電腦上的模型沒有變',
+    'model-failed': '選單沒有照預期切換，電腦上的設定沒有變',
+    'not-running': '這個對話現在沒有在執行，不用停止',
     'not-supported': '這台電腦的小幫手還不支援這個動作',
     'not-found': '畫面上找不到需要的按鈕',
     'not-invokable': '按鈕按不下去',
@@ -1961,9 +2160,35 @@ FAILURE_TEXT = {
 
 
 MAX_BODY = 64 * 1024
+PHOTO_BODY = 12 * 1024 * 1024      # a message with a photo (base64) from the phone
+
+
+def capture_screen(timeout=20):
+    """JPEG bytes of this PC's whole desktop from screen_capture.ps1 (its own DPI-aware
+    process), or None when the screen cannot be read (locked) or the capture failed."""
+    import subprocess
+    handle, path = tempfile.mkstemp(prefix='desk-remote-screen-', suffix='.jpg')
+    os.close(handle)
+    try:
+        done = subprocess.run(
+            ['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
+             str(Path(__file__).with_name('screen_capture.ps1')), '-Out', path],
+            capture_output=True, timeout=timeout, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        if done.returncode != 0:
+            return None
+        return Path(path).read_bytes()
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
 
 def handler_for(hub, gate, networks, runner=None):
+    screen_lock = threading.Lock()  # one capture at a time
+
     class Handler(BaseHTTPRequestHandler):
         server_version = 'DeskRemoteHelper'
         sys_version = ''
@@ -2021,13 +2246,25 @@ def handler_for(hub, gate, networks, runner=None):
                 logging.exception('request failed')
                 return self.send_json(500, error('internal', '電腦端發生錯誤'))
 
-        def read_body(self):
+        def send_jpeg(self, data):
+            try:
+                self.send_response(200)
+                self.send_header('Content-Type', 'image/jpeg')
+                self.send_header('Content-Length', str(len(data)))
+                self.send_header('Cache-Control', 'no-store')
+                self.send_header('X-Content-Type-Options', 'nosniff')
+                self.end_headers()
+                self.wfile.write(data)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+        def read_body(self, limit=MAX_BODY):
             """The JSON object sent with a POST, or None after answering 400/413."""
             try:
                 length = int(self.headers.get('Content-Length') or 0)
             except ValueError:
                 length = -1
-            if length < 0 or length > MAX_BODY:
+            if length < 0 or length > limit:
                 # Read (up to 1 MB of) what was sent first, so the sender gets the answer instead of
                 # a reset connection.
                 left = min(max(length, 0), 1024 * 1024)
@@ -2057,7 +2294,7 @@ def handler_for(hub, gate, networks, runner=None):
                 return self.send_json(*hub.elevate.decide(parts[1], body.get('decision'), body.get('hmac')))
             if runner is None:
                 return self.send_json(405, error('read-only', '這一版只能讀取'))
-            body = self.read_body()
+            body = self.read_body(PHOTO_BODY if parts[-1:] == ['messages'] else MAX_BODY)
             if body is None:
                 return None
             if len(parts) >= 2 and parts[0] in APPS and parts[1] == 'sessions':
@@ -2065,7 +2302,7 @@ def handler_for(hub, gate, networks, runner=None):
                 if len(parts) == 2:
                     return self.send_json(*runner.submit('new', app, None, body))
                 kinds = {'messages': 'send', 'permission': 'permission', 'open': 'open', 'answer': 'answer',
-                         'model': 'model'}
+                         'model': 'model', 'effort': 'effort', 'mode': 'mode', 'stop': 'stop'}
                 if len(parts) == 4 and parts[3] in kinds and hub.sources[app].id_pattern.match(parts[2]):
                     return self.send_json(*runner.submit(kinds[parts[3]], app, parts[2], body))
             return self.send_json(404, error('not-found', '沒有這個路徑'))
@@ -2078,6 +2315,16 @@ def handler_for(hub, gate, networks, runner=None):
                     return default
             if parts == ['state']:
                 return self.send_json(200, hub.state())
+            if parts == ['screen']:
+                if hub.screen is None:
+                    return self.send_json(404, error('not-found', '這台電腦的小幫手不提供畫面'))
+                if hub.presence.snapshot().get('locked'):
+                    return self.send_json(423, error('locked', '電腦已鎖定，看不到畫面'))
+                with screen_lock:
+                    data = hub.screen()
+                if not data:
+                    return self.send_json(503, error('screen-failed', '讀不到電腦畫面（可能已鎖定或沒有登入）'))
+                return self.send_jpeg(data)
             if parts == ['elevate']:
                 if hub.elevate is None:
                     return self.send_json(404, error('not-found', '這台電腦沒有安裝提權夥伴'))
@@ -2283,6 +2530,7 @@ class FakeDriver:
         self.calls = []
         self.open_doc = {}
         self.codex_models = {}  # page title -> model picked on the phone
+        self.running = set()    # page titles whose turn is running (a stop button shows)
         for key in setup.prompts_data:
             app, session_id = key.split('/', 1)
             info = hub.info(app, session_id)
@@ -2320,7 +2568,48 @@ class FakeDriver:
             answer['usage'] = f"{strings['usage_prefix']}每週 · 所有模型：46% 週日上午11:00 重設"
         elif app == 'codex' and strings.get('model_prefix'):
             answer['model'] = f"{self.codex_models.get(self.open_doc.get(app), 'GPT-6.1 Sol')} 高"
+        if app == 'claude':
+            data = self.session_file(app, self.open_doc.get(app))[1] or {}
+            answer['mode'] = ClaudeSource.PERMISSION_LABELS.get(data.get('permissionMode'), data.get('permissionMode'))
+            answer['running'] = self.open_doc.get(app) in self.running
         return answer
+
+    def set_effort(self, app, doc, label):
+        self.calls.append(('set_effort', app, label))
+        if app != 'claude':
+            raise ActionError('not-supported', '')
+        path, data = self.session_file(app, doc)
+        ids = {v: k for k, v in EFFORT_LABELS.items()}
+        if EFFORT_LABELS.get(data.get('effort')) == label:
+            return 'already'
+        data['effort'] = ids.get(label, label.lower())
+        with self.lock:
+            path.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8')
+        return 'fake'
+
+    def set_mode(self, app, doc, label):
+        self.calls.append(('set_mode', app, label))
+        if self.open_doc.get(app) != doc:
+            raise ActionError('title-mismatch', '')
+        if app == 'codex':
+            return 'fake'
+        path, data = self.session_file(app, doc)
+        ids = {v: k for k, v in ClaudeSource.PERMISSION_LABELS.items()}
+        if ClaudeSource.PERMISSION_LABELS.get(data.get('permissionMode')) == label:
+            return 'already'
+        data['permissionMode'] = ids[label]
+        with self.lock:
+            path.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8')
+        return 'fake'
+
+    def stop(self, app, doc):
+        self.calls.append(('stop', app))
+        if doc not in self.running:
+            raise ActionError('not-running', '')
+        self.running.discard(doc)
+        session_id = self.session_for_doc(app, doc)
+        self.write(app, self.hub.sources[app].transcript_path(session_id), 'assistant', '（已停止）')
+        return 'fake'
 
     def session_file(self, app, doc):
         """(path, data) of the Claude conversation file behind the page `doc`."""
@@ -2363,14 +2652,20 @@ class FakeDriver:
                 return
         raise ActionError('not-found', '')
 
-    def send(self, app, doc, text):
-        self.calls.append(('send', app, doc))
+    def send(self, app, doc, text, image=None):
+        self.calls.append(('send', app, doc) + (('image', Path(image).stat().st_size),) if image else ('send', app, doc))
         if self.open_doc.get(app) != doc:
             raise ActionError('title-mismatch', '')
         session_id = self.session_for_doc(app, doc)
         path = self.hub.sources[app].transcript_path(session_id)
-        self.write(app, path, 'user', text)
-        self.later(app, path, f'（示範）收到：{text[:30]}')
+        if image:
+            self.write(app, path, 'user-image', text)
+        else:
+            self.write(app, path, 'user', text)
+        # "長任務" keeps the turn running for a while, so the phone can stop it.
+        self.running.add(doc)
+        delay = 60 if '長任務' in text else self.reply_after
+        self.later(app, path, f'（示範）收到：{text[:30] or "照片"}', delay, doc)
 
     def new_send(self, app, button, text):
         self.calls.append(('new_send', app, button))
@@ -2405,15 +2700,29 @@ class FakeDriver:
                 handle.write(json.dumps(line, ensure_ascii=False) + '\n')
         self.later(app, path, f'（示範）收到選擇：{"／".join(chosen)}')
 
-    def later(self, app, path, text):
+    def later(self, app, path, text, delay=None, doc=None):
         def reply():
-            time.sleep(self.reply_after)
+            time.sleep(self.reply_after if delay is None else delay)
+            if doc is not None:
+                if doc not in self.running:
+                    return  # stopped from the phone
+                self.running.discard(doc)
             self.write(app, path, 'assistant', text)
         threading.Thread(target=reply, daemon=True).start()
 
     def write(self, app, path, role, text):
         ts = datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%S.000Z')
-        if app == 'claude':
+        if role == 'user-image':  # a pasted photo and an optional caption, as each app records it
+            blocks = [{'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/jpeg', 'data': ''}}]
+            if text.strip():
+                blocks.append({'type': 'text', 'text': text})
+            if app == 'claude':
+                lines = [{'type': 'user', 'timestamp': ts, 'message': {'role': 'user', 'content': blocks}}]
+            else:
+                lines = [{'timestamp': ts, 'type': 'event_msg', 'payload': {'type': 'task_started'}},
+                         {'timestamp': ts, 'type': 'event_msg', 'payload': {'type': 'item_completed', 'item': {
+                             'type': 'UserMessage', 'content': [{'type': 'input_image'}] + blocks[1:]}}}]
+        elif app == 'claude':
             if role == 'user':
                 lines = [{'type': 'user', 'timestamp': ts, 'message': {'role': 'user', 'content': text}}]
             else:
@@ -2460,7 +2769,9 @@ def build_driving(hub, driver, notify, pc_name, cfg, interval, verify_seconds):
     hub.strings = load_strings()
     runner = ActionRunner(hub, driver, hub.presence, watcher, notify, pc_name, hub.strings,
                           idle_seconds=int(cfg.get('idle_seconds', 60)), verify_seconds=verify_seconds)
-    hub.capabilities = ['read', 'send', 'permission', 'new', 'open', 'question', 'model']
+    hub.capabilities = ['read', 'send', 'permission', 'new', 'open', 'question', 'model', 'effort', 'mode', 'stop',
+                        'photo']
+    hub.alerts = dict(hub.alerts, **(cfg.get('alerts') or {}))
     threading.Thread(target=watcher.run_forever, daemon=True).start()
     threading.Thread(target=runner.run_forever, daemon=True).start()
     return runner
@@ -2489,6 +2800,7 @@ def main(argv=None):
         hub.strings = load_strings()  # FakeDriver reads the model button's prefix before build_driving
         runner = build_driving(hub, FakeDriver(fake, hub), None, cfg['pc_name'], cfg, interval=1, verify_seconds=10)
         hub.elevate = fake.elevate_relay()
+        hub.screen = lambda: (fake.fixtures / 'screen.jpg').read_bytes()
         gate = AuthGate(cfg['token'], None, cfg['pc_name'])
         return serve(hub, gate, cfg, networks, runner)
     path = args.config or default_config_path()
@@ -2500,6 +2812,8 @@ def main(argv=None):
     notify = notifier.post if (cfg.get('notify') or {}).get('topic') else None
     pc_name = cfg.get('pc_name') or os.environ.get('COMPUTERNAME', 'PC')
     hub = Hub(pc_name, real_sources(cfg), WindowsPresence())
+    if cfg.get('screen', True):
+        hub.screen = capture_screen
     runner = None
     if cfg.get('drive_windows', True):
         runner = build_driving(hub, WindowsDriver(load_strings()), notify, pc_name, cfg, interval=4, verify_seconds=20)

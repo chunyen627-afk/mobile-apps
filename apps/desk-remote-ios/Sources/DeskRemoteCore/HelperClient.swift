@@ -120,9 +120,48 @@ public struct HelperClient: Sendable {
 
     /// Pastes `text` into the conversation on the PC and presses Enter. `clientMsgId` makes a
     /// retry safe: the helper sends one message per id.
-    public func send(_ app: DeskApp, session id: String, text: String, clientMsgId: String, force: Bool = false) async throws -> ActionStatus {
+    public func send(_ app: DeskApp, session id: String, text: String, clientMsgId: String, image: Data? = nil,
+                     force: Bool = false) async throws -> ActionStatus {
         try await post(["v1", app.rawValue, "sessions", id, "messages"],
-                       ActionRequest(text: text, clientMsgId: clientMsgId, force: force ? true : nil))
+                       ActionRequest(text: text, clientMsgId: clientMsgId, image: image?.base64EncodedString(),
+                                     force: force ? true : nil), timeout: image == nil ? 20 : 60)
+    }
+
+    /// Picks a reasoning effort (one of `HelperState.efforts(app)`) in the conversation's menu.
+    public func setEffort(_ app: DeskApp, session id: String, effort: String, force: Bool = false) async throws -> ActionStatus {
+        try await post(["v1", app.rawValue, "sessions", id, "effort"], ActionRequest(effort: effort, force: force ? true : nil))
+    }
+
+    /// Picks a permission mode (one of `HelperState.modes(app)`) for the conversation.
+    public func setMode(_ app: DeskApp, session id: String, mode: String, force: Bool = false) async throws -> ActionStatus {
+        try await post(["v1", app.rawValue, "sessions", id, "mode"], ActionRequest(mode: mode, force: force ? true : nil))
+    }
+
+    /// Presses the stop button of the conversation's running turn.
+    public func stop(_ app: DeskApp, session id: String, force: Bool = false) async throws -> ActionStatus {
+        try await post(["v1", app.rawValue, "sessions", id, "stop"], ActionRequest(force: force ? true : nil))
+    }
+
+    /// A JPEG of the PC's whole desktop right now.
+    public func screen() async throws -> Data {
+        guard let url = endpoint.url(["v1", "screen"]) else { throw HelperFailure.badResponse }
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request, delegate: NoRedirect.shared)
+        } catch {
+            throw Self.failure(for: error)
+        }
+        guard let http = response as? HTTPURLResponse, data.count <= Self.maxBytes else { throw HelperFailure.badResponse }
+        if http.statusCode == 200, (http.value(forHTTPHeaderField: "Content-Type") ?? "").hasPrefix("image/jpeg") {
+            return data
+        }
+        let _: HelperErrorBody = try Self.decode(HelperErrorBody.self, status: http.statusCode == 200 ? 500 : http.statusCode,
+                                                 data: data)
+        throw HelperFailure.badResponse
     }
 
     /// Answers the permission question the PC shows now: allow once or deny, nothing broader.
@@ -183,9 +222,9 @@ public struct HelperClient: Sendable {
         return current
     }
 
-    private func post<T: Decodable>(_ segments: [String], _ body: ActionRequest) async throws -> T {
+    private func post<T: Decodable>(_ segments: [String], _ body: ActionRequest, timeout: TimeInterval = 20) async throws -> T {
         guard let url = endpoint.url(segments) else { throw HelperFailure.badResponse }
-        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: timeout)
         request.httpMethod = "POST"
         request.httpBody = try JSONEncoder().encode(body)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")

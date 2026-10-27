@@ -402,7 +402,7 @@ class DrivingTests(FakeEnvironment):
 
     def test_message_queued_behind_a_question_counts_as_delivered(self):
         class QueueingDriver(h.FakeDriver):
-            def send(self, app, doc, text):
+            def send(self, app, doc, text, image=None):
                 self.calls.append(('send', app, doc))
                 path = self.hub.sources[app].transcript_path(self.session_for_doc(app, doc))
                 with Path(path).open('a', encoding='utf-8') as handle:
@@ -417,7 +417,7 @@ class DrivingTests(FakeEnvironment):
 
     def test_send_that_never_shows_up_is_reported(self):
         class SilentDriver(h.FakeDriver):
-            def send(self, app, doc, text):
+            def send(self, app, doc, text, image=None):
                 self.calls.append(('send', app, doc))
         _, _, _, runner = drive(self.fake, driver_class=SilentDriver)
         body = runner.submit('send', 'claude', A, {'text': 'lost'})[1]
@@ -634,7 +634,11 @@ class HttpTests(FakeEnvironment):
         self.assertEqual(self.get(path, method='POST', raw=b'not json')[0], 400)
         self.assertEqual(self.get(path, method='POST', body=['list'])[0], 400)
         self.assertEqual(self.get(path, method='POST', body={'text': '   '})[0], 400)
-        self.assertEqual(self.get(path, method='POST', raw=b'{"text":"' + b'x' * (70 * 1024) + b'"}')[0], 413)
+        # 64 KB for every body except messages, which may carry a photo (12 MB).
+        self.assertEqual(self.get(f'/v1/claude/sessions/{A}/permission', method='POST',
+                                  raw=b'{"text":"' + b'x' * (70 * 1024) + b'"}')[0], 413)
+        self.assertEqual(self.get(path, method='POST', raw=b'{"text":"' + b'x' * (70 * 1024) + b'"}')[1]['message'],
+                         '訊息太長（上限 20000 字）')
         self.assertEqual(self.get('/v1/claude/sessions/..%2Fx/messages', method='POST', body={'text': 'x'})[0], 404)
         self.assertEqual(self.get('/v1/claude/sessions/local_00000000-0000-4000-8000-000000000000/messages',
                                   method='POST', body={'text': 'x'})[0], 404)
@@ -698,7 +702,7 @@ class MetaTests(FakeEnvironment):
     def test_claude_meta_from_conversation_file_and_last_reply(self):
         self.assertEqual(self.meta('claude', A), {
             'model': 'Opus 5.5', 'modelId': 'claude-opus-5-5', 'effort': '高',
-            'context': {'used': 183203, 'window': 1_000_000, 'percent': 18}})
+            'context': {'used': 183203, 'window': 1_000_000, 'percent': 18}, 'permission': '自動'})
         # No confirmed window for this model, and no reply with usage: tokens only, no guess.
         meta = self.meta('claude', B)
         self.assertEqual((meta['model'], meta['effort'], meta['context']), ('Sonnet 5.5', '中', None))
@@ -708,7 +712,7 @@ class MetaTests(FakeEnvironment):
     def test_codex_meta_and_limits_from_the_rollout(self):
         self.assertEqual(self.meta('codex', X), {
             'model': 'GPT-6.1 Sol', 'modelId': 'gpt-6.1-sol', 'effort': '高',
-            'context': {'used': 64600, 'window': 258400, 'percent': 25}})
+            'context': {'used': 64600, 'window': 258400, 'percent': 25}, 'permission': '代我核准'})
         usage = self.sources['codex'].usage()
         self.assertEqual(usage['windows'], [{'label': '每週', 'percent': 5, 'resetsAt': h.iso(1793616560), 'resetsText': None}])
         self.assertEqual(usage['sampledAt'], '2026-10-26T10:01:05Z')
@@ -763,6 +767,134 @@ class MetaTests(FakeEnvironment):
         _, _, _, runner = drive(self.fake, presence)
         self.assertEqual(runner.submit('model', 'claude', A, {'model': 'Haiku 5.5'})[0], 409)
         self.assertEqual(runner.submit('model', 'claude', A, {'model': 'Haiku 5.5', 'force': True})[0], 202)
+
+
+JPEG = b'\xff\xd8\xff\xe0' + b'demo photo bytes' * 64
+
+
+class MoreControlsTests(FakeEnvironment):
+    """Photos, effort, permission mode, stop, notification links and alerts (0.5.0)."""
+
+    def test_a_photo_is_pasted_from_a_private_file_that_is_removed(self):
+        import base64
+        hub, driver, _, runner = drive(self.fake)
+        before = set(glob_photos())
+        code, body = runner.submit('send', 'claude', A, {'text': '看這張', 'image': base64.b64encode(JPEG).decode()})
+        self.assertEqual(code, 202, body)
+        run_all(runner)
+        status = runner.status(body['id'])
+        self.assertEqual((status['state'], status['verified']), ('done', True), status)
+        self.assertIn(('send', 'claude', hub.info('claude', A)['doc'], ('image', len(JPEG))), driver.calls)
+        self.assertEqual(set(glob_photos()), before, 'the photo file was left behind')
+        self.assertIsNone(runner.actions[body['id']]['image'], 'the photo stayed in memory')
+        # A photo alone (no text) also counts once the transcript shows it.
+        body = runner.submit('send', 'codex', X, {'image': base64.b64encode(JPEG).decode()})[1]
+        run_all(runner)
+        self.assertEqual(runner.status(body['id'])['verified'], True)
+        bad = runner.submit('send', 'claude', A, {'text': 'x', 'image': base64.b64encode(b'GIF89a...').decode()})
+        self.assertEqual(bad[0], 400)
+        self.assertEqual(runner.submit('send', 'claude', A, {'text': 'x', 'image': 'not base64!'})[0], 400)
+
+    def test_effort_and_mode_switch_and_show_in_meta(self):
+        hub, driver, watcher, runner = drive(self.fake)
+        self.assertEqual(runner.submit('effort', 'codex', X, {'effort': '高'})[1]['error'], 'not-supported')
+        self.assertEqual(runner.submit('effort', 'claude', A, {'effort': '極限'})[0], 400)
+        body = runner.submit('effort', 'claude', A, {'effort': '超高'})[1]
+        run_all(runner)
+        self.assertEqual(runner.status(body['id'])['message'], '推理強度已切換為 超高')
+        body = runner.submit('mode', 'claude', A, {'mode': '計畫'})[1]
+        run_all(runner)
+        self.assertEqual(runner.status(body['id'])['message'], '權限模式已切換為 計畫')
+        watcher.tick()
+        meta = hub.events('claude', A, 0, '', 0)['meta']
+        self.assertEqual((meta['effort'], meta['permission']), ('超高', '計畫'))
+        body = runner.submit('mode', 'codex', X, {'mode': '要求核准'})[1]
+        run_all(runner)
+        status = runner.status(body['id'])
+        self.assertEqual((status['verified'], status['message']), (False, '已選「要求核准」（下一則回覆起生效）'))
+
+    def test_stop_presses_the_button_only_while_a_turn_runs(self):
+        _, driver, watcher, runner = drive(self.fake)
+        body = runner.submit('stop', 'claude', A, {})[1]
+        run_all(runner)
+        self.assertEqual(runner.status(body['id'])['error'], 'not-running')
+        runner.submit('send', 'claude', A, {'text': '長任務：慢慢做'})
+        run_all(runner)
+        watcher.tick()
+        self.assertTrue(watcher.current('claude')['running'])
+        body = runner.submit('stop', 'claude', A, {})[1]
+        run_all(runner)
+        self.assertEqual(runner.status(body['id'])['message'], '已停止')
+
+    def test_someone_at_the_pc_does_not_block_stop_or_codex_menus(self):
+        presence = dict(self.fake.cfg['presence'], idleSeconds=5)
+        _, _, _, runner = drive(self.fake, presence)
+        self.assertEqual(runner.submit('stop', 'claude', A, {})[0], 202)
+        self.assertEqual(runner.submit('mode', 'codex', X, {'mode': '代我核准'})[0], 202)
+        self.assertEqual(runner.submit('effort', 'claude', A, {'effort': '低'})[0], 409)
+
+    def test_notifications_carry_a_link_to_the_conversation(self):
+        sent = []
+        drive(self.fake, notify=lambda *a: sent.append(a))
+        prompt = next(s for s in sent if s[0].startswith('🔔'))
+        self.assertEqual(prompt[4], h.open_link('示範電腦', 'claude', B, '修正建置錯誤'))
+        self.assertTrue(prompt[4].startswith('deskremote://open?pc=%E7%A4%BA'), prompt[4])
+        self.assertEqual(h.open_link('辦公室', elevate=True), 'deskremote://open?pc=%E8%BE%A6%E5%85%AC%E5%AE%A4&elevate=1')
+
+    def test_limits_and_context_alert_once_when_they_cross(self):
+        sent = []
+        hub, _, watcher, _ = drive(self.fake, notify=lambda *a: sent.append(a))
+        hub.alerts = {'usage_percent': 50, 'context_percent': 90}
+        watcher.check_usage()
+        watcher.check_turns()
+        self.assertFalse(any(s[0].startswith('⚠️') for s in sent), sent)
+        hub.alerts = {'usage_percent': 40, 'context_percent': 10}
+        hub.usage_cache = (0.0, None)
+        for _ in range(2):
+            watcher.check_usage()
+            watcher.check_turns()
+        warnings = [s[0] for s in sent if s[0].startswith('⚠️')]
+        self.assertEqual(warnings, ['⚠️ Claude 額度已用 46%', '⚠️ Claude 上下文快滿了'], warnings)
+
+    def test_state_lists_what_the_phone_may_pick(self):
+        hub, _, _, _ = drive(self.fake)
+        hub.capabilities = hub.capabilities + ['effort', 'mode', 'stop']
+        state = hub.state()
+        self.assertEqual(state['efforts'], {'claude': ['低', '中', '高', '超高', '最高', 'Ultracode']})
+        self.assertEqual(state['modes']['codex'], ['要求核准', '代我核准'])
+        self.assertEqual(state['stop'], ['claude'])
+
+
+def glob_photos():
+    return Path(tempfile.gettempdir()).glob('desk-remote-photo-*')
+
+
+class ScreenHttpTests(FakeEnvironment):
+    def test_screen_is_a_jpeg_behind_the_token_and_refused_when_locked(self):
+        hub = h.Hub('示範電腦', self.sources, h.FixedPresence(self.fake.cfg['presence']))
+        server = ThreadingHTTPServer(('127.0.0.1', 0), h.handler_for(hub, h.AuthGate(TOKEN), [ipaddress.ip_network('127.0.0.0/8')]))
+        server.daemon_threads = True
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        url = f'http://127.0.0.1:{server.server_address[1]}/v1/screen'
+
+        def fetch(token=TOKEN):
+            request = urllib.request.Request(url, headers={'Authorization': f'Bearer {token}'})
+            try:
+                with urllib.request.urlopen(request, timeout=10) as response:
+                    return response.status, response.headers.get('Content-Type'), response.read()
+            except urllib.error.HTTPError as exc:
+                return exc.code, exc.headers.get('Content-Type'), exc.read()
+        self.assertEqual(fetch()[0], 404)
+        hub.screen = lambda: JPEG
+        self.assertEqual(fetch(), (200, 'image/jpeg', JPEG))
+        self.assertEqual(fetch('wrong')[0], 401)
+        hub.presence = h.FixedPresence(dict(self.fake.cfg['presence'], locked=True))
+        self.assertEqual(fetch()[0], 423)
+        hub.presence = h.FixedPresence(self.fake.cfg['presence'])
+        hub.screen = lambda: None
+        self.assertEqual(fetch()[0], 503)
 
 
 class StringsTests(unittest.TestCase):
