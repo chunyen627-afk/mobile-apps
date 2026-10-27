@@ -359,9 +359,9 @@ final class DeskRemoteUITests: XCTestCase {
                       "weekly limit missing: \(said(weekly))")
         snapshot("21b-model-sheet")
         let sonnet = element("model-Sonnet 5.5")
-        XCTAssertTrue(reveal(sonnet), "model choices missing")
+        XCTAssertTrue(revealInSheet(sonnet), "model choices missing")
         sonnet.tap()
-        XCTAssertTrue(reveal(element("model-busy")), "no switch progress shown")
+        XCTAssertTrue(revealInSheet(element("model-busy")), "no switch progress shown")
         XCTAssertTrue(waitFor(element("model-busy"), labelContains: "已切換為 Sonnet 5.5", timeout: 20),
                       "switch did not finish: \(said(element("model-busy")))")
         XCTAssertTrue(waitFor(element("meta-model"), labelContains: "Sonnet 5.5", timeout: 30), "sheet still shows the old model")
@@ -427,21 +427,25 @@ final class DeskRemoteUITests: XCTestCase {
         XCTAssertTrue(bar.waitForExistence(timeout: 10), "meta bar missing")
         bar.tap()
         let effort = element("effort-超高")
-        XCTAssertTrue(reveal(effort), "effort choices missing")
+        XCTAssertTrue(revealInSheet(effort), "effort choices missing")
         effort.tap()
-        XCTAssertTrue(reveal(element("effort-busy")), "no effort progress shown")
+        XCTAssertTrue(revealInSheet(element("effort-busy")), "no effort progress shown")
         XCTAssertTrue(waitFor(element("effort-busy"), labelContains: "推理強度已切換為 超高", timeout: 20),
                       "effort switch did not finish: \(said(element("effort-busy")))")
         let mode = element("mode-計畫")
-        XCTAssertTrue(reveal(mode), "mode choices missing")
+        XCTAssertTrue(revealInSheet(mode), "mode choices missing")
         mode.tap()
-        XCTAssertTrue(reveal(element("mode-busy")), "no mode progress shown")
+        XCTAssertTrue(revealInSheet(element("mode-busy")), "no mode progress shown")
         XCTAssertTrue(waitFor(element("mode-busy"), labelContains: "權限模式已切換為 計畫", timeout: 20),
                       "mode switch did not finish: \(said(element("mode-busy")))")
-        // The mode row is at the top of the sheet, scrolled away while picking: scroll back to it.
-        XCTAssertTrue(poll(timeout: 40) { self.reveal(self.element("meta-permission")) && self.element("meta-permission").label.contains("計畫") },
-                      "sheet still shows the old mode: \(said(element("meta-permission")))")
         snapshot("26-effort-and-mode")
+        // The mode row is at the top of the sheet: reopen the sheet rather than scroll back up
+        // (a downward swipe at its top closes it).
+        element("meta-done").tap()
+        XCTAssertTrue(bar.waitForExistence(timeout: 10), "chat did not come back")
+        bar.tap()
+        XCTAssertTrue(waitFor(element("meta-permission"), labelContains: "計畫", timeout: 30),
+                      "sheet still shows the old mode: \(said(element("meta-permission")))")
     }
 
     // MARK: - Helpers
@@ -538,6 +542,18 @@ final class DeskRemoteUITests: XCTestCase {
         }
         for _ in 0 ..< 8 {
             app.swipeUp()
+            if poll(timeout: 1, visible) { return true }
+        }
+        return false
+    }
+
+    /// Scrolls a sheet's list up only: a downward swipe at the top of a sheet closes it (CI 10/27).
+    private func revealInSheet(_ element: XCUIElement) -> Bool {
+        let visible = { element.exists && element.isHittable }
+        if poll(timeout: 2, visible) { return true }
+        let list = app.collectionViews.firstMatch.exists ? app.collectionViews.firstMatch : app.tables.firstMatch
+        for _ in 0 ..< 8 {
+            list.swipeUp(velocity: .slow)
             if poll(timeout: 1, visible) { return true }
         }
         return false
