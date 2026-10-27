@@ -88,7 +88,7 @@ struct DeskElevateSection: View {
                 ProgressView()
             }
         } header: {
-            Text("管理員權限（elevate）")
+            Text("管理員權限（elevate）").textCase(nil)
         } footer: {
             Text("AI 用 elevate 要求以系統管理員身分執行的指令會出現在這裡。允許前請看清楚內容。")
         }

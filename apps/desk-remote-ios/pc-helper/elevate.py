@@ -68,8 +68,8 @@ class ElevatorLogic:
     """The companion's rules in Python, for tests and the fake helper. `run(content, cwd, timeout)`
     returns (exit code, stdout, stderr) and stands in for an elevated PowerShell."""
 
-    def __init__(self, key, token, run=None, clock=time.time):
-        self.key, self.token, self.clock = key, token, clock
+    def __init__(self, key, token, run=None, clock=time.time, ttl=TTL):
+        self.key, self.token, self.clock, self.ttl = key, token, clock, ttl
         self.run = run or (lambda content, cwd, timeout: (0, f'(fake) ran: {content[:60]}\n', ''))
         self.requests, self.recent, self.asked = {}, [], []
         self.lock = threading.Lock()
@@ -114,7 +114,7 @@ class ElevatorLogic:
         timeout = int(message.get('timeout') or 600)
         r = {'id': secrets.token_hex(8), 'kind': 'script' if message.get('kind') == 'script' else 'command',
              'name': str(message.get('name') or ''), 'content': content, 'cwd': str(message.get('cwd') or ''),
-             'created': now, 'expires': now + TTL, 'timeout': min(max(timeout, 1), 3600), 'state': 'pending',
+             'created': now, 'expires': now + self.ttl, 'timeout': min(max(timeout, 1), 3600), 'state': 'pending',
              'exitCode': None, 'stdout': '', 'stderr': '', 'finished': None}
         self.requests[r['id']] = r
         return {'ok': True, 'id': r['id'], 'expires': r['expires']}

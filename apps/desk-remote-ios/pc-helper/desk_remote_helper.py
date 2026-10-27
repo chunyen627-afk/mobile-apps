@@ -1884,7 +1884,8 @@ class FakeSetup:
         """The companion's Python twin with a test key and one waiting request (fixture data)."""
         key = bytes.fromhex(self.cfg['elevate_key'])
         token = 'fake-submit-token'
-        self.elevator = elevate.ElevatorLogic(key, token)
+        # Three hours, not ten minutes: the simulator tests reach these requests well after startup.
+        self.elevator = elevate.ElevatorLogic(key, token, ttl=3 * 3600)
         for item in json.loads((self.fixtures / 'elevate.json').read_text(encoding='utf-8')):
             self.elevator.handle(dict(item, op='request', token=token))
         return ElevateRelay(lambda message: self.elevator.handle(dict(message, token=token)))
