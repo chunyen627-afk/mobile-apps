@@ -115,6 +115,10 @@ final class MinerStatusUITests: XCTestCase {
         XCTAssertTrue(waitFor(row, labelContains: "收益 ≈ NT$20/天", timeout: 5), "row B is not priced in QTC: \(row.label)")
         row.tap()
         XCTAssertTrue(app.navigationBars["詳情（示範）"].waitForExistence(timeout: 5), "detail screen did not open")
+        // The pool's view in the machine's own scale, not "0.0 TH/s".
+        XCTAssertTrue(app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "148.0 MH/s", "148.0 MH/s")).firstMatch
+            .waitForExistence(timeout: 5), "pool hashrate not shown in MH/s")
         let mined = app.descendants(matching: .any)
             .matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "0.008 QTC", "0.008 QTC")).firstMatch
         let price = app.descendants(matching: .any)

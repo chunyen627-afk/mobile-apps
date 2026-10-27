@@ -43,9 +43,11 @@ struct HealthDetailSection: View {
 
     private var poolText: String {
         guard let pool = health.poolHashrate else { return DisplayText.noData }
-        let terahashes = (pool / 1e12).formatted(.number.precision(.fractionLength(1)))
-        guard let local = localHashrate, local > 0 else { return "\(terahashes) TH/s" }
-        return "\(terahashes) TH/s（本機的 \(Int((pool / local * 100).rounded()))%）"
+        // In the machine's own scale: an FPGA's 150 MH/s must not read as 0.0 TH/s.
+        let (scale, unit) = [(1e12, "TH/s"), (1e9, "GH/s"), (1e6, "MH/s"), (1e3, "kH/s")].first { pool >= $0.0 } ?? (1, "H/s")
+        let text = "\((pool / scale).formatted(.number.precision(.fractionLength(1)))) \(unit)"
+        guard let local = localHashrate, local > 0 else { return text }
+        return "\(text)（本機的 \(Int((pool / local * 100).rounded()))%）"
     }
 
     private var temperatureText: String {
