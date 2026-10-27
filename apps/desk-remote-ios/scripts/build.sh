@@ -4,8 +4,9 @@
 # Requires Xcode 15+, XcodeGen and python3; this script installs nothing.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-# Includes 2 tests of the real PowerShell companion, which are skipped (and counted) on macOS.
-EXPECTED_HELPER_TESTS="${EXPECTED_HELPER_TESTS:-87}"
+# Includes 3 Windows-only tests (the real PowerShell companion twice, a real screen capture),
+# which are skipped (and counted) on macOS.
+EXPECTED_HELPER_TESTS="${EXPECTED_HELPER_TESTS:-88}"
 EXPECTED_TESTS="${EXPECTED_TESTS:-31}"
 EXPECTED_UI_TESTS="${EXPECTED_UI_TESTS:-26}"
 FIXTURES=fixtures/fake-helper

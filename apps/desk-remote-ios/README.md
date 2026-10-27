@@ -88,7 +88,7 @@ scripts/build.sh           macOS CI：小幫手測試 → 產生專案 → 模�
   - 先用對話自己的連結打開、等頁面標題完全相符才動作；標題不符、視窗切不到前面、剪貼簿無法安全保存時一律中止，不送任何字。剪貼簿先保存後還原，放入的文字與照片標記為不進剪貼簿歷程與雲端剪貼簿。
   - 送出後 20 秒內要在該對話的逐字稿看到這段文字；同一個 `clientMsgId` 只送一次。照片寫到只有本人讀得到的暫存檔，貼上後立刻刪除。
 - **ntfy**（`config.json` 的 `notify.server`／`notify.topic`）：只發需要處理的事——權限詢問、新的選項題、管理員指令等核准、手機操作失敗、一輪完成、額度或上下文 ≥80%（`alerts` 可改門檻）、密碼錯誤鎖定；每則帶 `deskremote://open?…` 連結，點了直接打開那個對話。不含訊息內文與指令內容。
-- **截圖**：`screen_capture.ps1` 以獨立的 DPI-aware 程序截整個桌面（1600 寬 JPEG 約 110 KB）；`config.json` 設 `screen: false` 可關閉。
+- **截圖**：`screen_capture.ps1` 以獨立的 DPI-aware 程序截整個桌面（1600 寬 JPEG 約 110–150 KB），經管線直接交給小幫手，**不寫入電腦硬碟**（使用者 10/27 要求截圖不留在電腦上；小幫手測試在 Windows 上實際截一次並確認沒有留下檔案）；手機只在記憶體顯示、不存相簿、連線不快取。`config.json` 設 `screen: false` 可關閉。
 - **管理員權限**：`elevate -c "<PowerShell 指令>"` 或 `elevate -f <腳本.ps1>` 把請求送到提權夥伴（`desk_remote_elevated.ps1`）。手機用 Face ID 確認後，以這台電腦專屬的核准金鑰對「請求 id＋內容的 SHA-256＋資料夾＋到期時間」簽 HMAC，夥伴自己驗簽章才執行，輸出與結束碼原樣回到 `elevate`；小幫手沒有這把金鑰。一次最多 3 個等待、每分鐘 5 個、10 分鐘未核准就失效、同一核准只能用一次。辦公室電腦的 Claude Code 與 Codex 全域規則檔已寫明「需要系統管理員權限改用 `elevate`」。
 - 安裝：`install.ps1 -BindIp <ZeroTier 位址> -Network <網段>`（產生只有本人可讀的 `%LOCALAPPDATA%\DeskRemote\config.json` 與隨機 token，註冊登入時啟動的排程工作）；提權夥伴用系統管理員 PowerShell 執行 `install-elevated.ps1`（建立只有管理員能改的 `%ProgramData%\DeskRemote`、新金鑰、排程工作與 `elevate` 指令，顯示一次金鑰給你輸入手機）。不改 UAC。
 - 測試：`cd pc-helper && python -m unittest discover -s tests -v`。

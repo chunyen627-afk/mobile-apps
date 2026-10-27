@@ -2200,25 +2200,25 @@ PHOTO_BODY = 12 * 1024 * 1024      # a message with a photo (base64) from the ph
 
 def capture_screen(timeout=20):
     """JPEG bytes of this PC's whole desktop from screen_capture.ps1 (its own DPI-aware
-    process), or None when the screen cannot be read (locked) or the capture failed."""
+    process), passed through a pipe so the picture is never written to disk; None when the
+    screen cannot be read (locked) or the capture failed."""
+    import base64
+    import binascii
     import subprocess
-    handle, path = tempfile.mkstemp(prefix='desk-remote-screen-', suffix='.jpg')
-    os.close(handle)
     try:
         done = subprocess.run(
             ['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
-             str(Path(__file__).with_name('screen_capture.ps1')), '-Out', path],
+             str(Path(__file__).with_name('screen_capture.ps1'))],
             capture_output=True, timeout=timeout, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-        if done.returncode != 0:
-            return None
-        return Path(path).read_bytes()
     except (OSError, subprocess.TimeoutExpired):
         return None
-    finally:
-        try:
-            os.remove(path)
-        except OSError:
-            pass
+    if done.returncode != 0:
+        return None
+    try:
+        data = base64.b64decode(done.stdout.strip(), validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    return data if data.startswith(b'\xff\xd8\xff') else None
 
 
 def handler_for(hub, gate, networks, runner=None):

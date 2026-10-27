@@ -908,6 +908,17 @@ def glob_photos():
     return Path(tempfile.gettempdir()).glob('desk-remote-photo-*')
 
 
+class ScreenCaptureTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == 'win32', 'captures the real Windows desktop')
+    def test_capture_goes_through_a_pipe_and_leaves_no_file(self):
+        temp = Path(tempfile.gettempdir())
+        before = set(temp.glob('desk-remote-screen-*'))
+        data = h.capture_screen()
+        self.assertIsNotNone(data, 'no picture (is the PC locked?)')
+        self.assertTrue(data.startswith(b'\xff\xd8\xff'), 'not a JPEG')
+        self.assertEqual(set(temp.glob('desk-remote-screen-*')), before, 'a screenshot file was written')
+
+
 class ScreenHttpTests(FakeEnvironment):
     def test_screen_is_a_jpeg_behind_the_token_and_refused_when_locked(self):
         hub = h.Hub('示範電腦', self.sources, h.FixedPresence(self.fake.cfg['presence']))

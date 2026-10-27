@@ -1,7 +1,9 @@
-# Writes a JPEG of the whole desktop (all monitors) to -Out, at most -MaxWidth wide.
-# Its own process because it must be DPI aware to see real pixels, which would change the
-# coordinates uia_worker.ps1 clicks with. Exit code 3 when the screen cannot be read (locked).
-param([string]$Out, [int]$MaxWidth = 1600, [int]$Quality = 70)
+# Prints a JPEG of the whole desktop (all monitors), at most -MaxWidth wide, as one line of base64
+# on stdout. The picture never touches the disk (the user asked 10/27 that screenshots are not
+# kept on the PC). Its own process because it must be DPI aware to see real pixels, which would
+# change the coordinates uia_worker.ps1 clicks with. Exit code 3 when the screen cannot be read
+# (locked).
+param([int]$MaxWidth = 1600, [int]$Quality = 70)
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing, System.Windows.Forms
 Add-Type @"
@@ -23,6 +25,8 @@ $g.Dispose(); $full.Dispose()
 $codec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq 'image/jpeg' }
 $params = New-Object System.Drawing.Imaging.EncoderParameters 1
 $params.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter ([System.Drawing.Imaging.Encoder]::Quality, [long]$Quality)
-$small.Save($Out, $codec, $params)
+$memory = New-Object System.IO.MemoryStream
+$small.Save($memory, $codec, $params)
 $small.Dispose()
-"$($b.Width)x$($b.Height) -> ${w}x${h}"
+[Console]::Out.Write([Convert]::ToBase64String($memory.ToArray()))
+$memory.Dispose()
