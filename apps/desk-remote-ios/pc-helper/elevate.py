@@ -216,7 +216,7 @@ def run(argv=None, submit_path=None, poll=2.0, out=sys.stdout, err=sys.stderr):
         if status.get('stdout'):
             out.write(status['stdout'])
         if status.get('stderr'):
-            err.write(status['stderr'])
+            err.write(status['stderr'] if status['stderr'].endswith('\n') else status['stderr'] + '\n')
         if state == 'done':
             return int(status.get('exitCode') or 0)
         print({'denied': 'elevate: 手機拒絕了這個請求', 'expired': 'elevate: 10 分鐘內沒有在手機核准',

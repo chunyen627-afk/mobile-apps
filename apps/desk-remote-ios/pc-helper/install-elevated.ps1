@@ -52,6 +52,10 @@ if ($Python) {
   $apps = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps'
   $cmd = "@`"$Python`" `"$(Join-Path $here 'elevate.py')`" %*`r`n"
   [IO.File]::WriteAllText((Join-Path $apps 'elevate.cmd'), $cmd, (New-Object Text.ASCIIEncoding))
+  # Git Bash does not find .cmd files by their bare name, and cmd.exe would re-parse quotes and
+  # pipes; this wrapper hands the arguments to Python unchanged.
+  $sh = "#!/bin/sh`nexec `"$($Python -replace '\\', '/')`" `"$((Join-Path $here 'elevate.py') -replace '\\', '/')`" `"`$@`"`n"
+  [IO.File]::WriteAllText((Join-Path $apps 'elevate'), $sh, (New-Object Text.ASCIIEncoding))
 } else {
   Write-Output 'python.exe not found: the elevate command was not added (pass -Python <path to python.exe>).'
 }
