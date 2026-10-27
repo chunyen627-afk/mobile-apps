@@ -361,14 +361,13 @@ struct DeskBubble: View {
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(Array(DeskText.segments(event.text).enumerated()), id: \.offset) { _, segment in
                     if segment.code {
-                        DeskSelectableText(segment.text, style: .footnote, monospaced: true)
-                            .accessibilityLabel(segment.text)
+                        Text(segment.text)
+                            .font(.system(.footnote, design: .monospaced))
                             .padding(8)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 6))
                     } else {
-                        DeskSelectableText(Self.markdown(segment.text))
-                            .accessibilityLabel(segment.text)
+                        Text(Self.markdown(segment.text))
                     }
                 }
                 if event.truncated == true {
@@ -378,11 +377,20 @@ struct DeskBubble: View {
             .padding(10)
             .background(mine ? Color.accentColor.opacity(0.18) : Color(.secondarySystemBackground),
                         in: RoundedRectangle(cornerRadius: 12))
+            // Long press: copy all, or open the text where any part can be selected (SwiftUI's
+            // own text selection on iOS only copies the whole text; asked for on the phone 10/27).
+            .contextMenu {
+                Button { UIPasteboard.general.string = event.text } label: { Label("拷貝全部", systemImage: "doc.on.doc") }
+                Button { selecting = true } label: { Label("選取文字", systemImage: "selection.pin.in.out") }
+            }
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier(mine ? "bubble-user" : "bubble-reply")
             if !mine { Spacer(minLength: 24) }
         }
+        .sheet(isPresented: $selecting) { DeskSelectTextSheet(text: event.text) }
     }
+
+    @State private var selecting = false
 
     static func markdown(_ text: String) -> AttributedString {
         let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
