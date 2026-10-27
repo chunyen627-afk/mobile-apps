@@ -6,7 +6,7 @@
 
 | 項目 | 內容 |
 | --- | --- |
-| 手機 App | **0.5.2 build 5**（Bundle ID `org.personal.deskremote.app`，主畫面名稱「桌面遙控」）：[Release desk-remote-0.5.2-build5](https://github.com/chunyen627-afk/mobile-apps/releases/tag/desk-remote-0.5.2-build5)（測試全部通過才會發布；發布紀錄見下方「驗證紀錄」） |
+| 手機 App | **0.5.2 build 5**（Bundle ID `org.personal.deskremote.app`，主畫面名稱「桌面遙控」）：[Release desk-remote-0.5.2-build5](https://github.com/chunyen627-afk/mobile-apps/releases/tag/desk-remote-0.5.2-build5)（發布紀錄見下方「驗證紀錄」） |
 | 手機上已安裝 | 0.5.0 build 3（2026-10-27）；0.5.2 待覆蓋安裝 |
 | 電腦端小幫手 | 0.5.0（小幫手測試 87 項），已裝在辦公室電腦（登入時啟動的排程工作 `DeskRemoteHelper`） |
 | 提權夥伴 | 已裝在辦公室電腦（排程工作 `DeskRemoteElevated`，最高權限、只聽 127.0.0.1） |
@@ -30,7 +30,7 @@
 | 切換權限模式 | ✅ | ✅（畫面不顯示目前模式，下一則回覆起生效） | 模擬器、真電腦（Claude） |
 | 模型・推理強度・上下文 %、額度（5 小時／每週與重設時間） | ✅ | ✅ | 模擬器、真電腦數字與桌面版自己回報的一致、手機 |
 | 局部選字複製（長按 →「拷貝全部」／「選取文字」） | ✅ | ✅ | 模擬器、手機 |
-| 網址可點（Markdown 連結、直接寫出的 http(s) 網址、工具輸出裡的網址；電腦上的路徑不是連結） | ✅ | ✅ | 單元測試；0.5.2 起，模擬器與手機待驗 |
+| 網址可點（Markdown 連結、直接寫出的 http(s) 網址、工具輸出裡的網址；電腦上的路徑不是連結） | ✅ | ✅ | 單元測試（0.5.2 起）；手機待驗 |
 | 看電腦畫面（只看不操作；鎖定時看不到） | — | — | 模擬器、真電腦截圖 API |
 | 管理員指令核准（`elevate`，Face ID＋HMAC） | — | — | 真電腦＋手機核准執行 |
 | ntfy 通知（只發需要處理的事）、點通知直接打開對話 | ✅ | ✅ | 模擬器；通知實際收到；**點通知打開尚未在手機實測** |
@@ -53,7 +53,7 @@
 | 0.4.0 build 2 | [run 40455358550](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40455358550)：小幫手 76、單元 26、UI 22 | [desk-remote-0.4.0-build2](https://github.com/chunyen627-afk/mobile-apps/releases/tag/desk-remote-0.4.0-build2) | 使用者跳過，直接裝 0.5.0 |
 | 0.5.0 build 3 | [run 40465532207](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40465532207)：小幫手 84、單元 30、UI 26 | [desk-remote-0.5.0-build3](https://github.com/chunyen627-afk/mobile-apps/releases/tag/desk-remote-0.5.0-build3)（IPA 441,704 bytes，SHA256 `4bf107f3…4ed3`） | 已裝到 iPhone；真電腦實測推理強度、權限模式、照片、停止、開新對話、「其他」、Codex 停止 |
 | 0.5.1 build 4 | 沒有發布（還在建置時就被 0.5.2 取代；內容是 Codex 對話也顯示停止） | — | — |
-| 0.5.2 build 5 | 0.5.1 的內容＋網址可點；CI 跑完後補上 run 與 SHA256 | [desk-remote-0.5.2-build5](https://github.com/chunyen627-afk/mobile-apps/releases/tag/desk-remote-0.5.2-build5) | 待安裝 |
+| 0.5.2 build 5 | [run 40471604033](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40471604033)：小幫手 87、單元 31、UI 26，截圖已檢視 | [desk-remote-0.5.2-build5](https://github.com/chunyen627-afk/mobile-apps/releases/tag/desk-remote-0.5.2-build5)（IPA 446,442 bytes，SHA256 `e85f3134…3842`） | 待安裝 |
 
 實測時發現並修好的問題（細節見 commit 紀錄）：
 - **送出**：切換對話後輸入框還是舊頁面 → 只在標題相符的頁面找輸入框並讀回確認；Alt 鍵搶前景會打開 Electron 選單列 → 拿掉；Chromium 下點擊前的元件檢查無效 → 改成檢查該點最上層視窗。
