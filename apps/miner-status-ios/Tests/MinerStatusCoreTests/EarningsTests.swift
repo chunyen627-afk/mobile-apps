@@ -94,4 +94,28 @@ final class EarningsTests: XCTestCase {
         XCTAssertEqual(total.net!, 96, accuracy: 1e-9)
         XCTAssertNotNil(total.electricity)
     }
+
+    func testMachineOnAnotherCoinUsesItsOwnPrice() throws {
+        let fpga = earningsJSON.merging(["coinPerDay": 0.0084, "coin": "QTC", "coinUsd": 73.0]) { $1 }
+        let decoded = try feed(earnings: fpga, market: marketJSON)
+        XCTAssertEqual(decoded.machines[0].earnings?.coin, "QTC")
+        let result = estimate(decoded, billed: false, day: date(2026, 10, 24))
+        XCTAssertEqual(result.coin, "QTC")
+        XCTAssertEqual(result.revenueTwdPerDay!, 0.0084 * 73 * 32, accuracy: 1e-9)  // QTC price, market's USD/TWD
+        XCTAssertEqual(result.btcPerDay!, 0.0084 * 73 / 75000, accuracy: 1e-12)
+        // Its own coin without a price stays unknown rather than being priced as the market coin.
+        let unpriced = estimate(try feed(earnings: earningsJSON.merging(["coin": "QTC"]) { $1 }, market: marketJSON),
+                                billed: false, day: date(2026, 10, 24))
+        XCTAssertNil(unpriced.revenueTwdPerDay)
+        // A machine on the market coin keeps the market's symbol and price.
+        let prl = estimate(try feed(earnings: earningsJSON, market: marketJSON), billed: false, day: date(2026, 10, 24))
+        XCTAssertEqual(prl.coin, "PRL")
+        XCTAssertEqual(prl.coinUsd, 1.5)
+    }
+
+    func testOwnCoinMustBeATickerWithAValidPrice() {
+        XCTAssertThrowsError(try feed(earnings: earningsJSON.merging(["coin": "qtc"]) { $1 }))
+        XCTAssertThrowsError(try feed(earnings: earningsJSON.merging(["coin": "QTC", "coinUsd": -1]) { $1 }))
+        XCTAssertThrowsError(try feed(earnings: earningsJSON.merging(["coin": NSNull()]) { $1 }))
+    }
 }
