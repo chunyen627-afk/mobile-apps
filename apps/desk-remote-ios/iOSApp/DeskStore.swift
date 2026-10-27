@@ -1,5 +1,7 @@
+import CryptoKit
 import DeskRemoteCore
 import Foundation
+import LocalAuthentication
 import Security
 
 /// The PCs this phone knows, in UserDefaults (no secrets), and each PC's token in the Keychain.
@@ -8,6 +10,8 @@ final class DeskStore: ObservableObject {
     @Published private(set) var pcs: [DeskPC] = []
     private let defaults: UserDefaults
     static let key = "deskremote.pcs"
+    /// Simulator UI tests: secrets in memory and no Face ID prompt (there is no enrolled face).
+    private(set) var uiTest = false
 
     /// UI tests start from an empty list (`DESK_UI_TEST=1`) and may add one PC given as
     /// `DESK_UI_PC=name|host|port|token`, with tokens kept in memory instead of the Keychain.
@@ -17,10 +21,13 @@ final class DeskStore: ObservableObject {
             defaults.removeObject(forKey: Self.key)
             DeskSecret.useMemory()
             load()
+            uiTest = true
             if let preset = environment["DESK_UI_PC"] {
                 let parts = preset.components(separatedBy: "|")
-                if parts.count == 4, let port = Int(parts[2]) {
-                    _ = save(DeskPC(name: parts[0], host: parts[1], port: port), token: parts[3])
+                if parts.count >= 4, let port = Int(parts[2]) {
+                    let pc = DeskPC(name: parts[0], host: parts[1], port: port)
+                    _ = save(pc, token: parts[3])
+                    if parts.count == 5 { _ = saveElevateKey(parts[4], for: pc.id) }
                 }
             }
         } else {
@@ -60,8 +67,37 @@ final class DeskStore: ObservableObject {
 
     func delete(_ id: UUID) {
         DeskSecret.remove(id)
+        DeskSecret.remove(id, kind: .elevate)
         pcs.removeAll { $0.id == id }
         persist()
+    }
+
+    /// The PC's administrator approval key (64 hex characters); empty removes it.
+    func saveElevateKey(_ hex: String, for id: UUID) -> Bool {
+        let trimmed = hex.filter { !$0.isWhitespace }.lowercased()
+        if trimmed.isEmpty {
+            DeskSecret.remove(id, kind: .elevate)
+            return true
+        }
+        guard ElevateSigner.key(fromHex: trimmed) != nil else { return false }
+        return DeskSecret.save(trimmed, for: id, kind: .elevate)
+    }
+
+    func hasElevateKey(_ id: UUID) -> Bool { DeskSecret.load(id, kind: .elevate) != nil }
+
+    func elevateKey(_ id: UUID) -> SymmetricKey? {
+        DeskSecret.load(id, kind: .elevate).flatMap { ElevateSigner.key(fromHex: $0) }
+    }
+
+    /// Face ID (or the passcode) before an administrator approval; skipped in simulator UI tests.
+    func confirmOwner(reason: String) async -> Bool {
+        if uiTest { return true }
+        let context = LAContext()
+        do {
+            return try await context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason)
+        } catch {
+            return false
+        }
     }
 
     func client(_ id: UUID) -> HelperClient? {
@@ -74,21 +110,26 @@ final class DeskStore: ObservableObject {
 /// unlocked, never in UserDefaults, backups or the repository.
 @MainActor
 enum DeskSecret {
-    private static let service = "org.personal.deskremote.token"
-    private static var memory: [UUID: String]?
+    /// The connection token, or the administrator approval key (a separate Keychain item).
+    enum Kind: String {
+        case token = "org.personal.deskremote.token"
+        case elevate = "org.personal.deskremote.elevate"
+    }
+
+    private static var memory: [String: String]?
 
     static func useMemory() { memory = [:] }
 
-    private static func query(_ id: UUID) -> [String: Any] {
+    private static func query(_ id: UUID, _ kind: Kind) -> [String: Any] {
         [kSecClass as String: kSecClassGenericPassword,
-         kSecAttrService as String: service,
+         kSecAttrService as String: kind.rawValue,
          kSecAttrAccount as String: id.uuidString]
     }
 
-    static func load(_ id: UUID) -> String? {
-        if let memory { return memory[id] }
+    static func load(_ id: UUID, kind: Kind = .token) -> String? {
+        if let memory { return memory["\(kind.rawValue)/\(id)"] }
         var item: CFTypeRef?
-        var request = query(id)
+        var request = query(id, kind)
         request[kSecReturnData as String] = true
         request[kSecMatchLimit as String] = kSecMatchLimitOne
         guard SecItemCopyMatching(request as CFDictionary, &item) == errSecSuccess,
@@ -97,23 +138,23 @@ enum DeskSecret {
         return text
     }
 
-    static func save(_ token: String, for id: UUID) -> Bool {
+    static func save(_ token: String, for id: UUID, kind: Kind = .token) -> Bool {
         if memory != nil {
-            memory?[id] = token
+            memory?["\(kind.rawValue)/\(id)"] = token
             return true
         }
-        SecItemDelete(query(id) as CFDictionary)
-        var item = query(id)
+        SecItemDelete(query(id, kind) as CFDictionary)
+        var item = query(id, kind)
         item[kSecValueData as String] = Data(token.utf8)
         item[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         return SecItemAdd(item as CFDictionary, nil) == errSecSuccess
     }
 
-    static func remove(_ id: UUID) {
+    static func remove(_ id: UUID, kind: Kind = .token) {
         if memory != nil {
-            memory?[id] = nil
+            memory?["\(kind.rawValue)/\(id)"] = nil
             return
         }
-        SecItemDelete(query(id) as CFDictionary)
+        SecItemDelete(query(id, kind) as CFDictionary)
     }
 }

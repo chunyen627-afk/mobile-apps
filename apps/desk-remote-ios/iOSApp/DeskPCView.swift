@@ -41,6 +41,9 @@ struct DeskPCView: View {
                     .accessibilityIdentifier("app-row-\(app.rawValue)")
                 }
             }
+            if state?.can("elevate") == true {
+                DeskElevateSection(store: store, pcID: pcID)
+            }
         }
         .navigationTitle(store.pc(pcID)?.name ?? "電腦")
         .toolbar {

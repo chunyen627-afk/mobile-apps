@@ -2,7 +2,7 @@
 
 用 iPhone 原生輸入操作自己 Windows 電腦上的 Claude 桌面版與 Codex 桌面版：看對話清單、打字送出、看回覆、按權限的「允許一次」／「拒絕」，並在手機核准需要管理員權限的指令（`elevate`）。設計見 [DESIGN.md](DESIGN.md)（2026-10-26 核准）。
 
-**目前到 P2**：P1 唯讀（清單、即時逐字稿）之外，手機可以送出訊息、按「允許一次」／「拒絕」、開新對話、把等待處理的對話在電腦上打開。`elevate` 在 P3。
+**目前到 P3**：P1 唯讀（清單、即時逐字稿）之外，手機可以送出訊息、按「允許一次」／「拒絕」、回答選項題、開新對話、把等待處理的對話在電腦上打開；P3 加上 `elevate`：AI 要求的系統管理員指令推到手機，用 Face ID 核准才執行。
 
 ## 驗證狀態
 
@@ -14,6 +14,7 @@
 | 選項題與快速回覆 | 小幫手從 Claude 的對話紀錄抓出未回答的選項題（`AskUserQuestion`）與結尾建議按鈕；手機顯示選項卡片（單選、複選、「其他」自己寫）與快速回覆按鈕。**真的 Claude 桌面版實測通過**（2026-10-27，使用者同意）：兩題（單選＋複選）的卡片，小幫手照手機的選擇點選，Claude 回覆「顏色：藍；水果：蘋果、葡萄」與所選完全相同。卡片一次一頁（「下一步」，最後一頁「提交」），每個選項是開關；送出前確認畫面上開著的選項恰好等於手機的選擇，多開的會先關掉，對不上就不送。第一次實測曾點錯成「紅」（位置還在捲動），之後改成先捲到可見再點。「其他」自己寫的路徑尚未實測。快速回覆只是送出按鈕上的文字，走一般送出流程。Codex 的選項題尚未處理 |
 | iPhone App P2 畫面（含選項題、快速回覆） | **編譯通過、模擬器測試通過**：小幫手 49、單元 20、UI 17 項，0 失敗，26 張截圖已人工檢視（[run 40359319514](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40359319514)）；之後只再隱藏選項題下方的「正在處理」，等下一輪 CI |
 | P1 的 CI 證據 | 單元 15、UI 11 項 0 失敗（[run 40339664008](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40339664008)） |
+| P3 `elevate` | 實作完成：提權夥伴（PowerShell）、`elevate` 指令、小幫手轉送、手機核准（Face ID＋HMAC）。小幫手測試 65 項在 Windows 本機通過，其中 2 項直接跑真的 PowerShell 夥伴（未提權）：簽章錯、token 錯被拒，簽章對才執行且 UTF-8 輸出與結束碼正確，同一核准不能用兩次；手機與電腦用同一組測試向量驗 HMAC。另做 8 項變異測試（拿掉夥伴的簽章檢查、token 檢查、內容雜湊、Python 雙胞胎的簽章與逾時、啟動時不重複通知、通知不含指令），全部被抓到。**尚未在電腦上安裝**：`install-elevated.ps1` 要使用者自己用系統管理員身分執行；規則檔的 elevate 規則行要等安裝、實測後才加 |
 | 實機 | 依決定在工具箱第三分頁驗證；尚未進行 |
 | 小幫手常駐安裝 | `install.ps1` 已寫好，**尚未在電腦上執行** |
 
@@ -43,6 +44,7 @@ scripts/build.sh           macOS CI：小幫手測試 → 產生專案 → 模�
   - 權限：每 4 秒看一次目前開著的對話有沒有詢問；手機只能按「允許一次」或「拒絕」，送來的 `promptId` 必須等於畫面上的那個詢問。Claude 的「允許一次」先試鍵盤開選單，不行才點一次滑鼠（先確認游標下就是那個按鈕）。
   - ntfy：每個動作（只有電腦名稱、App、對話標題，不含訊息內文）、出現權限詢問、一輪完成都通知。
   - 設定 `drive_windows: false` 可回到唯讀；`idle_seconds` 改閒置門檻。
+- **管理員權限（P3）**：`elevate -c "<PowerShell 指令>"` 或 `elevate -f <腳本.ps1>` 把請求送到提權夥伴（`desk_remote_elevated.ps1`，登入時以最高權限啟動、只聽 127.0.0.1）。小幫手把等待中的請求轉給手機並送 ntfy（不含指令內容）；手機用 Face ID 確認後，以這台電腦專屬的管理員核准金鑰對「請求 id＋內容的 SHA-256＋資料夾＋到期時間」簽 HMAC，夥伴自己驗簽章才執行，輸出與結束碼原樣回到 `elevate`。小幫手沒有這把金鑰。一次最多 3 個等待、每分鐘 5 個、10 分鐘未核准就失效、同一核准只能用一次。安裝：用系統管理員 PowerShell 執行 `install-elevated.ps1`（建立只有管理員能改的 `%ProgramData%\DeskRemote`、新金鑰、排程工作 `DeskRemoteElevated`、`elevate` 指令，最後顯示一次金鑰給你輸入手機）；不改 UAC。
 - 安裝：`install.ps1 -BindIp <ZeroTier 位址> -Network <網段>` 會在 `%LOCALAPPDATA%\DeskRemote\config.json` 產生隨機 token（只有本人可讀），並註冊登入時啟動的排程工作（一般權限）。連線密碼目前要從 config.json 手動輸入到手機；QR 配對在之後的階段。
 - 測試：`cd pc-helper && python -m unittest discover -s tests -v`。
 
@@ -59,6 +61,8 @@ scripts/build.sh           macOS CI：小幫手測試 → 產生專案 → 模�
 | `POST /v1/{app}/sessions/{id}/open` | 在電腦上打開這個對話 |
 | `POST /v1/claude/sessions/{id}/answer` | `{questionId, answers: [{labels, other?}], force?}` 回答選項題 |
 | `POST /v1/{app}/sessions` | `{text, clientMsgId, force?}` 開新對話 |
+| `GET /v1/elevate` | 等待核准的管理員指令（完整內容、資料夾、到期時間）與最近結果 |
+| `POST /v1/elevate/{id}` | `{decision: allow\|deny, hmac?}`；允許必須帶手機算的簽章，由提權夥伴驗證 |
 | `GET /v1/actions/{id}` | 動作結果：`queued`／`running`／`done`／`failed`，送出是否已在逐字稿確認 |
 
 錯誤：`409 busy-user`（含 `idleSeconds`）、`423 locked`、`409 prompt-changed`、`400`、`413`、`429`。

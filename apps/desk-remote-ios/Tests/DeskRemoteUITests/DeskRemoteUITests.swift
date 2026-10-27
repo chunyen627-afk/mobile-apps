@@ -277,6 +277,44 @@ final class DeskRemoteUITests: XCTestCase {
         snapshot("17-quick-reply-sent")
     }
 
+    // MARK: - Administrator approval (elevate)
+
+    func test18ElevateApproveWithKey() throws {
+        let helper = try helperSettings()
+        let key = try XCTUnwrap(ProcessInfo.processInfo.environment["DESK_ELEVATE_KEY"], "DESK_ELEVATE_KEY not set")
+        launch(pc: "示範電腦|\(helper.host)|\(helper.port)|\(helper.token)|\(key)")
+        let row = element("pc-row-示範電腦")
+        XCTAssertTrue(waitFor(row, labelContains: "2 個管理員權限請求", timeout: 15), "row says \(row.label)")
+        row.tap()
+        let content = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier == 'elevate-content' AND label CONTAINS 'Restart-Service'")).firstMatch
+        XCTAssertTrue(reveal(content), "the waiting command is not shown")
+        snapshot("18a-elevate-waiting")
+        let allow = app.buttons.matching(identifier: "elevate-allow").firstMatch
+        XCTAssertTrue(reveal(allow) && allow.isEnabled, "allow must be enabled with this PC's key")
+        allow.tap()
+        let result = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier == 'elevate-result' AND label CONTAINS '結束碼 0'")).firstMatch
+        XCTAssertTrue(result.waitForExistence(timeout: 15) || reveal(result), "the approved command did not run")
+        XCTAssertFalse(content.exists, "the approved request is still waiting")
+        snapshot("18-elevate-approved")
+    }
+
+    func test19ElevateWithoutKeyCanOnlyDeny() throws {
+        try launchWithHelper()
+        openPC()
+        let card = element("elevate-card")
+        XCTAssertTrue(reveal(card), "the remaining request is not shown")
+        XCTAssertTrue(reveal(element("elevate-no-key")), "missing-key note not shown")
+        XCTAssertFalse(app.buttons.matching(identifier: "elevate-allow").firstMatch.isEnabled, "allow must be disabled without a key")
+        snapshot("19a-elevate-no-key")
+        let deny = app.buttons.matching(identifier: "elevate-deny").firstMatch
+        XCTAssertTrue(reveal(deny), "deny missing")
+        deny.tap()
+        XCTAssertTrue(reveal(element("elevate-empty")), "the denied request is still waiting")
+        snapshot("19-elevate-denied")
+    }
+
     // MARK: - Helpers
 
     private struct Helper {

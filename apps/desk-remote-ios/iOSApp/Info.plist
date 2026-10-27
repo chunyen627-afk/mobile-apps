@@ -13,6 +13,7 @@
 <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
 <key>LSRequiresIPhoneOS</key><true/>
 <key>NSLocalNetworkUsageDescription</key><string>連到您在私人網路裡設定的電腦，讀取 Claude 與 Codex 桌面版的對話。</string>
+<key>NSFaceIDUsageDescription</key><string>核准電腦上需要系統管理員權限的指令前，確認是您本人。</string>
 <key>NSAppTransportSecurity</key><dict>
 <key>NSAllowsLocalNetworking</key><true/>
 </dict>

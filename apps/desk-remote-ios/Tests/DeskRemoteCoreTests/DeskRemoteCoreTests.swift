@@ -215,6 +215,50 @@ final class TranscriptLogTests: XCTestCase {
     }
 }
 
+final class ElevateTests: XCTestCase {
+    /// The same vector as pc-helper/tests/test_elevate.py: phone and PC must agree byte for byte.
+    func testSignatureMatchesThePCsVector() throws {
+        let key = try XCTUnwrap(ElevateSigner.key(fromHex: String(repeating: "6b", count: 32)))  // "k" * 32
+        let signature = ElevateSigner.signature(key: key, id: "0123456789abcdef",
+                                                content: "Restart-Service -Name Spooler\r\n# 測試",
+                                                cwd: "C:\\work", expires: 1_793_100_000)
+        XCTAssertEqual(signature, "0ca586d0d0ea0c76843937f83eb9541cf0726b8040a81b448472a864e62a4a6d")
+    }
+
+    func testKeyParsing() {
+        XCTAssertNotNil(ElevateSigner.key(fromHex: String(repeating: "AB", count: 32)))
+        XCTAssertNotNil(ElevateSigner.key(fromHex: "ab cd " + String(repeating: "00", count: 30)))
+        XCTAssertNil(ElevateSigner.key(fromHex: String(repeating: "ab", count: 31)))
+        XCTAssertNil(ElevateSigner.key(fromHex: String(repeating: "zz", count: 32)))
+        XCTAssertNil(ElevateSigner.key(fromHex: ""))
+    }
+
+    func testDecodesElevateListAndStateAndErrors() throws {
+        let list = try HelperClient.decode(ElevateList.self, status: 200, data: Data("""
+        {"ok":true,"available":true,"pending":[{"id":"0123456789abcdef","kind":"script","name":"fix.ps1",
+          "content":"Write-Output ok","cwd":"C:\\\\work","created":1793099400,"expires":1793100000}],
+         "recent":[{"id":"fedcba9876543210","kind":"command","name":"","state":"done","exitCode":0,"finished":1793099000,
+          "content":"Get-Date","output":"2026\\r\\n"},
+          {"id":"1111111111111111","kind":"command","name":"","state":"denied","exitCode":126,"finished":null,
+          "content":"x","output":""}]}
+        """.utf8))
+        XCTAssertEqual(list.pending.first?.cwd, "C:\\work")
+        XCTAssertEqual(list.recent.map { DeskText.elevateState($0) }, ["已執行・結束碼 0", "已拒絕"])
+        let state = try HelperClient.decode(HelperState.self, status: 200, data: Data("""
+        {"ok":true,"pc":{"name":"P","helperVersion":"0.3.0"},"capabilities":["read","elevate"],"apps":{},
+         "presence":{"idleSeconds":1,"locked":false},"warnings":[],"elevate":{"available":true,"pending":2}}
+        """.utf8))
+        XCTAssertEqual(state.elevate?.pending, 2)
+        XCTAssertTrue(state.can("elevate"))
+        XCTAssertThrowsError(try HelperClient.decode(ElevateList.self, status: 403,
+                                                     data: Data(#"{"ok":false,"error":"bad-signature"}"#.utf8))) {
+            XCTAssertEqual($0 as? HelperFailure, .badSignature)
+        }
+        XCTAssertEqual(DeskText.remaining(until: 1_000_000 + 300, now: Date(timeIntervalSince1970: 1_000_000)), "剩約 5 分鐘")
+        XCTAssertEqual(DeskText.remaining(until: 10, now: Date(timeIntervalSince1970: 20)), "已逾時")
+    }
+}
+
 final class TextTests: XCTestCase {
     func testPresenceText() {
         typealias P = HelperState.Presence

@@ -48,6 +48,8 @@ public enum HelperFailure: Error, Equatable, Sendable {
     case promptChanged
     case badRequest(String?)
     case queueFull
+    /// The PC refused this phone's approval signature (wrong or missing key for that PC).
+    case badSignature
     case server(String?)
     case unreachable
     case timeout
@@ -140,6 +142,24 @@ public struct HelperClient: Sendable {
         try await post(["v1", app.rawValue, "sessions", id, "open"], ActionRequest(force: force ? true : nil))
     }
 
+    // MARK: - Administrator commands
+
+    public func elevateList() async throws -> ElevateList {
+        try await get(["v1", "elevate"], timeout: 15)
+    }
+
+    /// Approves with the phone's signature, or denies (no signature needed). Returns the new state.
+    @discardableResult
+    public func decideElevate(_ id: String, allow: Bool, signature: String?) async throws -> String? {
+        guard let url = endpoint.url(["v1", "elevate", id]) else { throw HelperFailure.badResponse }
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
+        request.httpMethod = "POST"
+        request.httpBody = try JSONEncoder().encode(ElevateDecision(decision: allow ? "allow" : "deny", hmac: signature))
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let answer: DecisionAnswer = try await perform(request)
+        return answer.state
+    }
+
     public func action(_ id: String) async throws -> ActionStatus {
         try await get(["v1", "actions", id], timeout: 10)
     }
@@ -206,6 +226,9 @@ public struct HelperClient: Sendable {
         case (409, "busy-user"): throw HelperFailure.busyUser(body?.idleSeconds)
         case (409, "prompt-changed"), (409, "question-changed"): throw HelperFailure.promptChanged
         case (423, _): throw HelperFailure.locked
+        case (403, "bad-signature"): throw HelperFailure.badSignature
+        case (410, _): throw HelperFailure.notFound(body?.message ?? "這個請求已經逾時")
+        case (503, "elevate-unavailable"): throw HelperFailure.server(body?.message)
         case (400, _), (413, _): throw HelperFailure.badRequest(body?.message)
         case (403, _): throw HelperFailure.forbidden
         case (404, _): throw HelperFailure.notFound(body?.message)

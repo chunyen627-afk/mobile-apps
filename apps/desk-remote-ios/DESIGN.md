@@ -188,6 +188,12 @@ iPhone App ──HTTP（只走 ZeroTier，Bearer token）──▶ 小幫手 des
 
 > 需要系統管理員權限的指令（例如安裝驅動、改服務、寫 Program Files），一律改用 `elevate -c "<PowerShell 指令>"` 或 `elevate -f <腳本.ps1>`：它會推到使用者手機等核准，最多等 10 分鐘，輸出與結束碼原樣回傳；結束碼 126 代表被拒絕或逾時，不要重試同一指令。不要用 `Start-Process -Verb RunAs`、`runas`，也不要修改 UAC 或任何安全性設定。
 
+### 3.4a 實作時的兩個調整（2026-10-27）
+
+- **提權夥伴改用 PowerShell 寫**（`desk_remote_elevated.ps1`），安裝時複製到只有管理員能改的 `%ProgramData%\DeskRemote\bin`，由系統的 `powershell.exe` 執行。原因：Python 裝在使用者可寫的資料夾，以最高權限執行它，等於讓任何以使用者身分執行的程式改一下 Python 或其標準函式庫就能拿到管理員權限。執行核准的指令時也不載入使用者設定檔，`PSModulePath` 只留系統路徑。
+- **通訊改用只聽 127.0.0.1 的本機連線**，不用具名管道：每個請求都要帶只有使用者本人讀得到的提交 token（`%LOCALAPPDATA%\DeskRemote\elevate-submit.json`）。提交 token 只能送出請求、列出、回報，**不能核准**；核准仍只認手機金鑰的 HMAC。這樣協定可以在 CI 用 Python 雙胞胎測，Windows 上另有測試直接跑真的 PowerShell 夥伴。
+- 核准的內容由 `elevate` 指令讀進來送給夥伴（腳本也是送內容不送路徑），夥伴執行自己存的副本，所以不存在「核准後原檔被換掉」的問題。
+
 ### 3.5 不做的事
 
 - 不改 UAC 設定、不關安全桌面、不以管理員身分開桌面版。

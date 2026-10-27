@@ -74,6 +74,9 @@ struct DeskPCRow: View {
         do {
             let state = try await client.state()
             line = "連線正常・\(DeskText.presence(state.presence))"
+            if let waiting = state.elevate?.pending, waiting > 0 {
+                line += "・\(waiting) 個管理員權限請求"
+            }
             healthy = true
         } catch let failure as HelperFailure {
             if failure == .cancelled { return }
@@ -107,6 +110,8 @@ struct DeskPCEditView: View {
     @State private var host = ""
     @State private var port = String(DeskPC.defaultPort)
     @State private var token = ""
+    @State private var elevateKey = ""
+    @State private var removeElevateKey = false
     @State private var saveFailed = false
 
     private var existing: DeskPC? {
@@ -114,8 +119,16 @@ struct DeskPCEditView: View {
         return nil
     }
 
+    private var existingKey: Bool { existing.map { store.hasElevateKey($0.id) } ?? false }
+
     private var problem: String? {
-        DeskPC.problem(name: name, host: host, port: port, token: token, tokenRequired: existing == nil)
+        if let problem = DeskPC.problem(name: name, host: host, port: port, token: token, tokenRequired: existing == nil) {
+            return problem
+        }
+        if !elevateKey.filter({ !$0.isWhitespace }).isEmpty && ElevateSigner.key(fromHex: elevateKey) == nil {
+            return "管理員核准金鑰要是 64 個十六進位字元（安裝提權夥伴時顯示的那一串）"
+        }
+        return nil
     }
 
     var body: some View {
@@ -146,6 +159,20 @@ struct DeskPCEditView: View {
                     Text("連線密碼")
                 } footer: {
                     Text("電腦端 config.json 裡的 token。只存在這支手機的鑰匙圈，不會顯示出來。")
+                }
+                Section {
+                    SecureField(existingKey ? "管理員核准金鑰（已設定，留空表示不變）" : "管理員核准金鑰（選填）", text: $elevateKey)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .disabled(removeElevateKey)
+                        .accessibilityIdentifier("pc-elevate-key")
+                    if existingKey {
+                        Toggle("移除這台電腦的管理員核准金鑰", isOn: $removeElevateKey)
+                    }
+                } header: {
+                    Text("管理員權限")
+                } footer: {
+                    Text("用系統管理員身分執行 install-elevated.ps1 時顯示的 64 個字元。有了它，這支手機才能用 Face ID 核准 elevate 指令；它和連線密碼分開存，電腦上的小幫手拿不到。")
                 }
                 if let problem, !(name.isEmpty && host.isEmpty && existing == nil) {
                     Text(problem)
@@ -185,10 +212,16 @@ struct DeskPCEditView: View {
         guard problem == nil, let number = Int(port.trimmingCharacters(in: .whitespaces)) else { return }
         let pc = DeskPC(id: existing?.id ?? UUID(), name: name.trimmingCharacters(in: .whitespaces),
                         host: host.trimmingCharacters(in: .whitespaces), port: number)
-        if store.save(pc, token: token) {
-            dismiss()
-        } else {
+        guard store.save(pc, token: token) else {
             saveFailed = true
+            return
         }
+        if removeElevateKey {
+            _ = store.saveElevateKey("", for: pc.id)
+        } else if !elevateKey.filter({ !$0.isWhitespace }).isEmpty, !store.saveElevateKey(elevateKey, for: pc.id) {
+            saveFailed = true
+            return
+        }
+        dismiss()
     }
 }

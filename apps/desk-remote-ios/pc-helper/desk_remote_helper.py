@@ -33,6 +33,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
+import elevate  # noqa: E402
+
 VERSION = '0.2.0'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
@@ -877,6 +880,7 @@ class Hub:
         self.transcripts = {}             # (app, id) -> Transcript, most recently used last
         self.info_cache = {}
         self.capabilities = ['read']      # plus send, permission, new and open once windows can be driven
+        self.elevate = None               # ElevateRelay once the elevated companion is installed
         self.lock = threading.Lock()
 
     def state(self):
@@ -888,9 +892,14 @@ class Hub:
         skipped = sum(t.skipped for t in list(self.transcripts.values()))
         if skipped:
             warnings.append(f'逐字稿有 {skipped} 行無法解析，已略過')
-        return {'ok': True, 'pc': {'name': self.pc_name, 'helperVersion': VERSION}, 'capabilities': self.capabilities,
+        elevate = None
+        if self.elevate is not None:
+            with self.elevate.lock:
+                elevate = {'available': self.elevate.available, 'pending': len(self.elevate.pending)}
+        return {'ok': True, 'pc': {'name': self.pc_name, 'helperVersion': VERSION},
+                'capabilities': self.capabilities + (['elevate'] if self.elevate is not None else []),
                 'apps': apps, 'presence': {'idleSeconds': presence.get('idleSeconds'), 'locked': presence.get('locked')},
-                'warnings': warnings}
+                'warnings': warnings, 'elevate': elevate}
 
     def sessions(self, app, limit):
         source = self.sources[app]
@@ -1515,6 +1524,81 @@ class ActionRunner:
             time.sleep(0.5)
 
 
+class ElevateRelay:
+    """Passes administrator requests between the elevated companion and the phone (phase 3).
+
+    The helper can list requests and forward the phone's decision, but it holds no approval key:
+    the companion checks the phone's HMAC itself. New requests and finished ones go to ntfy
+    (PC name only, never the command). `request(message)` talks to the companion."""
+
+    def __init__(self, request, notify=None, pc_name=''):
+        self.request, self.notify, self.pc_name = request, notify, pc_name
+        self.lock = threading.Lock()
+        self.pending, self.recent, self.available = [], [], False
+        self.seen, self.reported = set(), set()
+        self.started = False
+
+    def poll(self):
+        try:
+            answer = self.request({'op': 'list'})
+        except (OSError, ValueError):
+            answer = None
+        with self.lock:
+            self.available = bool(answer and answer.get('ok'))
+            if not self.available:
+                return
+            self.pending, self.recent = answer.get('pending') or [], answer.get('recent') or []
+            fresh = [r for r in self.pending if r['id'] not in self.seen]
+            done = [r for r in self.recent if r['id'] not in self.reported]
+            first, self.started = not self.started, True
+            self.seen.update(r['id'] for r in self.pending)
+            self.reported.update(r['id'] for r in self.recent)
+        if first:
+            return  # Nothing to announce for what was already there when the helper started.
+        for _ in fresh:
+            self.send('🔐 需要管理員權限', f'{self.pc_name}：有指令在等你核准，打開桌面遙控查看', 5, ['closed_lock_with_key'])
+        for r in done:
+            text = {'done': f"已執行，結束碼 {r.get('exitCode')}", 'denied': '已拒絕', 'expired': '逾時未核准',
+                    'timeout': '執行超過時間上限，已停止'}.get(r.get('state'), r.get('state'))
+            self.send('🔐 管理員指令', f'{self.pc_name}：{text}', 3, ['closed_lock_with_key'])
+
+    def send(self, title, message, priority, tags):
+        if self.notify:
+            try:
+                self.notify(title, message, priority, tags)
+            except OSError:
+                logging.exception('elevate notification failed')
+
+    def snapshot(self):
+        self.poll()
+        with self.lock:
+            return {'ok': True, 'available': self.available, 'pending': list(self.pending), 'recent': list(self.recent)}
+
+    def decide(self, request_id, decision, signature):
+        """(status, body) for the phone's decision; the companion verifies the signature."""
+        if decision not in ('allow', 'deny'):
+            return 400, error('bad-request', '只能允許或拒絕')
+        if decision == 'allow' and not re.fullmatch(r'[0-9a-f]{64}', str(signature or '')):
+            return 400, error('bad-request', '缺少手機的核准簽章')
+        try:
+            answer = self.request({'op': 'decide', 'id': request_id, 'decision': decision, 'hmac': signature or ''})
+        except (OSError, ValueError):
+            return 503, error('elevate-unavailable', '提權夥伴沒有在執行')
+        if answer.get('ok'):
+            self.poll()
+            return 200, {'ok': True, 'state': answer.get('state')}
+        code = {'bad-signature': 403, 'not-found': 404, 'expired': 410}.get(answer.get('error'), 400)
+        text = {'bad-signature': '核准簽章不對（手機上的管理員核准金鑰可能不是這台電腦的）',
+                'not-found': '這個請求已經處理過或不存在', 'expired': '這個請求已經逾時'}.get(answer.get('error'), '請求被拒絕')
+        logging.warning('elevate decision %s refused: %s', decision, answer.get('error'))
+        return code, error(answer.get('error') or 'refused', text)
+
+    def run_forever(self, interval=3):
+        while True:
+            self.poll()
+            time.sleep(interval)
+
+
 FAILURE_TEXT = {
     'locked': '電腦已鎖定',
     'busy-user': '電腦有人在用，已取消',
@@ -1611,6 +1695,14 @@ def handler_for(hub, gate, networks, runner=None):
             except ValueError:
                 length = -1
             if length < 0 or length > MAX_BODY:
+                # Read (up to 1 MB of) what was sent first, so the sender gets the answer instead of
+                # a reset connection.
+                left = min(max(length, 0), 1024 * 1024)
+                while left > 0:
+                    chunk = self.rfile.read(min(65536, left))
+                    if not chunk:
+                        break
+                    left -= len(chunk)
                 self.send_json(413, error('too-large', '內容太大'))
                 return None
             try:
@@ -1623,6 +1715,13 @@ def handler_for(hub, gate, networks, runner=None):
             return body
 
         def route_post(self, parts, query):
+            if parts and parts[0] == 'elevate':
+                if hub.elevate is None or len(parts) != 2 or not re.fullmatch(r'[0-9a-f]{16}', parts[1]):
+                    return self.send_json(404, error('not-found', '沒有這個請求' if hub.elevate else '這台電腦沒有安裝提權夥伴'))
+                body = self.read_body()
+                if body is None:
+                    return None
+                return self.send_json(*hub.elevate.decide(parts[1], body.get('decision'), body.get('hmac')))
             if runner is None:
                 return self.send_json(405, error('read-only', '這一版只能讀取'))
             body = self.read_body()
@@ -1645,6 +1744,10 @@ def handler_for(hub, gate, networks, runner=None):
                     return default
             if parts == ['state']:
                 return self.send_json(200, hub.state())
+            if parts == ['elevate']:
+                if hub.elevate is None:
+                    return self.send_json(404, error('not-found', '這台電腦沒有安裝提權夥伴'))
+                return self.send_json(200, hub.elevate.snapshot())
             if len(parts) == 2 and parts[0] == 'actions' and runner is not None:
                 status = runner.status(parts[1])
                 if status is None:
@@ -1776,6 +1879,15 @@ class FakeSetup:
         pc = self.root / 'pc'
         return {'claude': ClaudeSource(pc / 'claude-data', pc / 'claude-projects'),
                 'codex': CodexSource(pc / 'codex')}
+
+    def elevate_relay(self):
+        """The companion's Python twin with a test key and one waiting request (fixture data)."""
+        key = bytes.fromhex(self.cfg['elevate_key'])
+        token = 'fake-submit-token'
+        self.elevator = elevate.ElevatorLogic(key, token)
+        for item in json.loads((self.fixtures / 'elevate.json').read_text(encoding='utf-8')):
+            self.elevator.handle(dict(item, op='request', token=token))
+        return ElevateRelay(lambda message: self.elevator.handle(dict(message, token=token)))
 
     def create_session(self, app, title):
         """A new conversation in each app's own layout; returns (id, transcript path)."""
@@ -2001,6 +2113,7 @@ def main(argv=None):
         networks = [ipaddress.ip_network(item) for item in cfg['allowed_networks']]
         hub = Hub(cfg['pc_name'], fake.sources(), FixedPresence(presence), on_events=fake.on_events)
         runner = build_driving(hub, FakeDriver(fake, hub), None, cfg['pc_name'], cfg, interval=1, verify_seconds=10)
+        hub.elevate = fake.elevate_relay()
         gate = AuthGate(cfg['token'], None, cfg['pc_name'])
         return serve(hub, gate, cfg, networks, runner)
     path = args.config or default_config_path()
@@ -2015,6 +2128,11 @@ def main(argv=None):
     runner = None
     if cfg.get('drive_windows', True):
         runner = build_driving(hub, WindowsDriver(load_strings()), notify, pc_name, cfg, interval=4, verify_seconds=20)
+    submit = Path((cfg.get('elevate') or {}).get('submit_file') or elevate.submit_file())
+    if submit.exists():  # written by install-elevated.ps1 (run once as administrator)
+        port, token = elevate.load_submit(submit)
+        hub.elevate = ElevateRelay(lambda message: elevate.call(port, dict(message, token=token)), notify, pc_name)
+        threading.Thread(target=hub.elevate.run_forever, daemon=True).start()
     gate = AuthGate(cfg['token'], notify, pc_name)
     return serve(hub, gate, cfg, networks, runner)
 

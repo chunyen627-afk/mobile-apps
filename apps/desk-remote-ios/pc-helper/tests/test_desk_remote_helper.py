@@ -627,9 +627,13 @@ class StringsTests(unittest.TestCase):
         self.assertTrue(strings['claude']['more_allow'])
         self.assertIn('{project}', strings['codex']['new_in_project'])
 
-    def test_worker_script_is_ascii(self):
-        data = (HERE.parent / 'uia_worker.ps1').read_bytes()
-        self.assertTrue(all(b < 128 for b in data), 'PowerShell 5.1 misreads non-ASCII scripts without a BOM')
+    def test_powershell_scripts_are_ascii(self):
+        scripts = sorted(HERE.parent.glob('*.ps1'))
+        self.assertGreaterEqual(len(scripts), 4)
+        for script in scripts:
+            with self.subTest(script=script.name):
+                bad = [n for n, line in enumerate(script.read_bytes().splitlines(), 1) if any(b > 127 for b in line)]
+                self.assertEqual(bad, [], 'PowerShell 5.1 misreads non-ASCII scripts without a BOM')
 
 
 if __name__ == '__main__':

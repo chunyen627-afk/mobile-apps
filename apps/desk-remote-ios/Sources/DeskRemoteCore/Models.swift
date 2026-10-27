@@ -31,11 +31,19 @@ public struct HelperState: Decodable, Equatable, Sendable {
         public let locked: Bool?
     }
 
+    public struct ElevateSummary: Decodable, Equatable, Sendable {
+        /// The elevated companion answered.
+        public let available: Bool
+        public let pending: Int
+    }
+
     public let pc: PC
     public let capabilities: [String]
     public let apps: [String: AppState]
     public let presence: Presence
     public let warnings: [String]
+    /// nil when the PC has no elevated companion installed.
+    public let elevate: ElevateSummary?
 
     public func app(_ app: DeskApp) -> AppState? { apps[app.rawValue] }
 
@@ -201,6 +209,47 @@ public struct EventPage: Decodable, Equatable, Sendable {
         self.question = question
         self.suggestions = suggestions
     }
+}
+
+/// A command waiting for administrator approval (`GET /v1/elevate`).
+public struct ElevateRequest: Decodable, Equatable, Identifiable, Sendable {
+    public let id: String
+    /// "command" or "script".
+    public let kind: String
+    public let name: String
+    /// Exactly what will run; the approval signature covers its SHA-256.
+    public let content: String
+    public let cwd: String
+    public let created: Int
+    public let expires: Int
+}
+
+/// A request that was approved and ran, denied, or ran out of time.
+public struct ElevateResult: Decodable, Equatable, Identifiable, Sendable {
+    public let id: String
+    public let kind: String
+    public let name: String
+    /// "done", "denied", "expired" or "timeout".
+    public let state: String
+    public let exitCode: Int?
+    public let finished: Int?
+    public let content: String
+    public let output: String
+}
+
+public struct ElevateList: Decodable, Equatable, Sendable {
+    public let available: Bool
+    public let pending: [ElevateRequest]
+    public let recent: [ElevateResult]
+}
+
+struct ElevateDecision: Encodable {
+    let decision: String
+    let hmac: String?
+}
+
+struct DecisionAnswer: Decodable, Sendable {
+    let state: String?
 }
 
 struct ItemText: Decodable, Sendable {

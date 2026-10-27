@@ -4,9 +4,10 @@
 # Requires Xcode 15+, XcodeGen and python3; this script installs nothing.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-EXPECTED_HELPER_TESTS="${EXPECTED_HELPER_TESTS:-49}"
-EXPECTED_TESTS="${EXPECTED_TESTS:-20}"
-EXPECTED_UI_TESTS="${EXPECTED_UI_TESTS:-17}"
+# Includes 2 tests of the real PowerShell companion, which are skipped (and counted) on macOS.
+EXPECTED_HELPER_TESTS="${EXPECTED_HELPER_TESTS:-65}"
+EXPECTED_TESTS="${EXPECTED_TESTS:-23}"
+EXPECTED_UI_TESTS="${EXPECTED_UI_TESTS:-19}"
 FIXTURES=fixtures/fake-helper
 HELPER_PORT=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["port"])' "$FIXTURES/fake-config.json")
 # A second fake helper that reports someone at the keyboard (5 s idle), for "send anyway".
@@ -66,7 +67,7 @@ CURRENT_LOG=build/helper-tests.log
 (cd pc-helper && python3 -m unittest discover -s tests -v) > "$CURRENT_LOG" 2>&1 || { cat "$CURRENT_LOG"; exit 1; }
 HELPER_RESULT=$(grep -E "^Ran ${EXPECTED_HELPER_TESTS} tests? in" "$CURRENT_LOG" || true)
 HELPER_TAIL=$(tail -n 3 "$CURRENT_LOG")
-if [[ -z "$HELPER_RESULT" ]] || ! grep -qx 'OK' <<<"$HELPER_TAIL"; then
+if [[ -z "$HELPER_RESULT" ]] || ! grep -qE '^OK( \(skipped=[0-9]+\))?$' <<<"$HELPER_TAIL"; then
   echo "Expected ${EXPECTED_HELPER_TESTS} helper tests to pass."
   tail -n 20 "$CURRENT_LOG"
   exit 1
@@ -104,6 +105,7 @@ done
 TEST_RUNNER_DESK_HELPER_HOST=127.0.0.1 \
 TEST_RUNNER_DESK_HELPER_PORT="$HELPER_PORT" \
 TEST_RUNNER_DESK_BUSY_PORT="$BUSY_PORT" \
+TEST_RUNNER_DESK_ELEVATE_KEY="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["elevate_key"])' "$FIXTURES/fake-config.json")" \
 TEST_RUNNER_DESK_HELPER_TOKEN="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["token"])' "$FIXTURES/fake-config.json")" \
 TEST_RUNNER_DESK_DEAD_PORT="$DEAD_PORT" \
 xcodebuild test -project DeskRemote.xcodeproj -scheme DeskRemote \

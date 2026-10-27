@@ -17,6 +17,7 @@ public enum DeskText {
         case .promptChanged: return "電腦上的詢問已經不一樣了（可能已經回答過）"
         case .badRequest(let message): return message ?? "送出的內容不對"
         case .queueFull: return "電腦端還有動作在排隊，請稍後再試"
+        case .badSignature: return "電腦不接受這個核准（手機上的管理員核准金鑰不是這台電腦的）"
         case .server(let message): return message ?? "電腦端發生錯誤"
         case .unreachable: return "無法連線（電腦關機、小幫手沒開或不在同一個私人網路）"
         case .timeout: return "電腦端沒有回應（逾時）"
@@ -53,6 +54,24 @@ public enum DeskText {
 
     public static func working(_ app: DeskApp, status: String) -> String? {
         status == "working" ? "\(app.displayName) 正在處理…" : nil
+    }
+
+    /// Time left to approve, from epoch seconds.
+    public static func remaining(until expires: Int, now: Date = Date()) -> String {
+        let seconds = expires - Int(now.timeIntervalSince1970)
+        if seconds <= 0 { return "已逾時" }
+        if seconds < 60 { return "剩不到 1 分鐘" }
+        return "剩約 \(seconds / 60) 分鐘"
+    }
+
+    public static func elevateState(_ result: ElevateResult) -> String {
+        switch result.state {
+        case "done": return "已執行・結束碼 \(result.exitCode.map(String.init) ?? "?")"
+        case "denied": return "已拒絕"
+        case "expired": return "逾時未核准"
+        case "timeout": return "執行超過時間上限，已停止"
+        default: return result.state
+        }
     }
 
     /// "剛剛", "5 分鐘前", "3 小時前", "2 天前"; nil for a missing or unreadable time.
