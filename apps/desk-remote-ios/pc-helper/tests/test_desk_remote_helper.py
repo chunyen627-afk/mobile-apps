@@ -277,6 +277,17 @@ class HelpersTests(unittest.TestCase):
         # Tick counts wrap around after 49.7 days.
         self.assertEqual(h.own_adjusted_idle(0xFFFFF000, 0x00000800, None, None), 6)
 
+    def test_focus_failure_names_the_window_in_front(self):
+        base = h.FAILURE_TEXT['focus-failed']
+        message = 'could not bring the window to the front; in front: Taskmgr'
+        self.assertEqual(h.failure_text('focus-failed', message), base + '；擋在前面的是：工作管理員')
+        self.assertTrue(h.failure_text('focus-failed', '...; in front: SomeTool').endswith('：SomeTool'))
+        self.assertIn('選單或對話框', h.failure_text('focus-failed', 'x; in front: same-app'))
+        # Older workers (no detail) and other errors keep the plain text.
+        self.assertEqual(h.failure_text('focus-failed', 'could not bring the window to the front'), base)
+        self.assertEqual(h.failure_text('paste-failed', ''), h.FAILURE_TEXT['paste-failed'])
+        self.assertEqual(h.failure_text('odd-code', 'raw text'), 'raw text')
+
 
 def drive(fake, presence=None, driver_class=None, notify=None):
     """Hub, fake driver, watcher and runner without threads; tests run actions themselves."""

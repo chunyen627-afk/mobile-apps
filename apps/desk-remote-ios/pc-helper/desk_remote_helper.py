@@ -36,7 +36,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.2'
+VERSION = '0.5.3'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -1781,7 +1781,7 @@ class ActionRunner:
             handler(action)
         except ActionError as exc:
             logging.warning('%s %s failed: %s %s', action['kind'], action['app'], exc.code, exc.message)
-            self.update(action, state='failed', error=exc.code, message=FAILURE_TEXT.get(exc.code, exc.message or exc.code))
+            self.update(action, state='failed', error=exc.code, message=failure_text(exc.code, exc.message))
             self.tell(action, failed=True)
         except Exception:
             logging.exception('action failed')
@@ -2188,6 +2188,27 @@ FAILURE_TEXT = {
     'timeout': '畫面操作逾時',
     'worker-error': '畫面操作程式出錯',
 }
+
+# What the worker found in front when it could not take the foreground ("in front: <process>").
+FRONT_NAMES = {
+    'same-app': '桌面版自己開著的選單或對話框',
+    'none': '沒有視窗（可能是鎖定或切換使用者畫面）',
+    'explorer': '檔案總管或工作列',
+    'Taskmgr': '工作管理員',
+    'LockApp': '鎖定畫面',
+    'consent': '系統管理員權限確認（UAC）',
+    'remoting_desktop': 'Google 遠端桌面',
+}
+
+
+def failure_text(code, message):
+    """The phone's text for a failed action, naming the window in front when the worker said."""
+    text = FAILURE_TEXT.get(code, message or code)
+    front = re.search(r'in front: (\S+)$', message or '')
+    if front:
+        name = front.group(1)
+        text += f'；擋在前面的是：{FRONT_NAMES.get(name, name)}'
+    return text
 
 
 # ---------------------------------------------------------------------------------------------

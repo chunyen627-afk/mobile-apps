@@ -21,6 +21,9 @@ public static class DeskWin {
   [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT p);
   [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr hWnd, uint flags);
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+  [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool attach);
+  [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
+  [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
   [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X; public int Y; }
 }
 "@
@@ -119,7 +122,32 @@ function Bring-Front($w) {
   if ([DeskWin]::IsIconic($hwnd)) { [DeskWin]::ShowWindow($hwnd, 9) | Out-Null }  # SW_RESTORE
   [DeskWin]::SetForegroundWindow($hwnd) | Out-Null
   Start-Sleep -Milliseconds 300
-  if ([DeskWin]::GetForegroundWindow() -ne $hwnd) { Fail 'focus-failed' 'could not bring the window to the front' }
+  if ([DeskWin]::GetForegroundWindow() -eq $hwnd) { return }
+  # Second try: share the input state of the window in front, which Windows then lets hand over
+  # the foreground (sends no keys, so no Electron menu bar).
+  $front = [DeskWin]::GetForegroundWindow()
+  $owner = [uint32]0
+  $thread = [DeskWin]::GetWindowThreadProcessId($front, [ref]$owner)
+  $me = [DeskWin]::GetCurrentThreadId()
+  if ($thread -and $thread -ne $me -and [DeskWin]::AttachThreadInput($me, $thread, $true)) {
+    try {
+      [DeskWin]::BringWindowToTop($hwnd) | Out-Null
+      [DeskWin]::SetForegroundWindow($hwnd) | Out-Null
+    } finally { [DeskWin]::AttachThreadInput($me, $thread, $false) | Out-Null }
+    Start-Sleep -Milliseconds 300
+    if ([DeskWin]::GetForegroundWindow() -eq $hwnd) { return }
+  }
+  # Name what is in front, so the phone can say what blocked it.
+  $front = [DeskWin]::GetForegroundWindow()
+  $owner = [uint32]0
+  $null = [DeskWin]::GetWindowThreadProcessId($front, [ref]$owner)
+  $name = 'none'
+  if ($front -ne [IntPtr]::Zero) {
+    $name = 'unknown'
+    try { $name = (Get-Process -Id $owner -ErrorAction Stop).ProcessName } catch { }
+    if ($owner -eq [uint32]$w.Current.ProcessId) { $name = 'same-app' }
+  }
+  Fail 'focus-failed' "could not bring the window to the front; in front: $name"
 }
 
 function Save-Clipboard {
