@@ -2,6 +2,8 @@
 
 用 iPhone 原生輸入操作自己 Windows 電腦上的 **Claude 桌面版**與 **Codex 桌面版**：看對話與回覆、打字或傳照片、按權限的「允許一次」／「拒絕」、回答選項題、開新對話、停止、切換模型與權限模式、看電腦畫面，並在手機上用 Face ID 核准需要系統管理員權限的指令（`elevate`）。電腦端是一個只走私人網路（ZeroTier）的小幫手；桌面版的畫面由它用 UI Automation 操作。設計見 [DESIGN.md](DESIGN.md)（2026-10-26 核准）。
 
+**換電腦或換 AI 接手**：照 [RESTORE.md](RESTORE.md) 做——新電腦還原步驟、要重新產生的東西（連線密碼、核准金鑰、ntfy 頻道都不在倉庫裡）、驗收清單，以及接手的 AI 一定要守的規則。
+
 ## 目前版本
 
 | 項目 | 內容 |
@@ -107,12 +109,14 @@
 
 ```text
 DESIGN.md                  設計與決定
+RESTORE.md                 新電腦還原與新 AI 接手
 project.yml                XcodeGen：App、DeskRemoteCore（framework）、單元與 UI 測試
 iOSApp/                    SwiftUI 畫面；DeskRemoteApp.swift 是唯一 @main 檔，工具箱會排除它
 Sources/DeskRemoteCore/    API 模型、HelperClient、TranscriptLog、DeskText、DeskLink／DeskPhoto（無 UI）
 Tests/                     DeskRemoteCoreTests（單元）、DeskRemoteUITests（模擬器 UI）
 fixtures/fake-helper/      人工編寫的示範資料：兩個桌面版的對話清單、逐字稿、權限詢問、額度、示範畫面
-pc-helper/                 電腦端小幫手（Python 標準函式庫）、UIA 工作程序、截圖、提權夥伴、單元測試、安裝腳本、設定範例
+pc-helper/                 電腦端小幫手（Python 標準函式庫）、UIA 工作程序、截圖、提權夥伴、單元測試、安裝腳本、設定範例（列出所有設定）
+pc-helper/tools/uia_scan.ps1  唯讀：列出桌面版視窗的控制項名稱，桌面版改版後用來修 ui_strings.json
 scripts/build.sh           macOS CI：小幫手測試 → 產生專案 → 模擬器單元與 UI 測試 → Release 封裝
 ```
 

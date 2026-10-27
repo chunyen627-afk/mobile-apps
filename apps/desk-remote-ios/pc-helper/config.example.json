@@ -5,7 +5,12 @@
   "allowed_networks": ["<ZeroTier network, e.g. 10.x.y.0/24>"],
   "token": "<install.ps1 writes 43 random characters here>",
   "notify": {
-    "server": "<ntfy server URL>",
-    "topic": "<your private ntfy topic>"
-  }
+    "server": "https://ntfy.sh",
+    "topic": "<a private, random ntfy topic: treat it like a password>"
+  },
+  "idle_seconds": 60,
+  "alerts": {"usage_percent": 80, "context_percent": 80},
+  "screen": true,
+  "drive_windows": true,
+  "claude": {"context_windows": {"claude-opus-5": 1000000}}
 }
