@@ -430,10 +430,64 @@ function Prefixed-Button($scope, $prefix) {
   return $null
 }
 
-# The model button names the model, then the effort: "<prefix>Opus 5.5 <effort>".
+# The model button names the model, then the effort: "<model_strip>Opus 5.5 <effort>" (Claude
+# starts with a label to strip, Codex with the model itself).
 function Shows-Model($button, $s, $label) {
-  $rest = $button.Current.Name.Substring($s.model_prefix.Length).Trim()
+  $rest = $button.Current.Name
+  if ($s.model_strip -and $rest.StartsWith($s.model_strip)) { $rest = $rest.Substring($s.model_strip.Length) }
+  $rest = $rest.Trim()
   return ($rest -eq $label -or $rest.StartsWith("$label "))
+}
+
+function Wait-Named($w, $type, $name, $tries) {
+  for ($i = 0; $i -lt $tries; $i++) {
+    $hit = Find-InApp $w $type $name
+    if ($hit) { return $hit }
+    Start-Sleep -Milliseconds 250
+  }
+  return $null
+}
+
+# Collapses $name if it is expanded (Codex leaves its menus open after a pick).
+function Collapse-Named($w, $name) {
+  if (-not $name) { return }
+  $e = Find-InApp $w $CT::Button $name
+  $p = $null
+  if ($e -and $e.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$p) -and ("" + $p.Current.ExpandCollapseState) -eq 'Expanded') {
+    $p.Collapse()
+  }
+}
+
+# Codex: UI Automation only, no mouse or keys, works with the window minimized (read live 10/27):
+# Expand the model button, Invoke "select model", Invoke the model's radio button, then the
+# button must name it; menus left open are collapsed by their own buttons.
+function Set-CodexModel($w, $page, $s, $label) {
+  $button = Prefixed-Button $page $s.model_prefix
+  if (-not $button) { $button = Prefixed-Button $w $s.model_prefix }
+  if (-not $button) { Fail 'not-found' 'no model button on screen' }
+  if (Shows-Model $button $s $label) { return 'already' }
+  $p = $null
+  if (-not $button.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$p)) { Fail 'not-invokable' 'the model button does not expand' }
+  try {
+    $p.Expand()
+    $item = Wait-Named $w $CT::MenuItem $s.model_menu_item 12
+    if (-not $item) { Fail 'model-failed' 'the model menu did not open' }
+    if (-not (Invoke-Element $item)) { Fail 'not-invokable' 'the model item could not be pressed' }
+    $radio = Wait-Named $w $CT::RadioButton $label 12
+    if (-not $radio) { Fail 'model-failed' ("the model is not in the menu; radio buttons: " + ((Radio-Names $w) -join ' | ')) }
+    if (-not (Invoke-Element $radio)) { Fail 'not-invokable' 'the model could not be chosen' }
+    for ($i = 0; $i -lt 12; $i++) {
+      Start-Sleep -Milliseconds 250
+      $now = Prefixed-Button $w $s.model_prefix
+      if ($now -and (Shows-Model $now $s $label)) { return 'invoke' }
+    }
+    Fail 'model-failed' 'the model button does not show the chosen model'
+  } finally {
+    Start-Sleep -Milliseconds 300
+    Collapse-Named $w $s.effort_menu
+    $again = Prefixed-Button $w $s.model_prefix
+    if ($again) { $q = $null; if ($again.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$q) -and ("" + $q.Current.ExpandCollapseState) -eq 'Expanded') { $q.Collapse() } }
+  }
 }
 
 # Elements named $name in the app's window or in its other top-level windows (menus may open in
@@ -534,6 +588,7 @@ function Run-Command($c) {
     'model' {
       $w = Need-Window $c.app
       $page = Need-Doc $w $c.doc
+      if ($c.app -eq 'codex') { return @{ ok = $true; how = (Set-CodexModel $w $page $s $c.model) } }
       return @{ ok = $true; how = (Set-Model $w $page $s $c.model) }
     }
     'docs' {

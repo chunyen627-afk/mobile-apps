@@ -1,5 +1,5 @@
 {
-  "_comment": "Names of the desktop apps' controls as UI Automation reports them (Traditional Chinese UI, Claude 3.6556, Codex 26.1016). Change these, not the code, when an app update renames a control. Claude 3.6556 shows allow_once as its own button; more_allow is the fallback for builds that keep it in the dropdown. The Claude composer's model button reads \"模型：Opus 5.5 高\" and its menu lists the models as radio buttons (models: the ones the phone may pick; read 10/27); its usage button reads \"使用量：每週 · 所有模型：46% 週日上午11:00 重設\".",
+  "_comment": "Names of the desktop apps' controls as UI Automation reports them (Traditional Chinese UI, Claude 3.6556, Codex 26.1016). Change these, not the code, when an app update renames a control. Claude 3.6556 shows allow_once as its own button; more_allow is the fallback for builds that keep it in the dropdown. The Claude composer's model button reads \"模型：Opus 5.5 高\" and its menu lists the models as radio buttons (models: the ones the phone may pick; read 10/27); its usage button reads \"使用量：每週 · 所有模型：46% 週日上午11:00 重設\". Codex's model button reads \"GPT-6.1 Sol 高\" (model_prefix finds it, model_strip is removed before comparing): its menu has the item model_menu_item, which opens the models as radio buttons, and the effort menu button effort_menu; all of it works through UI Automation alone, even while the window is minimized (read 10/27).",
   "claude": {
     "edit": "提示詞",
     "deny": "拒絕",
@@ -10,6 +10,7 @@
     "next": "下一步",
     "other": "其他",
     "model_prefix": "模型：",
+    "model_strip": "模型：",
     "usage_prefix": "使用量：",
     "models": ["Opus 5.5", "Sonnet 5.5", "Haiku 5.5", "Fable 5.1"]
   },
@@ -18,6 +19,11 @@
     "deny": "拒絕",
     "allow_once": "允許一次",
     "new": "新對話",
-    "new_in_project": "在 {project} 中開始新對話"
+    "new_in_project": "在 {project} 中開始新對話",
+    "model_prefix": "GPT-",
+    "model_strip": "",
+    "model_menu_item": "選取模型",
+    "effort_menu": "選取推理強度",
+    "models": ["GPT-6.1 Sol", "GPT-6.1 Terra", "GPT-6 Sol", "GPT-6 Luna", "GPT-6 Astra", "GPT-5.6 Sol", "GPT-5.6 Terra", "GPT-5.6 Luna"]
   }
 }

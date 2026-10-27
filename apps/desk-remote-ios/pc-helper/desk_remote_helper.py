@@ -143,11 +143,12 @@ def ui_usage(name, prefix):
     return {'label': match.group(1).strip(), 'percent': int(match.group(2)), 'resetsText': match.group(3).strip() or None}
 
 
-def ui_model(name, prefix):
-    """The Claude composer's model button, e.g. '模型：Opus 5.5 高' -> ('Opus 5.5', '高')."""
-    if not name or not prefix or not name.startswith(prefix):
+def ui_model(name, strip):
+    """A composer's model button -> (model, effort): Claude's '模型：Opus 5.5 高' (strip '模型：')
+    -> ('Opus 5.5', '高'), Codex's 'GPT-6.1 Sol 高' (nothing to strip) -> ('GPT-6.1 Sol', '高')."""
+    if not name or strip is None or not name.startswith(strip):
         return None, None
-    rest = name[len(prefix):].strip()
+    rest = name[len(strip):].strip()
     head, _, last = rest.rpartition(' ')
     if head and last in EFFORT_LABELS.values():
         return head, last
@@ -1109,16 +1110,16 @@ class Hub:
         return out
 
     def meta(self, app, session_id, transcript):
-        """Model, effort and context use; for the conversation open on Claude's screen, the model
-        button there is the freshest answer (the conversation file is written a little later)."""
+        """Model, effort and context use. For the conversation open on the app's screen, its
+        model button is the freshest answer: Claude writes its conversation file a little later,
+        and Codex records a switch only with the next reply."""
         with transcript.lock:
             meta = self.sources[app].meta(session_id, transcript.parser)
-        if app == 'claude':
-            seen = self.ui('claude')
-            info = self.info(app, session_id)
-            label, effort = ui_model(seen.get('model'), (self.strings.get('claude') or {}).get('model_prefix'))
-            if label and info and seen.get('docs') == [info['doc']]:
-                meta['model'], meta['effort'] = label, effort or meta['effort']
+        seen = self.ui(app)
+        info = self.info(app, session_id)
+        label, effort = ui_model(seen.get('model'), (self.strings.get(app) or {}).get('model_strip'))
+        if label and info and seen.get('docs') == [info['doc']]:
+            meta['model'], meta['effort'] = label, effort or meta['effort']
         return meta
 
     def sessions(self, app, limit):
@@ -1325,8 +1326,6 @@ class WindowsDriver:
 
     def set_model(self, app, doc, label):
         """Picks `label` in the model menu of the open conversation; 'already' if it was chosen."""
-        if app != 'claude':
-            raise ActionError('not-supported', 'only Claude models can be switched')
         return self.ask(app, cmd='model', doc=doc, model=label).get('how')
 
 
@@ -1379,6 +1378,8 @@ class UiWatcher:
         self.hub, self.driver, self.notify, self.pc_name, self.interval = hub, driver, notify, pc_name, interval
         self.state = {}         # app -> {'docs': [...], 'prompt': {...} or None}
         self.turns = {}         # (app, id) -> last parser status
+        self.questions = {}     # (app, id) -> option question waiting at the last look
+        self.checked_once = False
         self.last_turn_check = 0.0
         self.lock = threading.Lock()
 
@@ -1414,7 +1415,8 @@ class UiWatcher:
             return dict(self.state.get(app) or {})
 
     def check_turns(self):
-        """A conversation that was working and is now idle has finished a turn."""
+        """A conversation that was working and is now idle has finished a turn; one that starts
+        waiting on an option question needs an answer. Both go to ntfy once."""
         for app, source in self.hub.sources.items():
             for row in source.list_sessions(15):
                 key = (app, row['id'])
@@ -1425,9 +1427,15 @@ class UiWatcher:
                     continue
                 transcript.refresh()
                 status = transcript.parser.status
-                if self.turns.get(key) == 'working' and status == 'idle':
+                question = (getattr(transcript.parser, 'question', None) or {}).get('questionId')
+                # Questions already waiting when the helper started are not news.
+                if question and self.checked_once and question != self.questions.get(key):
+                    self.send(f'❓ {APP_NAMES[app]} 在等你選擇', f'{self.pc_name}・「{row["title"]}」', 4, ['question'])
+                elif self.turns.get(key) == 'working' and status == 'idle':
                     self.send(f'✅ {APP_NAMES[app]} 完成一輪', f'{self.pc_name}・「{row["title"]}」', 3, ['white_check_mark'])
                 self.turns[key] = status
+                self.questions[key] = question
+        self.checked_once = True
 
     def send(self, title, message, priority, tags):
         if self.notify:
@@ -1508,7 +1516,7 @@ class ActionRunner:
                 return 400, error('bad-request', f'訊息太長（上限 {self.MAX_TEXT} 字）')
         if kind == 'model':
             models = (self.strings.get(app) or {}).get('models') or []
-            if app != 'claude' or not models:
+            if not models:
                 return 400, error('not-supported', '這個 App 還不能從手機切換模型')
             if payload.get('model') not in models:
                 return 400, error('bad-request', '沒有這個模型')
@@ -1644,19 +1652,17 @@ class ActionRunner:
             self.presence.end_own()
 
     def tell(self, action, failed=False):
-        if not self.notify:
+        """Only a failure goes to ntfy: the phone that asked already shows each success (the user
+        asked on 10/27 not to be notified of what they did themselves)."""
+        if not self.notify or not failed:
             return
         verb = {'send': '送出訊息', 'permission': '回覆權限', 'new': '開新對話', 'open': '打開對話',
                 'answer': '回答選項題', 'model': '切換模型'}[action['kind']]
-        if action['kind'] == 'permission' and not failed:
-            verb = '允許一次' if action['decision'] == 'allow_once' else '拒絕'
-        if action['kind'] == 'model' and not failed:
-            verb = f"切換模型為 {action['model']}"
         title = (action.get('info') or {}).get('title') or action.get('title') or ''
-        head = f"{'⚠️ 手機' + verb + '失敗' if failed else '📱 手機' + verb}：{APP_NAMES[action['app']]}"
-        body = f"{self.pc_name}・「{title}」" + (f"：{action['message']}" if failed else '')
+        head = f"⚠️ 手機{verb}失敗：{APP_NAMES[action['app']]}"
+        body = f"{self.pc_name}・「{title}」：{action['message']}"
         try:
-            self.notify(head, body, 4 if failed else 3, ['iphone'])
+            self.notify(head, body, 4, ['iphone'])
         except OSError:
             logging.exception('action notification failed')
 
@@ -1806,6 +1812,11 @@ class ActionRunner:
         if how == 'already':
             self.update(action, state='done', verified=True, message=f'本來就是 {label}')
             return
+        if app == 'codex':
+            # Codex writes the model to its rollout only with the next reply; the worker has
+            # already seen the model button name it.
+            self.update(action, state='done', verified=True, message=f'已切換為 {label}（下一則回覆起使用）')
+            return
         self.update(action, message='已切換，確認中')
         source = self.hub.sources[app]
         deadline = self.clock() + self.verify_seconds
@@ -1860,7 +1871,7 @@ class ElevateRelay:
         self.request, self.notify, self.pc_name = request, notify, pc_name
         self.lock = threading.Lock()
         self.pending, self.recent, self.available = [], [], False
-        self.seen, self.reported = set(), set()
+        self.seen = set()
         self.started = False
 
     def poll(self):
@@ -1874,18 +1885,14 @@ class ElevateRelay:
                 return
             self.pending, self.recent = answer.get('pending') or [], answer.get('recent') or []
             fresh = [r for r in self.pending if r['id'] not in self.seen]
-            done = [r for r in self.recent if r['id'] not in self.reported]
             first, self.started = not self.started, True
             self.seen.update(r['id'] for r in self.pending)
-            self.reported.update(r['id'] for r in self.recent)
         if first:
             return  # Nothing to announce for what was already there when the helper started.
+        # Only what needs the person: a request to approve. Results are not sent (the user asked on
+        # 10/27 to be told only about things that need them); the phone shows them.
         for _ in fresh:
             self.send('🔐 需要管理員權限', f'{self.pc_name}：有指令在等你核准，打開桌面遙控查看', 5, ['closed_lock_with_key'])
-        for r in done:
-            text = {'done': f"已執行，結束碼 {r.get('exitCode')}", 'denied': '已拒絕', 'expired': '逾時未核准',
-                    'timeout': '執行超過時間上限，已停止'}.get(r.get('state'), r.get('state'))
-            self.send('🔐 管理員指令', f'{self.pc_name}：{text}', 3, ['closed_lock_with_key'])
 
     def send(self, title, message, priority, tags):
         if self.notify:
@@ -2275,6 +2282,7 @@ class FakeDriver:
         self.answered = set()
         self.calls = []
         self.open_doc = {}
+        self.codex_models = {}  # page title -> model picked on the phone
         for key in setup.prompts_data:
             app, session_id = key.split('/', 1)
             info = hub.info(app, session_id)
@@ -2305,11 +2313,13 @@ class FakeDriver:
         answer = {'ok': True, 'window': True, 'docs': [self.open_doc.get(app)], 'edit': prompt is None,
                   'prompt': {'text': prompt['text'], 'buttons': ['拒絕', '允許一次']} if prompt else None}
         strings = self.hub.strings.get(app) or {}
-        if strings.get('model_prefix'):
+        if app == 'claude' and strings.get('model_prefix'):
             data = self.session_file(app, self.open_doc.get(app))[1] or {}
-            answer['model'] = (f"{strings['model_prefix']}{model_label(data.get('model')) or 'Opus 5.5'} "
+            answer['model'] = (f"{strings['model_strip']}{model_label(data.get('model')) or 'Opus 5.5'} "
                                f"{EFFORT_LABELS.get(data.get('effort'), '高')}")
             answer['usage'] = f"{strings['usage_prefix']}每週 · 所有模型：46% 週日上午11:00 重設"
+        elif app == 'codex' and strings.get('model_prefix'):
+            answer['model'] = f"{self.codex_models.get(self.open_doc.get(app), 'GPT-6.1 Sol')} 高"
         return answer
 
     def session_file(self, app, doc):
@@ -2323,10 +2333,13 @@ class FakeDriver:
 
     def set_model(self, app, doc, label):
         self.calls.append(('set_model', app, label))
-        if app != 'claude':
-            raise ActionError('not-supported', '')
         if self.open_doc.get(app) != doc:
             raise ActionError('title-mismatch', '')
+        if app == 'codex':  # Codex keeps the choice on screen until the next reply
+            if self.codex_models.get(doc, 'GPT-6.1 Sol') == label:
+                return 'already'
+            self.codex_models[doc] = label
+            return 'fake'
         path, data = self.session_file(app, doc)
         if model_label(data.get('model')) == label:
             return 'already'

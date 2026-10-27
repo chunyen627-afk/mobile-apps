@@ -318,8 +318,9 @@ final class DeskRemoteUITests: XCTestCase {
     }
 
     /// A message's long-press menu offers copy-all and "select text", which opens the whole message
-    /// in a text view where part of it can be selected (the text-view edit menu has "Select All";
-    /// SwiftUI's own text selection on iOS only copies everything, reported 10/27).
+    /// in a text view where part of it can be selected. A long press there selects one word and
+    /// shows the word menu (Look Up / Translate, found in CI 10/27); SwiftUI's own text selection
+    /// on iOS only copies everything (reported 10/27).
     func test20ReplyTextSelectsPart() throws {
         try launchWithHelper()
         openChat("claude", claudeA)
@@ -334,9 +335,9 @@ final class DeskRemoteUITests: XCTestCase {
         let sheet = element("select-text")
         XCTAssertTrue(waitFor(sheet, labelContains: "整理好了，安裝段落改成三步", timeout: 5), "select-text sheet missing")
         sheet.press(forDuration: 1.2)
-        let selectAll = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "label IN %@", ["Select All", "全選", "選取全部"])).firstMatch
-        XCTAssertTrue(selectAll.waitForExistence(timeout: 5),
+        let wordMenu = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label IN %@", ["查詢", "翻譯", "Look Up", "Translate", "全選", "Select All"])).firstMatch
+        XCTAssertTrue(wordMenu.waitForExistence(timeout: 5),
                       "no partial-selection menu; menu: " + app.menuItems.allElementsBoundByIndex.prefix(8).map(\.label).joined(separator: " | "))
         snapshot("20-select-part")
         element("select-done").tap()
@@ -352,8 +353,10 @@ final class DeskRemoteUITests: XCTestCase {
         bar.tap()
         XCTAssertTrue(waitFor(element("meta-context"), labelContains: "18%（18.3 萬 / 100 萬）", timeout: 5),
                       "context detail missing")
-        XCTAssertTrue(waitFor(element("usage-claude"), labelContains: "每週 46%・週日上午11:00 重設", timeout: 10),
-                      "weekly limit missing: \(element("usage-claude").label)")
+        let weekly = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier == 'usage-claude' AND label CONTAINS '每週'")).firstMatch
+        XCTAssertTrue(waitFor(weekly, labelContains: "每週 46%・週日上午11:00 重設", timeout: 10),
+                      "weekly limit missing: \(weekly.label)")
         snapshot("21b-model-sheet")
         let sonnet = element("model-Sonnet 5.5")
         XCTAssertTrue(reveal(sonnet), "model choices missing")
@@ -420,6 +423,9 @@ final class DeskRemoteUITests: XCTestCase {
 
     private func openSessions(_ app: String) {
         openPC()
+        // Rows move down when the PC's state arrives; a tap during that layout change was lost
+        // (CI 10/27, once the state also carried plan limits), so wait for it first.
+        XCTAssertTrue(element("pc-presence").waitForExistence(timeout: 10), "PC state did not load")
         let row = element("app-row-\(app)")
         XCTAssertTrue(row.waitForExistence(timeout: 10), "\(app) row missing")
         row.tap()

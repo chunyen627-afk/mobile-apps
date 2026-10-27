@@ -185,14 +185,16 @@ class RelayTests(unittest.TestCase):
         self.assertEqual(self.relay.decide(p['id'], 'allow', good)[0], 200)
         self.assertEqual(self.relay.snapshot()['recent'][0]['state'], 'done')
 
-    def test_new_requests_and_results_go_to_ntfy_without_the_command(self):
+    def test_only_new_requests_go_to_ntfy_without_the_command(self):
         self.relay.poll()
         r = ask(self.lg, content='秘密指令 Stop-Service X')
         self.relay.poll()
         self.relay.poll()
         self.assertEqual([s[0] for s in self.sent], ['🔐 需要管理員權限'])
         self.relay.decide(r['id'], 'deny', None)
-        self.assertEqual([s[0] for s in self.sent], ['🔐 需要管理員權限', '🔐 管理員指令'])
+        self.relay.poll()
+        # The result needs nobody (decided on the phone): not sent (user's choice 10/27).
+        self.assertEqual([s[0] for s in self.sent], ['🔐 需要管理員權限'])
         self.assertFalse(any('秘密' in s[1] for s in self.sent), 'the command leaked into ntfy')
 
     def test_unreachable_companion_is_reported(self):

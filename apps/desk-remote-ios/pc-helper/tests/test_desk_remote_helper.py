@@ -502,7 +502,7 @@ class DrivingTests(FakeEnvironment):
         run_all(runner)
         self.assertEqual(driver.calls[-1], ('new_send', 'codex', '在 demo-app 中開始新對話'))
 
-    def test_every_action_and_question_is_sent_to_ntfy(self):
+    def test_questions_and_failures_are_notified_but_not_what_the_phone_did(self):
         sent = []
         _, _, watcher, runner = drive(self.fake, notify=lambda *a: sent.append(a))
         self.assertEqual(len([s for s in sent if s[0].startswith('🔔')]), 1)
@@ -510,8 +510,28 @@ class DrivingTests(FakeEnvironment):
         self.assertEqual(len([s for s in sent if s[0].startswith('🔔')]), 1, 'same question twice')
         runner.submit('send', 'claude', A, {'text': '秘密內容不能進通知'})
         run_all(runner)
-        self.assertTrue(any(s[0] == '📱 手機送出訊息：Claude' for s in sent), sent)
+        self.assertFalse(any(s[0].startswith('📱') for s in sent), 'a phone action that worked was notified')
+        presence = dict(self.fake.cfg['presence'])
+        code, body = runner.submit('send', 'claude', A, {'text': '秘密內容不能進通知'})
+        runner.presence = h.FixedPresence(dict(presence, locked=True))  # locked before it runs: fails
+        run_all(runner)
+        self.assertEqual([s[0] for s in sent if s[0].startswith('⚠️')], ['⚠️ 手機送出訊息失敗：Claude'])
         self.assertFalse(any('秘密內容' in s[1] for s in sent), 'message text leaked into ntfy')
+
+    def test_a_new_option_question_is_notified_once(self):
+        sent = []
+        hub, _, watcher, _ = drive(self.fake, notify=lambda *a: sent.append(a))
+        self.assertFalse(any(s[0].startswith('❓') for s in sent), 'a question waiting at startup is not news')
+        path = hub.sources['claude'].transcript_path(A)
+        line = {'type': 'assistant', 'timestamp': '2026-10-27T01:00:00Z', 'message': {'role': 'assistant', 'content': [
+            {'type': 'tool_use', 'id': 'toolu_new_question', 'name': 'AskUserQuestion', 'input': {'questions': [
+                {'question': '要用哪個？', 'header': '選擇', 'multiSelect': False,
+                 'options': [{'label': '甲'}, {'label': '乙'}]}]}}]}}
+        with path.open('a', encoding='utf-8') as handle:
+            handle.write(json.dumps(line, ensure_ascii=False) + '\n')
+        watcher.check_turns()
+        watcher.check_turns()
+        self.assertEqual([s[0] for s in sent if s[0].startswith('❓')], ['❓ Claude 在等你選擇'])
 
     def test_finished_turn_is_notified_once(self):
         sent = []
@@ -660,6 +680,8 @@ class MetaTests(FakeEnvironment):
         self.assertEqual(h.ui_model('模型：Opus 5.5 高', '模型：'), ('Opus 5.5', '高'))
         self.assertEqual(h.ui_model('模型：Sonnet 5.5', '模型：'), ('Sonnet 5.5', None))
         self.assertEqual(h.ui_model('別的按鈕', '模型：'), (None, None))
+        self.assertEqual(h.ui_model('GPT-6.1 Sol 高', ''), ('GPT-6.1 Sol', '高'))
+        self.assertEqual(h.ui_model('GPT-6.1 Sol 高', None), (None, None))
         self.assertEqual(h.ui_usage('使用量：每週 · 所有模型：46% 週日上午11:00 重設', '使用量：'),
                          {'label': '每週 · 所有模型', 'percent': 46, 'resetsText': '週日上午11:00 重設'})
         self.assertIsNone(h.ui_usage('使用量：讀不懂', '使用量：'))
@@ -704,14 +726,14 @@ class MetaTests(FakeEnvironment):
         self.assertEqual(weekly['resetsText'], '週日上午11:00 重設')
         self.assertEqual(state['usage']['codex']['windows'][0]['percent'], 5)
         self.assertEqual(state['models']['claude'], ['Opus 5.5', 'Sonnet 5.5', 'Haiku 5.5', 'Fable 5.1'])
-        self.assertNotIn('codex', state['models'])
+        self.assertIn('GPT-6.1 Terra', state['models']['codex'])
         page = hub.events('claude', A, 0, '', 0)
         self.assertEqual((page['meta']['model'], page['meta']['context']['percent']), ('Opus 5.5', 18))
 
     def test_switching_the_model_picks_it_on_screen_and_checks_the_conversation_file(self):
         hub, driver, watcher, runner = drive(self.fake)
         self.assertEqual(runner.submit('model', 'claude', A, {'model': 'GPT-9'})[0], 400)
-        self.assertEqual(runner.submit('model', 'codex', X, {'model': 'Opus 5.5'})[1]['error'], 'not-supported')
+        self.assertEqual(runner.submit('model', 'codex', X, {'model': 'Opus 5.5'})[0], 400)  # each app its own list
         code, body = runner.submit('model', 'claude', A, {'model': 'Sonnet 5.5'})
         self.assertEqual(code, 202, body)
         run_all(runner)
@@ -723,6 +745,18 @@ class MetaTests(FakeEnvironment):
         code, body = runner.submit('model', 'claude', A, {'model': 'Sonnet 5.5'})
         run_all(runner)
         self.assertEqual(runner.status(body['id'])['message'], '本來就是 Sonnet 5.5')
+
+    def test_codex_switch_trusts_the_button_until_the_next_reply(self):
+        hub, driver, watcher, runner = drive(self.fake)
+        code, body = runner.submit('model', 'codex', X, {'model': 'GPT-6 Luna'})
+        self.assertEqual(code, 202, body)
+        run_all(runner)
+        status = runner.status(body['id'])
+        self.assertEqual((status['state'], status['verified'], status['message']),
+                         ('done', True, '已切換為 GPT-6 Luna（下一則回覆起使用）'))
+        watcher.tick()
+        meta = hub.events('codex', X, 0, '', 0)['meta']
+        self.assertEqual((meta['model'], meta['effort'], meta['modelId']), ('GPT-6 Luna', '高', 'gpt-6.1-sol'))
 
     def test_a_model_switch_waits_for_an_idle_pc(self):
         presence = dict(self.fake.cfg['presence'], idleSeconds=5)
