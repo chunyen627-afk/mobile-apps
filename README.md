@@ -7,7 +7,8 @@
 | App | 平台 | 用途 | 驗證狀態 |
 | --- | --- | --- | --- |
 | [光盒相簿](apps/album-ios) | iPhone / iOS 17+ | SMB 相簿、資料夾索引、照片預載、影片播放與診斷匯出 | 0.3.1 的 39 項測試、畫面檢查及封裝通過；已覆蓋安裝並讀回確認 build 4，新版功能回歸與偶發退出問題待實機驗證 |
-| [礦機狀態](https://github.com/chunyen627-afk/mobile-apps/tree/claude/miner-status-ios-demo/apps/miner-status-ios) | iPhone / iOS 16+ | 以燈號與詳情顯示礦機挖礦狀態、估算收益與電費、今日電價、開挖建議；需控制密碼的遠端開始／停止與遠端開機；預設離線示範，可設定來源（僅前景） | 0.6.0 build 8：121 項單元、18 項模擬器 UI 測試 0 失敗，截圖已人工檢視（[run 40297327812](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40297327812)）；IPA 在公開 [Release miner-status-0.6.0-build8](https://github.com/chunyen627-afk/mobile-apps/releases/tag/miner-status-0.6.0-build8)。build 2 實機通過並讀到真實資料；0.6.0 的遠端開機按鈕實機待確認。程式在 `claude/miner-status-ios-demo` 分支，尚未合併 main |
+| [礦機狀態](https://github.com/chunyen627-afk/mobile-apps/tree/claude/miner-status-ios-demo/apps/miner-status-ios) | iPhone / iOS 16+ | 以燈號與詳情顯示礦機挖礦狀態、估算收益與電費、累計收益估算（新台幣與約當 BTC）、今日電價、開挖建議；需控制密碼的遠端開始／停止與遠端開機；預設離線示範，可設定來源（僅前景） | 0.6.3 build 11：125 項單元、21 項模擬器 UI 測試 0 失敗，截圖已人工檢視（[run 40623881960](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40623881960)）。0.6.1 起只隨工具箱發布；單獨版最後一版是 [Release miner-status-0.6.0-build8](https://github.com/chunyen627-afk/mobile-apps/releases/tag/miner-status-0.6.0-build8)。build 2 實機通過並讀到真實資料；0.6.3 的累計收益實機待確認。程式在 `claude/miner-status-ios-demo` 分支，尚未合併 main |
+| [工具箱](https://github.com/chunyen627-afk/mobile-apps/tree/claude/toolbox-ios/apps/toolbox-ios) | iPhone / iOS 17+ | 把光盒相簿和礦機狀態合成一個 App，底部分頁切換，只佔 1 個側載名額；沿用相簿的 Bundle ID，覆蓋安裝保留設定 | 0.4.2 build 8（相簿 0.3.2＋礦機 0.6.3）：相簿單元 41、礦機單元 125、工具箱 UI 4、相簿 UI 6 項測試 0 失敗，截圖已人工檢視；IPA 在公開 [Release toolbox-0.4.2-build8](https://github.com/chunyen627-afk/mobile-apps/releases/tag/toolbox-0.4.2-build8)（[run 40631339706](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40631339706)）。手機上已裝較早版本的工具箱，0.4.2 尚未確認安裝。程式在 `claude/toolbox-ios` 分支，尚未合併 main |
 | [桌面遙控](https://github.com/chunyen627-afk/mobile-apps/tree/claude/desk-remote/apps/desk-remote-ios) | iPhone / iOS 17+ ＋ Windows 小幫手 | 用手機操作自己電腦上的 Claude 與 Codex 桌面版：看對話、打字或傳照片、允許一次／拒絕、回答選項題、開新對話、停止、切換模型與權限模式、看額度與上下文、看電腦畫面；用 Face ID 核准需要系統管理員權限的指令。電腦端小幫手只走私人網路（ZeroTier） | 0.5.2 build 5：小幫手 87、單元 31、模擬器 UI 26 項測試通過，截圖已人工檢視（[run 40471604033](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40471604033)）；IPA 在公開 [Release desk-remote-0.5.2-build5](https://github.com/chunyen627-afk/mobile-apps/releases/tag/desk-remote-0.5.2-build5)。0.5.0 已裝到 iPhone，並在真的電腦上實測送出、允許一次、選項題、開新對話、停止、照片、推理強度、權限模式與管理員核准；在真的電腦上切換模型尚未實測。程式在 `claude/desk-remote` 分支，尚未合併 main |
 
 ## 目錄
@@ -21,11 +22,11 @@ docs/
   ios-app-autonomous-ci.md 新 App 的 AI 自主建置流程與實戰日記
 ```
 
-礦機狀態的 `apps/miner-status-ios/` 與 `miner-status-ios.yml` 目前在 `claude/miner-status-ios-demo` 分支，驗穩後再整合。桌面遙控的 `apps/desk-remote-ios/`（含電腦端小幫手 `pc-helper/`）與 `desk-remote-ios.yml` 在 `claude/desk-remote` 分支，之後會成為工具箱的一個分頁。
+礦機狀態的 `apps/miner-status-ios/` 與 `miner-status-ios.yml` 目前在 `claude/miner-status-ios-demo` 分支，工具箱的 `apps/toolbox-ios/` 與 `toolbox-ios.yml` 在 `claude/toolbox-ios` 分支（直接引用相簿與礦機兩個資料夾的原始碼），驗穩後再整合。桌面遙控的 `apps/desk-remote-ios/`（含電腦端小幫手 `pc-helper/`）與 `desk-remote-ios.yml` 在 `claude/desk-remote` 分支，之後會成為工具箱的一個分頁。
 
 後續新 App 放在 `apps/<名稱>/`，各自建立 README 與必要的 workflow，並依 [AI 自主建置流程](docs/ios-app-autonomous-ci.md) 建置與驗證。
 
-**工具箱整合規劃**：免費 Apple 帳號每台裝置只能同時啟用 3 個側載 App（SideStore 本身佔 1 個），每 7 天最多建立 10 個 App ID。因此各工具最終會整合成一個「工具箱」App，打開後從首頁選要進哪一個工具，只佔 1 個名額、只需續簽一次。流程：每個新工具先做成單獨 App，模擬器測試與截圖檢視通過、實機確認能動，再以同一份模組整合進工具箱；工具箱預計沿用相簿的 Bundle ID，覆蓋安裝時保留相簿資料。目前順序：礦機驗穩（含收益與電費）→ 整合 → 規劃之後的新 App。
+**工具箱整合規劃**：免費 Apple 帳號每台裝置只能同時啟用 3 個側載 App（SideStore 本身佔 1 個），每 7 天最多建立 10 個 App ID。因此各工具整合成一個「工具箱」App，只佔 1 個名額、只需續簽一次。流程：每個新工具先做成單獨 App，模擬器測試與截圖檢視通過、實機確認能動，再以同一份原始碼整合進工具箱。工具箱已完成（2026-10-26）：相簿與礦機狀態兩個底部分頁，沿用相簿的 Bundle ID，覆蓋安裝時保留相簿資料。下一個預計加入的是桌面遙控。
 
 STM32 板子相關內容留在 [stm32h7s78-project](https://github.com/chunyen627-afk/stm32h7s78-project)。
 
@@ -47,4 +48,4 @@ STM32 板子相關內容留在 [stm32h7s78-project](https://github.com/chunyen62
 
 每次功能、操作方式、建置流程、限制或驗證結果變更時，同步更新對應 App 的 README；影響專案總覽時也更新此檔案。明確分開實作完成、編譯通過、模擬器通過與實機通過，並附上測試證據。
 
-最後更新：2026-10-27。
+最後更新：2026-10-28。
