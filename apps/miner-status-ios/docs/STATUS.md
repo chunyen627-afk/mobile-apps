@@ -129,6 +129,8 @@ UI 測試與截圖找到並修正的畫面問題：
 - 示範資料：三天前開始累計，共 NT$349、約當 0.000134 BTC（A 4.8 PRL ≈ NT$289、B 0.025 QTC ≈ NT$60）。
 - 測試：單元測試多兩項（累計的解碼、格式檢查），UI 測試多一項（test21：清單的累計、B 的詳情頁）；契約檢查多 4 個正向、9 個反向案例。
 - [run 40620740699](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40620740699)（`e8a4637`）：App 編譯失敗，`EarningsViews.swift` 把不是 Optional 的 `Timestamp.date` 寫成 `guard let`；下一個 commit 修正。
+- [run 40621432567](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40621432567)（`8805930`）：單元測試 `Executed 125 tests, with 0 failures`、UI 測試 `Executed 21 tests, with 0 failures`；截圖確認詳情頁 B 的「累計收益（估算）0.025 QTC、NT$60、不是實際入帳」，清單的累計那一行被截在畫面最底下（測試有找到它），下一個 commit 讓測試先往上捲再截圖。
+- 遠端開始／停止（電腦端，同日）：除了筆電，office、RTX 5080、VCU118 也可以從 App 開始／停止（App 不用改，按鈕依來源的 `control` 顯示）。手機自己送出的指令不再發通知，刻意停止的機器顯示「手動停止」、不再發「已停止」通知。
 
 ## 0.6.2（build 10，已併入工具箱 0.4.1 build 7 發布）：挖另一種幣的機器也算收益
 
