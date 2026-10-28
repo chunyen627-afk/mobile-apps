@@ -955,6 +955,23 @@ for line in sys.stdin:
         # A card older than the file, or none, leaves the earlier rules.
         self.assertEqual(h.merge_claude_usage(sample, button, t, t, rows, t - 2 * 86400)['windows'][-1]['percent'], 63)
 
+    def test_claude_4_29_card_rows_keep_their_wording_and_expire(self):
+        read = h.datetime(2026, 10, 28, 23, 34).timestamp()  # a Wednesday, local time
+        self.assertEqual(h.datetime(2026, 10, 28).weekday(), 2)
+        thursday = h.datetime(2026, 10, 29, 2, 20).timestamp()
+        self.assertEqual(h.clock_reset('週四上午2:20 重設', read), thursday)
+        self.assertEqual(h.clock_reset('週日下午1:05 重設', read), h.datetime(2026, 11, 1, 13, 5).timestamp())
+        self.assertEqual(h.clock_reset('週三上午12:00 重設', read), h.datetime(2026, 11, 4, 0, 0).timestamp())
+        self.assertIsNone(h.clock_reset('2 小時後重設', read))
+        rows = [{'label': '5 小時限制', 'percent': 6, 'reset': '週四上午2:20 重設'},
+                {'label': '每週 · Fable', 'percent': 53, 'reset': '週日上午11:00 重設'},
+                {'label': '每週', 'percent': 62, 'reset': '週日上午11:00 重設'}]
+        shown = h.card_windows(rows, read, read + 60)
+        self.assertEqual([(w['label'], w['percent'], w['resetsText'], w['resetsAt']) for w in shown],
+                         [('5 小時', 6, '週四上午2:20 重設', None), ('每週 · Fable', 53, '週日上午11:00 重設', None),
+                          ('每週', 62, '週日上午11:00 重設', None)])
+        self.assertEqual([w['label'] for w in h.card_windows(rows, read, thursday + 1)], ['每週 · Fable', '每週'])
+
     def test_the_card_is_read_only_while_nobody_uses_the_pc_and_not_too_often(self):
         presence = dict(self.fake.cfg['presence'], idleSeconds=5)
         hub, driver, watcher, _ = drive(self.fake, presence)

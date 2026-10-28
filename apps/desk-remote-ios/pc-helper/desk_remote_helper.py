@@ -28,7 +28,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -149,8 +149,33 @@ def account_mark(app, raw):
     return hashlib.sha256(f'{app}:{raw}'.encode('utf-8')).hexdigest()[:16] if raw else None
 
 
-# The usage card's row names (Claude 4.x) -> the phone's window labels.
-CARD_LABELS = {'工作階段限制': '工作階段', '每週 · 所有模型': '每週'}
+# The usage card's row names differ by version (live 10/28: 3.6556 "工作階段限制" and "每週 · 所有
+# 模型", 4.29 "5 小時限制", "每週" and "每週 · Fable"): the phone shows them without "限制".
+CARD_LABELS = {'每週 · 所有模型': '每週'}
+WEEKDAYS = '一二三四五六日'
+
+
+def card_label(name):
+    name = (name or '').strip()
+    return CARD_LABELS.get(name) or name.removesuffix('限制').strip() or '用量'
+
+
+def clock_reset(text, read_at):
+    """'週四上午2:20 重設' read at `read_at` -> the next such local time's epoch seconds, or None."""
+    match = re.fullmatch(r'週([一二三四五六日])\s*(上午|下午)?\s*(\d{1,2}):(\d{2})\s*重設', (text or '').strip())
+    if not match:
+        return None
+    day, half, hour, minute = WEEKDAYS.index(match.group(1)), match.group(2), int(match.group(3)), int(match.group(4))
+    if half == '下午' and hour < 12:
+        hour += 12
+    elif half == '上午' and hour == 12:
+        hour = 0
+    start = datetime.fromtimestamp(read_at)
+    for ahead in range(8):
+        candidate = (start + timedelta(days=ahead)).replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if candidate.weekday() == day and candidate.timestamp() > read_at - 60:
+            return candidate.timestamp()
+    return None
 
 
 def relative_reset(text, read_at):
@@ -170,10 +195,11 @@ def card_windows(rows, read_at, now):
         if not isinstance(row, dict) or not isinstance(row.get('percent'), (int, float)):
             continue
         reset = row.get('reset') or None
-        resets_at = relative_reset(reset, read_at)
-        if resets_at is not None and resets_at <= now:
+        resets_at = relative_reset(reset, read_at)  # "2 小時 56 分後重設" goes stale: shown as a time
+        expires = resets_at if resets_at is not None else clock_reset(reset, read_at)  # "週四上午2:20 重設" stays text
+        if expires is not None and expires <= now:
             continue
-        windows.append({'label': CARD_LABELS.get(row.get('label'), row.get('label') or '用量'), 'percent': round(row['percent']),
+        windows.append({'label': card_label(row.get('label')), 'percent': round(row['percent']),
                         'resetsAt': iso(resets_at) if resets_at is not None else None,
                         'resetsText': None if resets_at is not None else reset})
     return windows
