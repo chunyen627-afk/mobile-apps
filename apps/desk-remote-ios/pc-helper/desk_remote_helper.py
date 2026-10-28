@@ -366,6 +366,18 @@ class ClaudeParser:
             elif obj.get('operation') in ('dequeue', 'remove') and self.queued:
                 self.queued.pop(0)
             return []
+        if kind == 'attachment' and not obj.get('isSidechain'):
+            # A message the person sent while a turn was running is not a user message: Claude
+            # hands it to the running turn as a queued_command attachment (seen live 10/28), so the
+            # phone lost it once the pending bubble was gone.
+            attachment = obj.get('attachment') or {}
+            origin = attachment.get('origin') or {}
+            if attachment.get('type') != 'queued_command' or (isinstance(origin, dict) and origin.get('kind') not in (None, 'human')):
+                return []
+            prompt = attachment.get('prompt')
+            obj = {'type': 'user', 'timestamp': attachment.get('timestamp') or obj.get('timestamp'),
+                   'message': {'role': 'user', 'content': prompt if isinstance(prompt, (str, list)) else []}}
+            kind = 'user'
         if kind not in ('user', 'assistant') or obj.get('isSidechain') or obj.get('isMeta'):
             return []
         message = obj.get('message') or {}

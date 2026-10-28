@@ -1184,6 +1184,23 @@ class MoreControlsTests(FakeEnvironment):
         out = parser.feed({'type': 'user', 'message': {'role': 'user', 'content': '[Request interrupted by user for tool use]'}})
         self.assertEqual(out[0]['kind'], 'status')
 
+    def test_a_message_sent_during_a_turn_stays_in_the_conversation(self):
+        parser = h.ClaudeParser()
+        # As Claude 2.1.308 writes it (live 10/28): a queued_command attachment, not a user message.
+        out = parser.feed({'type': 'attachment', 'timestamp': '2026-10-28T16:30:30.461Z', 'attachment': {
+            'type': 'queued_command', 'commandMode': 'prompt', 'origin': {'kind': 'human'}, 'humanTurn': True,
+            'timestamp': '2026-10-28T16:30:30.461Z', 'prompt': [
+                {'type': 'text', 'text': '<system-reminder>\nLinked sessions now\n</system-reminder>'},
+                {'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/png', 'data': 'AAAA'}},
+                {'type': 'text', 'text': 'app要更新嗎'}]}})
+        self.assertEqual(out, [{'kind': 'user', 'text': '[圖片]', 'ts': '2026-10-28T16:30:30Z'},
+                               {'kind': 'user', 'text': 'app要更新嗎', 'ts': '2026-10-28T16:30:30Z'}])
+        self.assertEqual(parser.feed({'type': 'attachment', 'attachment': {'type': 'queued_command', 'prompt': '純文字'}})[0]['text'], '純文字')
+        # Other attachments, and queued commands that no person sent, are not messages.
+        self.assertEqual(parser.feed({'type': 'attachment', 'attachment': {'type': 'queued_command', 'origin': {'kind': 'task'},
+                                                                           'prompt': 'x'}}), [])
+        self.assertEqual(parser.feed({'type': 'attachment', 'attachment': {'type': 'todo', 'prompt': 'x'}}), [])
+
     def test_someone_at_the_pc_does_not_block_stop_or_codex_menus(self):
         presence = dict(self.fake.cfg['presence'], idleSeconds=5)
         _, _, _, runner = drive(self.fake, presence)
