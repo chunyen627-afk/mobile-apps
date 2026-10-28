@@ -278,6 +278,40 @@ final class ElevateTests: XCTestCase {
 final class MetaAndUsageTests: XCTestCase {
     private func data(_ text: String) -> Data { Data(text.utf8) }
 
+    private func state(codex percent: Int, at time: String, account: String?) throws -> HelperState {
+        let mark = account.map { "\"\($0)\"" } ?? "null"
+        return try HelperClient.decode(HelperState.self, status: 200, data: data("""
+        {"ok":true,"pc":{"name":"P","helperVersion":"0.5.8"},"capabilities":["read"],"apps":{},
+         "presence":{"idleSeconds":1,"locked":false},"warnings":[],"elevate":null,
+         "usage":{"codex":{"windows":[{"label":"每週","percent":\(percent),"resetsAt":null,"resetsText":null}],
+                           "sampledAt":"\(time)","account":\(mark)}}}
+        """))
+    }
+
+    func testPCsOnOnePlanShowTheNewerLimits() throws {
+        let office = try state(codex: 0, at: "2026-10-28T09:30:53Z", account: "a1")
+        let home = try state(codex: 14, at: "2026-10-28T05:35:21Z", account: "a1")
+        var book = UsageBook()
+        XCTAssertTrue(book.record(office, pc: "辦公室"))
+        XCTAssertFalse(book.record(home, pc: "家用電腦"), "an older sample must not replace a newer one")
+        // The home PC shows the office's newer reading and says where it came from.
+        let shownAtHome = try XCTUnwrap(book.shown(.codex, own: home.usage(.codex), pc: "家用電腦"))
+        XCTAssertEqual(shownAtHome.usage.windows.first?.percent, 0)
+        XCTAssertEqual(shownAtHome.from, "辦公室")
+        // The office keeps its own.
+        XCTAssertEqual(book.shown(.codex, own: office.usage(.codex), pc: "辦公室")?.from, nil)
+        // Another account, or a helper too old to say, keeps its own as well.
+        let other = try state(codex: 50, at: "2026-10-28T01:00:00Z", account: "b2")
+        XCTAssertEqual(book.shown(.codex, own: other.usage(.codex), pc: "家用電腦")?.usage.windows.first?.percent, 50)
+        let unmarked = try state(codex: 50, at: "2026-10-28T01:00:00Z", account: nil)
+        XCTAssertFalse(book.record(unmarked, pc: "舊電腦"))
+        XCTAssertNil(book.shown(.codex, own: unmarked.usage(.codex), pc: "舊電腦")?.from)
+        XCTAssertNil(book.shown(.claude, own: nil, pc: "辦公室"))
+        // It survives the phone restarting.
+        let saved = try JSONDecoder().decode(UsageBook.self, from: JSONEncoder().encode(book))
+        XCTAssertEqual(saved, book)
+    }
+
     func testDecodesUsageModelsAndMetaAndToleratesOlderHelpers() throws {
         let state = try HelperClient.decode(HelperState.self, status: 200, data: data("""
         {"ok":true,"pc":{"name":"P","helperVersion":"0.4.0"},"capabilities":["read","model"],"apps":{},

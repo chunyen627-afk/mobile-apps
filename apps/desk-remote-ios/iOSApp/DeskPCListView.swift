@@ -81,6 +81,7 @@ struct DeskPCRow: View {
         }
         do {
             let state = try await client.state()
+            store.note(state, pcID: pc.id)
             line = "連線正常・\(DeskText.presence(state.presence))"
             if let waiting = state.elevate?.pending, waiting > 0 {
                 line += "・\(waiting) 個管理員權限請求"

@@ -66,8 +66,8 @@ public struct HelperState: Decodable, Equatable, Sendable {
 }
 
 /// One app's plan limits as the desktop app last read them.
-public struct PlanUsage: Decodable, Equatable, Sendable {
-    public struct Window: Decodable, Equatable, Hashable, Sendable {
+public struct PlanUsage: Codable, Equatable, Sendable {
+    public struct Window: Codable, Equatable, Hashable, Sendable {
         /// "5 小時", "每週", ...
         public let label: String
         public let percent: Int
@@ -79,6 +79,8 @@ public struct PlanUsage: Decodable, Equatable, Sendable {
 
     public let windows: [Window]
     public let sampledAt: String?
+    /// A one-way mark of the signed-in account (helper 0.5.8): PCs with the same mark share one plan.
+    public let account: String?
 }
 
 /// Model, effort and context use of one conversation (`meta` of an event page).

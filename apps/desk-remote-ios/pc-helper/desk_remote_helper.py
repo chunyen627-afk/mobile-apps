@@ -36,7 +36,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.7'
+VERSION = '0.5.8'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -141,6 +141,12 @@ def ui_usage(name, prefix):
     if not match:
         return None
     return {'label': match.group(1).strip(), 'percent': int(match.group(2)), 'resetsText': match.group(3).strip() or None}
+
+
+def account_mark(app, raw):
+    """A short one-way mark of the signed-in account, so the phone can tell that two PCs share
+    one plan (and show the newer limits on both) without learning the account's id."""
+    return hashlib.sha256(f'{app}:{raw}'.encode('utf-8')).hexdigest()[:16] if raw else None
 
 
 def merge_claude_usage(from_file, button, button_at, now):
@@ -613,6 +619,11 @@ class ClaudeSource:
         self.paths = {}       # cliSessionId -> transcript path
         self.warning = None
 
+    def account(self):
+        """The signed-in organisation (the folder holding its conversations), as a mark."""
+        folder = self.sessions_dir()
+        return account_mark('claude', Path(folder).name) if folder else None
+
     def sessions_dir(self):
         """The account folder written most recently: the one signed in to the desktop app now."""
         best, newest = None, -1.0
@@ -765,6 +776,16 @@ class CodexSource:
         self.warning = None
         self.recorded_cache = {}
         self.imports = (None, {})
+
+    def account(self):
+        """The signed-in ChatGPT account (only its id is read from auth.json), as a mark."""
+        try:
+            data = json.loads((self.home / 'auth.json').read_text(encoding='utf-8'))
+        except (OSError, ValueError, UnicodeDecodeError):
+            return None
+        tokens = data.get('tokens') if isinstance(data, dict) else None
+        raw = tokens.get('account_id') if isinstance(tokens, dict) else None
+        return account_mark('codex', raw) if isinstance(raw, str) else None
 
     def available(self):
         return (self.home / 'sessions').is_dir()
@@ -1255,6 +1276,12 @@ class Hub:
         seen = self.ui('claude')
         button = ui_usage(seen.get('usage'), (self.strings.get('claude') or {}).get('usage_prefix'))
         out['claude'] = merge_claude_usage(out.get('claude'), button, seen.get('usageAt'), time.time())
+        for app, source in self.sources.items():
+            if out.get(app) and hasattr(source, 'account'):
+                try:
+                    out[app] = dict(out[app], account=source.account())
+                except OSError:
+                    logging.exception('account of %s failed', app)
         self.usage_cache = (now, out)
         return out
 
@@ -3095,6 +3122,18 @@ def build_driving(hub, driver, notify, pc_name, cfg, interval, verify_seconds):
     return runner
 
 
+def fake_fresh_usage(read, app, percent):
+    """Fake mode's limits with `app` at `percent`, read just now: another PC on the same plan
+    whose desktop app read its limits later."""
+    def usage():
+        out = dict(read())
+        if out.get(app):
+            windows = [dict(window, percent=int(percent)) for window in out[app]['windows']]
+            out[app] = dict(out[app], windows=windows, sampledAt=iso(time.time()))
+        return out
+    return usage
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description='Desk remote helper')
     parser.add_argument('--config', type=Path, default=None)
@@ -3102,6 +3141,7 @@ def main(argv=None):
     parser.add_argument('--fake-port', type=int, default=None, help='fake mode: listen on this port instead')
     parser.add_argument('--fake-idle', type=int, default=None, help='fake mode: report this many idle seconds')
     parser.add_argument('--fake-closed', default='', help='fake mode: these apps (comma-separated) start with no window')
+    parser.add_argument('--fake-usage', default='', help='fake mode: app=percent, limits read just now')
     args = parser.parse_args(argv)
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
@@ -3120,6 +3160,8 @@ def main(argv=None):
         networks = [ipaddress.ip_network(item) for item in cfg['allowed_networks']]
         hub = Hub(cfg['pc_name'], fake.sources(), FixedPresence(presence), on_events=fake.on_events)
         hub.strings = load_strings()  # FakeDriver reads the model button's prefix before build_driving
+        if args.fake_usage:
+            hub.usage = fake_fresh_usage(hub.usage, *args.fake_usage.split('=', 1))
         runner = build_driving(hub, FakeDriver(fake, hub), None, cfg['pc_name'], cfg, interval=1, verify_seconds=10)
         hub.elevate = fake.elevate_relay()
         hub.screen = lambda: (fake.fixtures / 'screen.jpg').read_bytes()

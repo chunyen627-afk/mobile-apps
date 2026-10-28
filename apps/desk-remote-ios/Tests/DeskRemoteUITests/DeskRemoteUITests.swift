@@ -503,6 +503,21 @@ final class DeskRemoteUITests: XCTestCase {
         snapshot("28-codex-opened-quietly")
     }
 
+    /// Two PCs on one plan: the PC whose own Codex limits are older shows the other's newer ones.
+    func test29PCsOnOnePlanShowTheNewerLimits() throws {
+        let helper = try helperSettings()
+        let other = try XCTUnwrap(ProcessInfo.processInfo.environment["DESK_CLOSED_PORT"], "DESK_CLOSED_PORT not set")
+        launch(pc: "示範電腦|\(helper.host)|\(helper.port)|\(helper.token);第二台|\(helper.host)|\(other)|\(helper.token)")
+        XCTAssertTrue(element("pc-row-第二台").waitForExistence(timeout: 10), "second PC missing")
+        openPC()
+        let codex = element("usage-codex")
+        XCTAssertTrue(reveal(codex), "Codex limits missing")
+        XCTAssertTrue(waitFor(codex, labelContains: "每週 37%", timeout: 20), "Codex says \(codex.label)")
+        XCTAssertTrue(waitFor(element("usage-source-codex"), labelContains: "來自第二台", timeout: 5),
+                      "source says \(element("usage-source-codex").label)")
+        snapshot("29-usage-from-the-other-pc")
+    }
+
     // MARK: - Helpers
 
     private struct Helper {

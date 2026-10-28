@@ -864,6 +864,26 @@ class MetaTests(FakeEnvironment):
         self.assertEqual(h.merge_claude_usage(sample, None, None, t + 86400),
                          {'windows': [sample['windows'][1]], 'sampledAt': h.iso(t)})
 
+    def test_limits_carry_a_mark_of_the_account_and_never_its_id(self):
+        hub, _, _, _ = drive(self.fake)
+        usage = hub.state()['usage']
+        codex, claude = usage['codex']['account'], usage['claude']['account']
+        self.assertEqual(codex, h.account_mark('codex', 'demo-account-not-real'))
+        self.assertEqual(len(codex), 16)
+        self.assertNotIn('demo-account', json.dumps(usage))
+        self.assertIsNotNone(claude)
+        self.assertNotEqual(h.account_mark('claude', 'x'), h.account_mark('codex', 'x'))
+        self.assertIsNone(h.account_mark('codex', None))
+        (self.fake.root / 'pc' / 'codex' / 'auth.json').unlink()
+        self.assertIsNone(self.sources['codex'].account())
+
+    def test_fake_fresh_usage_is_another_pc_that_read_its_limits_later(self):
+        hub, _, _, _ = drive(self.fake)
+        usage = h.fake_fresh_usage(hub.usage, 'codex', '37')()
+        self.assertEqual(usage['codex']['windows'][0]['percent'], 37)
+        self.assertGreater(usage['codex']['sampledAt'], hub.usage()['codex']['sampledAt'])
+        self.assertEqual(hub.usage()['codex']['windows'][0]['percent'], 5)  # the original is untouched
+
     def test_the_watcher_keeps_the_last_usage_button_while_the_window_is_hidden(self):
         hub, driver, watcher, _ = drive(self.fake)
         read_at = watcher.current('claude')['usageAt']

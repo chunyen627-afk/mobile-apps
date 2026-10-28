@@ -8,21 +8,27 @@ import Security
 @MainActor
 final class DeskStore: ObservableObject {
     @Published private(set) var pcs: [DeskPC] = []
+    /// The newest plan limits per account from any PC, so PCs on one plan show the same.
+    @Published private(set) var usageBook = UsageBook()
+    private var othersAskedAt: Date?
     private let defaults: UserDefaults
     static let key = "deskremote.pcs"
+    static let usageKey = "deskremote.usage-book"
     /// Simulator UI tests: secrets in memory and no Face ID prompt (there is no enrolled face).
     private(set) var uiTest = false
 
-    /// UI tests start from an empty list (`DESK_UI_TEST=1`) and may add one PC given as
-    /// `DESK_UI_PC=name|host|port|token`, with tokens kept in memory instead of the Keychain.
+    /// UI tests start from an empty list (`DESK_UI_TEST=1`) and may add PCs given as
+    /// `DESK_UI_PC=name|host|port|token[|key]`, several separated by ";", with tokens kept in
+    /// memory instead of the Keychain.
     init(environment: [String: String] = ProcessInfo.processInfo.environment, defaults: UserDefaults = .standard) {
         self.defaults = defaults
         if environment["DESK_UI_TEST"] == "1" {
             defaults.removeObject(forKey: Self.key)
+            defaults.removeObject(forKey: Self.usageKey)
             DeskSecret.useMemory()
             load()
             uiTest = true
-            if let preset = environment["DESK_UI_PC"] {
+            for preset in (environment["DESK_UI_PC"] ?? "").components(separatedBy: ";") {
                 let parts = preset.components(separatedBy: "|")
                 if parts.count >= 4, let port = Int(parts[2]) {
                     let pc = DeskPC(name: parts[0], host: parts[1], port: port)
@@ -36,6 +42,9 @@ final class DeskStore: ObservableObject {
     }
 
     private func load() {
+        if let data = defaults.data(forKey: Self.usageKey), let book = try? JSONDecoder().decode(UsageBook.self, from: data) {
+            usageBook = book
+        }
         guard let data = defaults.data(forKey: Self.key),
               let saved = try? JSONDecoder().decode([DeskPC].self, from: data) else {
             pcs = []
@@ -108,6 +117,26 @@ final class DeskStore: ObservableObject {
 
     func setHiddenElevateResults(_ ids: Set<String>, for id: UUID) {
         defaults.set(ids.sorted(), forKey: "deskremote.elevate-hidden.\(id.uuidString)")
+    }
+
+    /// Remembers the plan limits a PC reported (every place that reads a PC's state calls this).
+    func note(_ state: HelperState, pcID: UUID) {
+        guard let name = pc(pcID)?.name, usageBook.record(state, pc: name) else { return }
+        if let data = try? JSONEncoder().encode(usageBook) { defaults.set(data, forKey: Self.usageKey) }
+    }
+
+    /// The PC's own limits for `app`, or newer ones another PC on the same account reported.
+    func shownUsage(_ app: DeskApp, in state: HelperState, pcID: UUID) -> UsageBook.Shown? {
+        usageBook.shown(app, own: state.usage(app), pc: pc(pcID)?.name ?? state.pc.name)
+    }
+
+    /// Asks the other PCs for their limits too, at most once a minute (their page may not be open).
+    func askOthersForUsage(except id: UUID) async {
+        if let at = othersAskedAt, Date().timeIntervalSince(at) < 60 { return }
+        othersAskedAt = Date()
+        for other in pcs where other.id != id {
+            if let client = client(other.id), let state = try? await client.state() { note(state, pcID: other.id) }
+        }
     }
 
     func client(_ id: UUID) -> HelperClient? {

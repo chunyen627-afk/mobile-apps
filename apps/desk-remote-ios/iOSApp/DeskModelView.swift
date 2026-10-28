@@ -28,6 +28,8 @@ struct DeskMetaBar: View {
 struct DeskUsageRows: View {
     let app: DeskApp
     let usage: PlanUsage
+    /// The other PC on the same account these newer limits came from.
+    var from: String? = nil
 
     var body: some View {
         ForEach(usage.windows, id: \.self) { window in
@@ -40,7 +42,10 @@ struct DeskUsageRows: View {
             .accessibilityIdentifier("usage-\(app.rawValue)")
         }
         if let sampled = DeskText.relative(usage.sampledAt) {
-            Text("\(app.displayName) 額度資料：\(sampled)").font(.caption2).foregroundStyle(.secondary)
+            Text("\(app.displayName) 額度資料：\(sampled)\(from.map { "（來自\($0)）" } ?? "")")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("usage-source-\(app.rawValue)")
         }
     }
 }
@@ -92,8 +97,8 @@ struct DeskModelSheet: View {
                     }
                 }
                 Section("額度") {
-                    if let usage = state?.usage(app) {
-                        DeskUsageRows(app: app, usage: usage)
+                    if let state, let shown = store.shownUsage(app, in: state, pcID: pcID) {
+                        DeskUsageRows(app: app, usage: shown.usage, from: shown.from)
                     } else if let failure {
                         DeskNotice(text: failure, tint: .red)
                     } else if state == nil {
@@ -152,7 +157,9 @@ struct DeskModelSheet: View {
     private func load() async {
         guard let client = store.client(pcID) else { return }
         do {
-            state = try await client.state()
+            let fresh = try await client.state()
+            store.note(fresh, pcID: pcID)
+            state = fresh
             failure = nil
         } catch let error as HelperFailure {
             if error != .cancelled { failure = DeskText.failure(error) }

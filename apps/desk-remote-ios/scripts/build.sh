@@ -6,14 +6,15 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 # Includes 3 Windows-only tests (the real PowerShell companion twice, a real screen capture),
 # which are skipped (and counted) on macOS.
-EXPECTED_HELPER_TESTS="${EXPECTED_HELPER_TESTS:-100}"
-EXPECTED_TESTS="${EXPECTED_TESTS:-35}"
-EXPECTED_UI_TESTS="${EXPECTED_UI_TESTS:-28}"
+EXPECTED_HELPER_TESTS="${EXPECTED_HELPER_TESTS:-102}"
+EXPECTED_TESTS="${EXPECTED_TESTS:-36}"
+EXPECTED_UI_TESTS="${EXPECTED_UI_TESTS:-29}"
 FIXTURES=fixtures/fake-helper
 HELPER_PORT=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["port"])' "$FIXTURES/fake-config.json")
 # A second fake helper that reports someone at the keyboard (5 s idle), for "send anyway".
 BUSY_PORT="${BUSY_PORT:-8791}"
-# A third whose Codex has no window (closed to the tray), for "coming in opens it".
+# A third whose Codex has no window (closed to the tray), for "coming in opens it", and whose
+# Codex limits are newer than the first's (same account), for "the newer limits on both PCs".
 CLOSED_PORT="${CLOSED_PORT:-8792}"
 DEAD_PORT="${DEAD_PORT:-8799}"
 BUNDLE_ID=org.personal.deskremote.app
@@ -100,7 +101,7 @@ HELPER_PID=$!
 python3 -I pc-helper/desk_remote_helper.py --fake "$FIXTURES" --fake-port "$BUSY_PORT" --fake-idle 5 \
   > build/fake-helper-busy.log 2>&1 &
 BUSY_PID=$!
-python3 -I pc-helper/desk_remote_helper.py --fake "$FIXTURES" --fake-port "$CLOSED_PORT" --fake-closed codex \
+python3 -I pc-helper/desk_remote_helper.py --fake "$FIXTURES" --fake-port "$CLOSED_PORT" --fake-closed codex --fake-usage codex=37 \
   > build/fake-helper-closed.log 2>&1 &
 CLOSED_PID=$!
 for port in "$HELPER_PORT" "$BUSY_PORT" "$CLOSED_PORT"; do

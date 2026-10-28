@@ -55,8 +55,8 @@ struct DeskPCView: View {
             if let state, DeskApp.allCases.contains(where: { state.usage($0) != nil }) {
                 Section("額度") {
                     ForEach(DeskApp.allCases, id: \.self) { app in
-                        if let usage = state.usage(app) {
-                            DeskUsageRows(app: app, usage: usage)
+                        if let shown = store.shownUsage(app, in: state, pcID: pcID) {
+                            DeskUsageRows(app: app, usage: shown.usage, from: shown.from)
                         }
                     }
                 }
@@ -89,9 +89,12 @@ struct DeskPCView: View {
             return
         }
         do {
-            state = try await client.state()
+            let fresh = try await client.state()
+            store.note(fresh, pcID: pcID)
+            state = fresh
             failure = nil
             unreachable = false
+            Task { await store.askOthersForUsage(except: pcID) }
             if state?.can("elevate") == true { await elevate.refresh(store, pcID) }
         } catch {
             guard let text = DeskNetwork.shared.failureText(error) else { return }
