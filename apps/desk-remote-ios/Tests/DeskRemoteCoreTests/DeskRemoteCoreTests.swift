@@ -258,6 +258,21 @@ final class ElevateTests: XCTestCase {
         XCTAssertEqual(DeskText.remaining(until: 1_000_000 + 300, now: Date(timeIntervalSince1970: 1_000_000)), "剩約 5 分鐘")
         XCTAssertEqual(DeskText.remaining(until: 10, now: Date(timeIntervalSince1970: 20)), "已逾時")
     }
+
+    func testRemovedElevateResultsStayHidden() throws {
+        let list = try HelperClient.decode(ElevateList.self, status: 200, data: Data("""
+        {"available":true,"pending":[],
+         "recent":[{"id":"a","kind":"command","name":"","state":"done","exitCode":0,"finished":1,"content":"x","output":""},
+                   {"id":"b","kind":"command","name":"","state":"denied","exitCode":126,"finished":null,"content":"y","output":""}]}
+        """.utf8))
+        XCTAssertEqual(list.recent(hiding: []).map(\.id), ["a", "b"])
+        let hidden = list.hidden([], removing: ["a"])
+        XCTAssertEqual(list.recent(hiding: hidden).map(\.id), ["b"])
+        // Clearing all hides both; ids the PC no longer lists are forgotten.
+        let all = list.hidden(hidden.union(["gone"]), removing: list.recent.map(\.id))
+        XCTAssertEqual(all, ["a", "b"])
+        XCTAssertTrue(list.recent(hiding: all).isEmpty)
+    }
 }
 
 final class MetaAndUsageTests: XCTestCase {

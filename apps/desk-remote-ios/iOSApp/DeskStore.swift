@@ -68,6 +68,7 @@ final class DeskStore: ObservableObject {
     func delete(_ id: UUID) {
         DeskSecret.remove(id)
         DeskSecret.remove(id, kind: .elevate)
+        defaults.removeObject(forKey: "deskremote.elevate-hidden.\(id.uuidString)")
         pcs.removeAll { $0.id == id }
         persist()
     }
@@ -98,6 +99,15 @@ final class DeskStore: ObservableObject {
         } catch {
             return false
         }
+    }
+
+    /// Finished administrator requests the user removed from this PC's page (ids only, no content).
+    func hiddenElevateResults(_ id: UUID) -> Set<String> {
+        Set(defaults.stringArray(forKey: "deskremote.elevate-hidden.\(id.uuidString)") ?? [])
+    }
+
+    func setHiddenElevateResults(_ ids: Set<String>, for id: UUID) {
+        defaults.set(ids.sorted(), forKey: "deskremote.elevate-hidden.\(id.uuidString)")
     }
 
     func client(_ id: UUID) -> HelperClient? {

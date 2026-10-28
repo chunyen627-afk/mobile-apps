@@ -323,6 +323,15 @@ final class DeskRemoteUITests: XCTestCase {
         deny.tap()
         XCTAssertTrue(reveal(element("elevate-empty")), "the denied request is still waiting")
         snapshot("19-elevate-denied")
+        // Finished requests can be cleared off the page (they piled up, 10/28) and stay cleared.
+        let clear = app.buttons.matching(identifier: "elevate-clear").firstMatch
+        XCTAssertTrue(reveal(clear), "no clear button under the finished requests")
+        clear.tap()
+        XCTAssertTrue(poll(timeout: 5) { !self.element("elevate-result").exists }, "finished requests still shown")
+        XCTAssertFalse(clear.exists, "the clear button stays with nothing to clear")
+        RunLoop.current.run(until: Date().addingTimeInterval(7))  // the page re-reads every 5 s
+        XCTAssertFalse(element("elevate-result").exists, "a refresh brought them back")
+        snapshot("19b-elevate-cleared")
     }
 
     /// A message's long-press menu offers copy-all and "select text", which opens the whole message

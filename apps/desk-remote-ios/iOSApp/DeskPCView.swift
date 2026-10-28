@@ -60,9 +60,9 @@ struct DeskPCView: View {
                 }
             }
             if state?.can("elevate") == true {
-                DeskElevateSection(model: elevate, hasKey: store.hasElevateKey(pcID)) { request, allow in
+                DeskElevateSection(model: elevate, hasKey: store.hasElevateKey(pcID), decide: { request, allow in
                     Task { await elevate.decide(request, allow: allow, store, pcID) }
-                }
+                }, remove: { ids in elevate.remove(ids, store, pcID) })
             }
         }
         .deskForegroundLoop(every: 5) {

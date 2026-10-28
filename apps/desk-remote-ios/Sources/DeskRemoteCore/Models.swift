@@ -305,6 +305,18 @@ public struct ElevateList: Decodable, Equatable, Sendable {
     public let available: Bool
     public let pending: [ElevateRequest]
     public let recent: [ElevateResult]
+
+    /// The finished requests still to show: the PC keeps its last 10, the phone hides the ones
+    /// the user removed (asked 10/28: they piled up).
+    public func recent(hiding hidden: Set<String>) -> [ElevateResult] {
+        recent.filter { !hidden.contains($0.id) }
+    }
+
+    /// What to remember as hidden after removing `ids`: only ids the PC still lists, so the
+    /// remembered set stays as small as the PC's own list.
+    public func hidden(_ hidden: Set<String>, removing ids: [String]) -> Set<String> {
+        Set(recent.map(\.id)).intersection(hidden.union(ids))
+    }
 }
 
 struct ElevateDecision: Encodable {

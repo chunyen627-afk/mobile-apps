@@ -12,9 +12,12 @@ final class DeskElevateModel: ObservableObject {
     @Published private(set) var failure: String?
     @Published private(set) var busy: [String: String] = [:]
     @Published var expanded: Set<String> = []
+    /// Finished requests the user removed here; the PC itself keeps its last 10.
+    @Published private(set) var hidden: Set<String> = []
 
     func refresh(_ store: DeskStore, _ pcID: UUID) async {
         guard let client = store.client(pcID) else { return }
+        hidden = store.hiddenElevateResults(pcID)
         do {
             list = try await client.elevateList()
             failure = nil
@@ -50,12 +53,21 @@ final class DeskElevateModel: ObservableObject {
         }
         await refresh(store, pcID)
     }
+
+    /// Takes finished requests off this page for good (only on this phone).
+    func remove(_ ids: [String], _ store: DeskStore, _ pcID: UUID) {
+        guard let list else { return }
+        hidden = list.hidden(hidden, removing: ids)
+        expanded.subtract(ids)
+        store.setHiddenElevateResults(hidden, for: pcID)
+    }
 }
 
 struct DeskElevateSection: View {
     @ObservedObject var model: DeskElevateModel
     let hasKey: Bool
     let decide: (ElevateRequest, Bool) -> Void
+    let remove: ([String]) -> Void
 
     var body: some View {
         Section {
@@ -75,7 +87,8 @@ struct DeskElevateSection: View {
                         decide(request, allow)
                     }
                 }
-                ForEach(list.recent) { result in
+                let finished = list.recent(hiding: model.hidden)
+                ForEach(finished) { result in
                     DeskElevateResultRow(result: result, expanded: model.expanded.contains(result.id)) {
                         if model.expanded.contains(result.id) {
                             model.expanded.remove(result.id)
@@ -83,6 +96,16 @@ struct DeskElevateSection: View {
                             model.expanded.insert(result.id)
                         }
                     }
+                    .swipeActions {
+                        Button(role: .destructive) { remove([result.id]) } label: { Label("移除", systemImage: "trash") }
+                    }
+                }
+                if !finished.isEmpty {
+                    Button(role: .destructive) { remove(finished.map(\.id)) } label: {
+                        Label("清除已完成的紀錄", systemImage: "trash")
+                    }
+                    .font(.footnote)
+                    .accessibilityIdentifier("elevate-clear")
                 }
             } else if model.failure == nil {
                 ProgressView()
@@ -90,7 +113,7 @@ struct DeskElevateSection: View {
         } header: {
             Text("管理員權限（elevate）").textCase(nil)
         } footer: {
-            Text("AI 用 elevate 要求以系統管理員身分執行的指令會出現在這裡。允許前請看清楚內容。")
+            Text("AI 用 elevate 要求以系統管理員身分執行的指令會出現在這裡。允許前請看清楚內容。已完成的紀錄可往左滑移除，或按「清除已完成的紀錄」。")
         }
     }
 }
