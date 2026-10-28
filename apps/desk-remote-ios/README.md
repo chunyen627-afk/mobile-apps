@@ -8,7 +8,7 @@
 
 | 項目 | 內容 |
 | --- | --- |
-| 手機 App | **0.5.2 build 5**（Bundle ID `org.personal.deskremote.app`，主畫面名稱「桌面遙控」）：[Release desk-remote-0.5.2-build5](https://github.com/chunyen627-afk/mobile-apps/releases/tag/desk-remote-0.5.2-build5)（發布紀錄見下方「驗證紀錄」） |
+| 手機 App | **0.5.3 build 6**（Bundle ID `org.personal.deskremote.app`，主畫面名稱「桌面遙控」）：[Release desk-remote-0.5.3-build6](https://github.com/chunyen627-afk/mobile-apps/releases/tag/desk-remote-0.5.3-build6)（10/28 發布中；發布紀錄見下方「驗證紀錄」） |
 | 手機上已安裝 | 0.5.2 build 5（2026-10-27，使用者回報；App 畫面上沒有顯示自己的版本，從 SideStore 的 My Apps 看） |
 | 電腦端小幫手 | 0.5.4（小幫手測試 89 項；0.5.3 起視窗切不到前面時改用第二種方法再試，仍失敗就在手機上寫出擋在前面的程式；0.5.4 起對話完成一輪不再發通知），裝在兩台：辦公室電腦、家用電腦（2026-10-27 經 SSH 安裝；從辦公室實測讀到兩個桌面版的對話、模型、上下文、額度與截圖，畫面操作還沒在這台實測）。都是登入時啟動的排程工作 `DeskRemoteHelper`；電腦頁「小幫手」那一欄是這個版本，不是 App 的 |
 | 提權夥伴 | 只裝在辦公室電腦（排程工作 `DeskRemoteElevated`，最高權限、只聽 127.0.0.1）；家用電腦使用者決定先不裝 |
@@ -33,11 +33,11 @@
 | 模型・推理強度・上下文 %、額度（5 小時／每週與重設時間） | ✅ | ✅ | 模擬器、真電腦數字與桌面版自己回報的一致、手機 |
 | 局部選字複製（長按 →「拷貝全部」／「選取文字」） | ✅ | ✅ | 模擬器、手機 |
 | 網址可點（Markdown 連結、直接寫出的 http(s) 網址、工具輸出裡的網址；電腦上的路徑不是連結） | ✅ | ✅ | 單元測試（0.5.2 起）、手機（使用者回報內文網址點得開） |
-| 顯示 App 自己的版本（電腦清單最下面「App 版本 x（build n）」） | — | — | 單元與 UI 測試通過（commit 96ccc6b 的 [CI](https://github.com/chunyen627-afk/mobile-apps/actions/workflows/desk-remote-ios.yml)）；下次發布時一起（使用者決定） |
-| 連不上電腦時的 ZeroTier 重連提示與自動重試（手機換網路後 ZeroTier 會卡住，提示「把 ZeroTier 關掉再打開」；連不上時每 5 秒重試，手機一換網路就立刻重讀） | — | — | 已實作，單元與 UI 測試待 CI；**手機實測待下次發布**（10/28 使用者要求，跟 App 版本一起發布） |
+| 顯示 App 自己的版本（電腦清單最下面「App 版本 x（build n）」） | — | — | 模擬器（0.5.3 起）；手機待裝 |
+| 連不上電腦時的 ZeroTier 重連提示與自動重試（手機換網路後 ZeroTier 會卡住，提示「把 ZeroTier 關掉再打開」；連不上時每 5 秒重試，手機一換網路就立刻重讀） | — | — | 模擬器（[run 40648993340](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40648993340)，0.5.3 起）；**手機換網路實測待做** |
 | 看電腦畫面（只看不操作；鎖定時看不到） | — | — | 模擬器、真電腦截圖 API |
 | 管理員指令核准（`elevate`，Face ID＋HMAC） | — | — | 真電腦＋手機核准執行 |
-| 清除已完成的管理員指令紀錄（往左滑「移除」或「清除已完成的紀錄」；只記在這支手機，電腦端本來就只留最近 10 筆） | — | — | 已實作，單元與 UI 測試待 CI；下次發布（10/28 使用者反映紀錄會累積） |
+| 清除已完成的管理員指令紀錄（往左滑「移除」或「清除已完成的紀錄」；只記在這支手機，電腦端本來就只留最近 10 筆） | — | — | 模擬器（[run 40648993340](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40648993340)，0.5.3 起）；手機待裝 |
 | ntfy 通知（只發需要處理的事）、點通知直接打開對話 | ✅ | ✅ | 模擬器；通知實際收到；**點通知打開尚未在手機實測** |
 | 額度與上下文 ≥80% 提醒 | ✅ | ✅ | 單元測試；**尚未實際觸發** |
 
@@ -59,6 +59,7 @@
 | 0.5.0 build 3 | [run 40465532207](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40465532207)：小幫手 84、單元 30、UI 26 | [desk-remote-0.5.0-build3](https://github.com/chunyen627-afk/mobile-apps/releases/tag/desk-remote-0.5.0-build3)（IPA 441,704 bytes，SHA256 `4bf107f3…4ed3`） | 已裝到 iPhone；真電腦實測推理強度、權限模式、照片、停止、開新對話、「其他」、Codex 停止 |
 | 0.5.1 build 4 | 沒有發布（還在建置時就被 0.5.2 取代；內容是 Codex 對話也顯示停止） | — | — |
 | 0.5.2 build 5 | [run 40471604033](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40471604033)：小幫手 87、單元 31、UI 26，截圖已檢視 | [desk-remote-0.5.2-build5](https://github.com/chunyen627-afk/mobile-apps/releases/tag/desk-remote-0.5.2-build5)（IPA 446,442 bytes，SHA256 `e85f3134…3842`） | 已裝到 iPhone（使用者回報） |
+| 0.5.3 build 6 | 本次發布的 CI（小幫手 89、單元 34、UI 26；同內容 [run 40648993340](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40648993340) 截圖已檢視） | desk-remote-0.5.3-build6（發布中） | 待裝 |
 
 實測時發現並修好的問題（細節見 commit 紀錄）：
 - **送出**：切換對話後輸入框還是舊頁面 → 只在標題相符的頁面找輸入框並讀回確認；Alt 鍵搶前景會打開 Electron 選單列 → 拿掉；Chromium 下點擊前的元件檢查無效 → 改成檢查該點最上層視窗。
