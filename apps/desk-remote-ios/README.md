@@ -8,7 +8,7 @@
 
 | 項目 | 內容 |
 | --- | --- |
-| 手機 App | **0.5.5 build 8**（Bundle ID `org.personal.deskremote.app`，主畫面名稱「桌面遙控」）：[Release desk-remote-0.5.5-build8](https://github.com/chunyen627-afk/mobile-apps/releases/tag/desk-remote-0.5.5-build8)（2026-10-29 發布中；發布紀錄見下方「驗證紀錄」） |
+| 手機 App | **0.5.5 build 8**（Bundle ID `org.personal.deskremote.app`，主畫面名稱「桌面遙控」）：[Release desk-remote-0.5.5-build8](https://github.com/chunyen627-afk/mobile-apps/releases/tag/desk-remote-0.5.5-build8)（2026-10-29 發布；發布紀錄見下方「驗證紀錄」） |
 | 手機上已安裝 | 0.5.2 build 5（2026-10-27，使用者回報；App 畫面上沒有顯示自己的版本，從 SideStore 的 My Apps 看） |
 | 電腦端小幫手 | 0.5.10（小幫手測試 109 項；0.5.3 起視窗切不到前面時改用第二種方法再試，仍失敗就在手機上寫出擋在前面的程式；0.5.4 起對話完成一輪不再發通知；0.5.5 起認得 Codex 匯入的舊對話，見下表；0.5.6 起可從手機叫出桌面版視窗，連續傳兩則訊息不再把自己的按鍵當成有人在用；0.5.7 起 Claude 每週額度以畫面上的使用量按鈕為準；0.5.8 起額度附上帳號的單向標記（不含帳號本身），讓手機認得兩台是同一個方案；0.5.9 起 Codex 額度每 5 分鐘直接問 Codex 本身、Claude 按鈕讀數重開小幫手後仍記得；0.5.10 起讀 Claude 使用量卡片，有「工作階段」額度與重設時間），辦公室與家用電腦都已更新為 0.5.10（2026-10-28）。裝在兩台：辦公室電腦、家用電腦（2026-10-27 經 SSH 安裝；從辦公室實測讀到兩個桌面版的對話、模型、上下文、額度與截圖，畫面操作還沒在這台實測）。都是登入時啟動的排程工作 `DeskRemoteHelper`；電腦頁「小幫手」那一欄是這個版本，不是 App 的 |
 | 提權夥伴 | 只裝在辦公室電腦（排程工作 `DeskRemoteElevated`，最高權限、只聽 127.0.0.1）；家用電腦使用者決定先不裝 |
@@ -65,7 +65,7 @@
 | 0.5.2 build 5 | [run 40471604033](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40471604033)：小幫手 87、單元 31、UI 26，截圖已檢視 | [desk-remote-0.5.2-build5](https://github.com/chunyen627-afk/mobile-apps/releases/tag/desk-remote-0.5.2-build5)（IPA 446,442 bytes，SHA256 `e85f3134…3842`） | 已裝到 iPhone（使用者回報） |
 | 0.5.3 build 6 | [run 40651208666](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40651208666)：小幫手 89、單元 34、UI 26（同內容 [run 40648993340](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40648993340) 截圖已檢視） | [desk-remote-0.5.3-build6](https://github.com/chunyen627-afk/mobile-apps/releases/tag/desk-remote-0.5.3-build6)（IPA 462,686 bytes，SHA256 `b2faa6ff…581a`） | 待裝 |
 | 0.5.4 build 7 | [run 40699706436](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40699706436) 通過（同內容 [run 40695880965](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40695880965)：小幫手 98、單元 35、UI 28，截圖已檢視） | [desk-remote-0.5.4-build7](https://github.com/chunyen627-afk/mobile-apps/releases/tag/desk-remote-0.5.4-build7)（IPA 467,444 bytes，SHA256 `a2136e0c…7c1a`） | 待裝 |
-| 0.5.5 build 8 | 發布中（同內容 [run 40732902166](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40732902166)：小幫手 109、單元 36、UI 31，截圖已檢視） | [desk-remote-0.5.5-build8](https://github.com/chunyen627-afk/mobile-apps/releases/tag/desk-remote-0.5.5-build8) | 待裝；相機與語音辨識待手機實測 |
+| 0.5.5 build 8 | [run 40777815467](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40777815467) 通過（同內容 [run 40732902166](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40732902166)：小幫手 109、單元 36、UI 31，截圖已檢視） | [desk-remote-0.5.5-build8](https://github.com/chunyen627-afk/mobile-apps/releases/tag/desk-remote-0.5.5-build8)（IPA 497,270 bytes，SHA256 `08ce90c0…841f`） | 待裝；相機與語音辨識待手機實測 |
 
 實測時發現並修好的問題（細節見 commit 紀錄）：
 - **送出**：切換對話後輸入框還是舊頁面 → 只在標題相符的頁面找輸入框並讀回確認；Alt 鍵搶前景會打開 Electron 選單列 → 拿掉；Chromium 下點擊前的元件檢查無效 → 改成檢查該點最上層視窗。
