@@ -840,12 +840,46 @@ class MetaTests(FakeEnvironment):
         self.assertEqual([(w['label'], w['percent']) for w in usage['windows']], [('5 小時', 3), ('每週', 46)])
         self.assertEqual(usage['sampledAt'], h.iso(1793060000000))
 
+    def test_claude_limits_take_the_week_from_the_button_when_the_file_is_behind(self):
+        t = 1793094566  # the file's sample (10/27 09:49Z, when the office's file stopped)
+        sample = {'windows': [{'label': '5 小時', 'percent': 7, 'resetsAt': None, 'resetsText': None},
+                              {'label': '每週', 'percent': 53, 'resetsAt': None, 'resetsText': None}],
+                  'sampledAt': h.iso(t)}
+        button = {'label': '每週 · 所有模型', 'percent': 61, 'resetsText': '週日上午11:00 重設'}
+        week = {'label': '每週', 'percent': 61, 'resetsAt': None, 'resetsText': '週日上午11:00 重設'}
+        # A day later: the 5-hour figure has reset since, the button is the week.
+        self.assertEqual(h.merge_claude_usage(sample, button, t + 86000, t + 86400),
+                         {'windows': [week], 'sampledAt': h.iso(t + 86000)})
+        # Within five hours both show; the time is the older one's.
+        merged = h.merge_claude_usage(sample, button, t + 600, t + 900)
+        self.assertEqual([(w['label'], w['percent']) for w in merged['windows']], [('5 小時', 7), ('每週', 61)])
+        self.assertEqual(merged['sampledAt'], h.iso(t))
+        # A button read before the sample only lends its reset time.
+        older = h.merge_claude_usage(sample, button, t - 60, t + 60)
+        self.assertEqual([(w['percent'], w['resetsText']) for w in older['windows']], [(7, None), (53, '週日上午11:00 重設')])
+        # No file at all: the button alone; neither: nothing.
+        self.assertEqual(h.merge_claude_usage(None, button, t, t)['windows'], [week])
+        self.assertIsNone(h.merge_claude_usage(None, None, None, t))
+        # An old sample and no button: the week stays, marked with its time.
+        self.assertEqual(h.merge_claude_usage(sample, None, None, t + 86400),
+                         {'windows': [sample['windows'][1]], 'sampledAt': h.iso(t)})
+
+    def test_the_watcher_keeps_the_last_usage_button_while_the_window_is_hidden(self):
+        hub, driver, watcher, _ = drive(self.fake)
+        read_at = watcher.current('claude')['usageAt']
+        self.assertIsNotNone(read_at)
+        hidden = dict(driver.inspect('claude'), usage=None)
+        driver.inspect = lambda app: hidden
+        watcher.look('claude')
+        self.assertEqual((watcher.current('claude')['usageAt'], '46%' in watcher.current('claude')['usage']), (read_at, True))
+
     def test_state_and_events_carry_usage_meta_and_the_weekly_reset_from_the_screen(self):
         hub, _, _, _ = drive(self.fake)
         hub.capabilities = hub.capabilities + ['model']
         state = hub.state()
-        weekly = state['usage']['claude']['windows'][1]
-        self.assertEqual(weekly['resetsText'], '週日上午11:00 重設')
+        # The fixture's file sample is old: its 5-hour figure is left out, the button gives the week.
+        self.assertEqual(state['usage']['claude']['windows'],
+                         [{'label': '每週', 'percent': 46, 'resetsAt': None, 'resetsText': '週日上午11:00 重設'}])
         self.assertEqual(state['usage']['codex']['windows'][0]['percent'], 5)
         self.assertEqual(state['models']['claude'], ['Opus 5.5', 'Sonnet 5.5', 'Haiku 5.5', 'Fable 5.1'])
         self.assertIn('GPT-6.1 Terra', state['models']['codex'])

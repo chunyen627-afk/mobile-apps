@@ -36,7 +36,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.6'
+VERSION = '0.5.7'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -141,6 +141,30 @@ def ui_usage(name, prefix):
     if not match:
         return None
     return {'label': match.group(1).strip(), 'percent': int(match.group(2)), 'resetsText': match.group(3).strip() or None}
+
+
+def merge_claude_usage(from_file, button, button_at, now):
+    """The history file's newest sample, corrected by the composer's usage button. Claude stopped
+    writing the file for days (live 10/28: the office's 3.6556 since 10/27 17:49, the home PC's
+    4.29 since its update), while the button showed the current week: so the weekly percent
+    comes from the button whenever it was read after the file's sample, and a 5-hour figure
+    older than five hours is left out (that window has reset since). `sampledAt` is the oldest
+    time behind what is shown."""
+    file_at = datetime.fromisoformat(from_file['sampledAt'].replace('Z', '+00:00')).timestamp() if from_file else None
+    weekly = button if button and button_at and button['label'].startswith('每週') else None
+    fresher = weekly is not None and (file_at is None or button_at > file_at)
+    windows, times = [], []
+    for window in (from_file or {}).get('windows') or []:
+        if window['label'] == '5 小時' and now - file_at < 5 * 3600:
+            windows.append(window)
+            times.append(file_at)
+        elif window['label'] == '每週' and not fresher:
+            windows.append(dict(window, resetsText=weekly['resetsText'] if weekly else None))
+            times.append(file_at)
+    if fresher:
+        windows.append({'label': '每週', 'percent': weekly['percent'], 'resetsAt': None, 'resetsText': weekly['resetsText']})
+        times.append(button_at)
+    return {'windows': windows, 'sampledAt': iso(min(times))} if windows else None
 
 
 def ui_model(name, strip):
@@ -1216,8 +1240,7 @@ class Hub:
 
     def usage(self):
         """Each app's plan limits (percent used per window), read at most every 30 seconds.
-        Claude's weekly reset time comes from its composer's usage button, when the watcher has
-        read one."""
+        Claude's file is corrected by its composer's usage button (merge_claude_usage)."""
         now = time.monotonic()
         stamp, cached = self.usage_cache
         if cached is not None and now - stamp < 30:
@@ -1229,11 +1252,9 @@ class Hub:
             except (OSError, ValueError, sqlite3.Error):
                 logging.exception('usage of %s failed', app)
                 out[app] = None
-        button = ui_usage(self.ui('claude').get('usage'), (self.strings.get('claude') or {}).get('usage_prefix'))
-        if button and out.get('claude'):
-            for window in out['claude']['windows']:
-                if window['label'] == '每週' and button['label'].startswith('每週'):
-                    window['resetsText'] = button['resetsText']
+        seen = self.ui('claude')
+        button = ui_usage(seen.get('usage'), (self.strings.get('claude') or {}).get('usage_prefix'))
+        out['claude'] = merge_claude_usage(out.get('claude'), button, seen.get('usageAt'), time.time())
         self.usage_cache = (now, out)
         return out
 
@@ -1595,9 +1616,14 @@ class UiWatcher:
             prompt = {'promptId': prompt_id(app, docs[0], raw['text']), 'text': raw['text'], 'tool': None,
                       'doc': docs[0]}
         with self.lock:
-            old = (self.state.get(app) or {}).get('prompt')
+            before = self.state.get(app) or {}
+            old = before.get('prompt')
+            # The usage button is only there while the window is: keep the last reading and when.
+            usage, usage_at = answer.get('usage'), time.time()
+            if not usage:
+                usage, usage_at = before.get('usage'), before.get('usageAt')
             self.state[app] = {'docs': docs, 'prompt': prompt, 'window': answer.get('window'),
-                               'model': answer.get('model'), 'usage': answer.get('usage'),
+                               'model': answer.get('model'), 'usage': usage, 'usageAt': usage_at,
                                'mode': answer.get('mode'), 'running': answer.get('running')}
         if prompt and (not old or old['promptId'] != prompt['promptId']):
             title = prompt['doc'].removesuffix(' - Claude Code')
