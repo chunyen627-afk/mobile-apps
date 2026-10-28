@@ -36,7 +36,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.8'
+VERSION = '0.5.9'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -771,8 +771,9 @@ class CodexSource:
     id_pattern = CODEX_ID
     parser = CodexParser
 
-    def __init__(self, home):
+    def __init__(self, home, live=None):
         self.home = Path(home)
+        self.live = live
         self.warning = None
         self.recorded_cache = {}
         self.imports = (None, {})
@@ -928,13 +929,17 @@ class CodexSource:
 
     def usage(self):
         """Plan limits from the newest `token_count` event that carries them, in the most recent
-        threads' rollout files (each reply's event repeats the account's limits)."""
+        threads' rollout files (each reply's event repeats the account's limits), or what Codex
+        itself answered more recently (CodexLiveLimits)."""
         best = None
         for row in self.list_sessions(5):
             path = self.transcript_path(row['id'])
             found = latest_rate_limits(path) if path else None
             if found and (best is None or found[0] > best[0]):
                 best = found
+        live = self.live.latest if self.live else None
+        if live and (not best or iso(live[0]) > iso(best[0])):
+            best = (iso(live[0]), live[1])
         if not best:
             return None
         ts, limits = best
@@ -1569,6 +1574,91 @@ class WindowsDriver:
         return self.ask(app, cmd='stop', doc=doc).get('how')
 
 
+class CodexLiveLimits:
+    """The account's current Codex limits, asked of the installed Codex every few minutes through
+    `codex app-server` (JSON-RPC on stdio, `account/rateLimits/read`). Rollout files only carry
+    the limits as of each PC's last reply, so a PC whose Codex sat unused showed 14% after the
+    week had reset to 0% (live 10/28). Codex signs in by itself: the helper reads no credentials.
+    `latest` is (epoch seconds, limits in the rollout files' shape) or None."""
+
+    def __init__(self, command=None, interval=300, timeout=30):
+        self.command, self.interval, self.timeout = command, interval, timeout
+        self.latest = None
+
+    @staticmethod
+    def rollout_shape(answer):
+        """`rateLimits` of the answer in the rollout files' snake_case shape, or None."""
+        limits = (answer or {}).get('rateLimits')
+        if not isinstance(limits, dict):
+            return None
+        out = {}
+        for key in ('primary', 'secondary'):
+            item = limits.get(key)
+            if isinstance(item, dict) and isinstance(item.get('usedPercent'), (int, float)):
+                out[key] = {'used_percent': item['usedPercent'], 'window_minutes': item.get('windowDurationMins'),
+                            'resets_at': item.get('resetsAt')}
+        return out or None
+
+    def ask(self):
+        """One question to a fresh `app-server`; the answer's limits, or None."""
+        import subprocess
+        if not self.command:
+            self.command = codex_cli_command()  # found once; again after an update moved it
+        if not self.command:
+            return None
+        try:
+            proc = subprocess.Popen(self.command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                    creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        except OSError:
+            self.command = None
+            return None
+        found = []
+
+        def read():
+            for line in proc.stdout:
+                try:
+                    message = json.loads(line)
+                except ValueError:
+                    continue
+                if message.get('id') == 2:
+                    found.append(message.get('result'))
+                    return
+        reader = threading.Thread(target=read, daemon=True)
+        reader.start()
+        try:
+            for message in ({'method': 'initialize', 'id': 1, 'params': {'clientInfo': {'name': 'desk-remote-helper', 'version': VERSION}}},
+                            {'method': 'initialized'}, {'method': 'account/rateLimits/read', 'id': 2}):
+                proc.stdin.write((json.dumps(message) + '\n').encode('utf-8'))
+                proc.stdin.flush()
+            reader.join(self.timeout)
+        except OSError:
+            pass
+        finally:
+            proc.kill()
+            proc.wait()
+        return self.rollout_shape(found[0]) if found else None
+
+    def refresh(self):
+        limits = self.ask()
+        if limits:
+            self.latest = (time.time(), limits)
+
+    def run_forever(self):
+        while True:
+            try:
+                self.refresh()
+            except Exception:
+                logging.exception('codex limits failed')
+            time.sleep(self.interval)
+
+
+def codex_cli_command():
+    """`codex.exe app-server` from the installed OpenAI.Codex package, or None."""
+    exe = codex_package_exe()
+    cli = Path(exe).parent / 'resources' / 'codex.exe' if exe else None
+    return [str(cli), 'app-server'] if cli and cli.exists() else None
+
+
 # Start menu (AppsFolder) ids of the two packaged desktop apps, the same on every PC.
 LAUNCH_IDS = {'claude': 'Claude_pzs8sxrjxfjjc!Claude', 'codex': 'OpenAI.Codex_2p2nqsd0c76g0!App'}
 
@@ -1619,9 +1709,19 @@ class UiWatcher:
     asking for permission. Sends ntfy only when the user has to act or be warned: a permission
     or option question, or context or plan usage past the alert threshold."""
 
-    def __init__(self, hub, driver, notify=None, pc_name='', interval=4):
+    def __init__(self, hub, driver, notify=None, pc_name='', interval=4, memory=None):
         self.hub, self.driver, self.notify, self.pc_name, self.interval = hub, driver, notify, pc_name, interval
         self.state = {}         # app -> {'docs': [...], 'prompt': {...} or None}
+        # The last usage button reading per app survives a restart: the window may stay hidden
+        # in the tray for hours, and the history file it would fall back to is days behind.
+        self.memory = Path(memory) if memory else None
+        try:
+            saved = json.loads(self.memory.read_text(encoding='utf-8')) if self.memory else {}
+        except (OSError, ValueError, UnicodeDecodeError):
+            saved = {}
+        for app, seen in (saved.items() if isinstance(saved, dict) else []):
+            if app in APPS and isinstance(seen, dict) and isinstance(seen.get('usage'), str):
+                self.state[app] = {'usage': seen['usage'], 'usageAt': seen.get('usageAt')}
         self.turns = {}         # (app, id) -> last parser status
         self.questions = {}     # (app, id) -> option question waiting at the last look
         self.checked_once = False
@@ -1652,6 +1752,8 @@ class UiWatcher:
             self.state[app] = {'docs': docs, 'prompt': prompt, 'window': answer.get('window'),
                                'model': answer.get('model'), 'usage': usage, 'usageAt': usage_at,
                                'mode': answer.get('mode'), 'running': answer.get('running')}
+            if self.memory and answer.get('usage') and answer['usage'] != before.get('usage'):
+                self.remember_usage()
         if prompt and (not old or old['promptId'] != prompt['promptId']):
             title = prompt['doc'].removesuffix(' - Claude Code')
             session_id, _ = self.hub.session_for_doc(app, prompt['doc'])
@@ -1669,6 +1771,14 @@ class UiWatcher:
     def current(self, app):
         with self.lock:
             return dict(self.state.get(app) or {})
+
+    def remember_usage(self):
+        """Saves each app's last usage button reading (called with the lock held)."""
+        seen = {app: {'usage': s['usage'], 'usageAt': s.get('usageAt')} for app, s in self.state.items() if s.get('usage')}
+        try:
+            self.memory.write_text(json.dumps(seen, ensure_ascii=False), encoding='utf-8')
+        except OSError:
+            logging.exception('saving the usage reading failed')
 
     def check_turns(self):
         """A conversation that starts waiting on an option question needs an answer: ntfy once.
@@ -3106,9 +3216,9 @@ def serve(hub, gate, cfg, networks, runner=None):
     server.serve_forever(poll_interval=1)
 
 
-def build_driving(hub, driver, notify, pc_name, cfg, interval, verify_seconds):
+def build_driving(hub, driver, notify, pc_name, cfg, interval, verify_seconds, memory=None):
     """Watcher and action runner over `driver`, both on their own threads."""
-    watcher = UiWatcher(hub, driver, notify, pc_name, interval=interval)
+    watcher = UiWatcher(hub, driver, notify, pc_name, interval=interval, memory=memory)
     hub.prompts = watcher.prompt_for
     hub.ui = watcher.current
     hub.strings = load_strings()
@@ -3176,11 +3286,16 @@ def main(argv=None):
     notify = notifier.post if (cfg.get('notify') or {}).get('topic') else None
     pc_name = cfg.get('pc_name') or os.environ.get('COMPUTERNAME', 'PC')
     hub = Hub(pc_name, real_sources(cfg), WindowsPresence())
+    if cfg.get('codex_live_limits', True):
+        live = CodexLiveLimits()
+        hub.sources['codex'].live = live
+        threading.Thread(target=live.run_forever, daemon=True).start()
     if cfg.get('screen', True):
         hub.screen = capture_screen
     runner = None
     if cfg.get('drive_windows', True):
-        runner = build_driving(hub, WindowsDriver(load_strings()), notify, pc_name, cfg, interval=4, verify_seconds=20)
+        runner = build_driving(hub, WindowsDriver(load_strings()), notify, pc_name, cfg, interval=4, verify_seconds=20,
+                               memory=path.parent / 'usage_seen.json')
     submit = Path((cfg.get('elevate') or {}).get('submit_file') or elevate.submit_file())
     if submit.exists():  # written by install-elevated.ps1 (run once as administrator)
         port, token = elevate.load_submit(submit)

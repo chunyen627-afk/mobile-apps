@@ -877,6 +877,44 @@ class MetaTests(FakeEnvironment):
         (self.fake.root / 'pc' / 'codex' / 'auth.json').unlink()
         self.assertIsNone(self.sources['codex'].account())
 
+    APP_SERVER = r'''
+import json, sys
+for line in sys.stdin:
+    message = json.loads(line)
+    if message.get('id') == 1:
+        print(json.dumps({'id': 1, 'result': {'userAgent': 'stand-in'}}), flush=True)
+    elif message.get('method') == 'account/rateLimits/read':
+        print(json.dumps({'method': 'account/updated', 'params': {}}), flush=True)
+        print(json.dumps({'id': 2, 'result': {'rateLimits': {'primary': {'usedPercent': 0, 'windowDurationMins': 10080,
+              'resetsAt': 1793783001}, 'secondary': None}}}), flush=True)
+'''
+
+    def test_codex_limits_come_from_codex_itself_when_newer_than_the_last_reply(self):
+        script = self.fake.root / 'app_server.py'
+        script.write_text(self.APP_SERVER, encoding='utf-8')
+        live = h.CodexLiveLimits([sys.executable, '-I', str(script)], timeout=20)
+        live.refresh()
+        self.assertEqual(live.latest[1], {'primary': {'used_percent': 0, 'window_minutes': 10080, 'resets_at': 1793783001}})
+        codex = self.sources['codex']
+        self.assertEqual(codex.usage()['windows'][0]['percent'], 5)  # no live answer yet: the last reply's
+        codex.live = live
+        usage = codex.usage()
+        self.assertEqual(usage['windows'], [{'label': '每週', 'percent': 0, 'resetsAt': h.iso(1793783001), 'resetsText': None}])
+        self.assertEqual(usage['sampledAt'], h.iso(live.latest[0]))
+        live.latest = (1700000000, live.latest[1])  # an answer older than the last reply loses
+        self.assertEqual(codex.usage()['windows'][0]['percent'], 5)
+
+    def test_a_codex_that_does_not_answer_leaves_the_limits_alone(self):
+        script = self.fake.root / 'silent.py'
+        script.write_text('import sys\nfor line in sys.stdin:\n    pass\n', encoding='utf-8')
+        live = h.CodexLiveLimits([sys.executable, '-I', str(script)], timeout=1)
+        live.refresh()
+        self.assertIsNone(live.latest)
+        self.assertIsNone(h.CodexLiveLimits.rollout_shape({'rateLimits': None}))
+        missing = h.CodexLiveLimits([str(self.fake.root / 'no-such-codex.exe')])
+        missing.refresh()
+        self.assertIsNone(missing.latest)
+
     def test_fake_fresh_usage_is_another_pc_that_read_its_limits_later(self):
         hub, _, _, _ = drive(self.fake)
         usage = h.fake_fresh_usage(hub.usage, 'codex', '37')()
@@ -892,6 +930,23 @@ class MetaTests(FakeEnvironment):
         driver.inspect = lambda app: hidden
         watcher.look('claude')
         self.assertEqual((watcher.current('claude')['usageAt'], '46%' in watcher.current('claude')['usage']), (read_at, True))
+
+    def test_the_last_usage_button_reading_survives_a_restart(self):
+        hub, driver, _, _ = drive(self.fake)
+        memory = self.fake.root / 'usage_seen.json'
+        watcher = h.UiWatcher(hub, driver, memory=memory)
+        watcher.look('claude')
+        saved = json.loads(memory.read_text(encoding='utf-8'))
+        self.assertIn('46%', saved['claude']['usage'])
+        hidden = dict(driver.inspect('claude'), usage=None, window=False)
+        driver.inspect = lambda app: hidden
+        again = h.UiWatcher(hub, driver, memory=memory)  # the helper started again, window in the tray
+        again.look('claude')
+        self.assertEqual(again.current('claude')['usageAt'], saved['claude']['usageAt'])
+        hub.ui, hub.usage_cache = again.current, (0.0, None)
+        self.assertEqual(hub.usage()['claude']['windows'][-1]['percent'], 46)
+        memory.write_text('not json', encoding='utf-8')
+        self.assertEqual(h.UiWatcher(hub, driver, memory=memory).current('claude'), {})
 
     def test_state_and_events_carry_usage_meta_and_the_weekly_reset_from_the_screen(self):
         hub, _, _, _ = drive(self.fake)
