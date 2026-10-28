@@ -573,17 +573,22 @@ class DrivingTests(FakeEnvironment):
         watcher.check_turns()
         self.assertEqual([s[0] for s in sent if s[0].startswith('❓')], ['❓ Claude 在等你選擇'])
 
-    def test_finished_turn_is_notified_once(self):
+    def test_finished_turn_is_not_notified(self):
+        # The phone shows a finished turn; ntfy is only for what needs the user (10/28).
         sent = []
         hub, driver, watcher, _ = drive(self.fake, notify=lambda *a: sent.append(a))
         path = hub.sources['claude'].transcript_path(A)
         watcher.check_turns()
+        before = list(sent)  # the fixture's waiting permission prompt (🔔) is still sent
         driver.write('claude', path, 'user', '再一題')
         watcher.check_turns()
+        self.assertEqual(watcher.turns[('claude', A)], 'working')
         driver.write('claude', path, 'assistant', '好了')
         watcher.check_turns()
         watcher.check_turns()
-        self.assertEqual([s[0] for s in sent if s[0].startswith('✅')], ['✅ Claude 完成一輪'])
+        self.assertEqual(watcher.turns[('claude', A)], 'idle')
+        self.assertEqual(sent, before)
+        self.assertFalse([s for s in sent if '一輪' in s[0]])
 
 
 class HttpTests(FakeEnvironment):

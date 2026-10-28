@@ -36,7 +36,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.3'
+VERSION = '0.5.4'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -1438,7 +1438,8 @@ def prompt_id(app, doc, text):
 
 class UiWatcher:
     """Looks at each desktop app every few seconds: which conversation is open and whether it is
-    asking for permission. Sends ntfy when a question appears and when a turn finishes."""
+    asking for permission. Sends ntfy only when the user has to act or be warned: a permission
+    or option question, or context or plan usage past the alert threshold."""
 
     def __init__(self, hub, driver, notify=None, pc_name='', interval=4):
         self.hub, self.driver, self.notify, self.pc_name, self.interval = hub, driver, notify, pc_name, interval
@@ -1487,8 +1488,8 @@ class UiWatcher:
             return dict(self.state.get(app) or {})
 
     def check_turns(self):
-        """A conversation that was working and is now idle has finished a turn; one that starts
-        waiting on an option question needs an answer. Both go to ntfy once."""
+        """A conversation that starts waiting on an option question needs an answer: ntfy once.
+        Working conversations are followed so that one stays watched until it is idle again."""
         for app, source in self.hub.sources.items():
             for row in source.list_sessions(15):
                 key = (app, row['id'])
@@ -1501,11 +1502,11 @@ class UiWatcher:
                 status = transcript.parser.status
                 question = (getattr(transcript.parser, 'question', None) or {}).get('questionId')
                 link = open_link(self.pc_name, app, row['id'], row['title'])
-                # Questions already waiting when the helper started are not news.
+                # Questions already waiting when the helper started are not news. A finished turn
+                # is not sent: the phone shows it (the user asked on 10/28 for notifications only
+                # when they need to act).
                 if question and self.checked_once and question != self.questions.get(key):
                     self.send(f'❓ {APP_NAMES[app]} 在等你選擇', f'{self.pc_name}・「{row["title"]}」', 4, ['question'], link)
-                elif self.turns.get(key) == 'working' and status == 'idle':
-                    self.send(f'✅ {APP_NAMES[app]} 完成一輪', f'{self.pc_name}・「{row["title"]}」', 3, ['white_check_mark'], link)
                 self.turns[key] = status
                 self.questions[key] = question
                 self.check_context(app, row, transcript, link)
