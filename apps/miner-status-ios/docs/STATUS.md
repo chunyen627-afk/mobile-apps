@@ -120,7 +120,19 @@ UI 測試與截圖找到並修正的畫面問題：
 - App：清單的「開挖建議」區塊、資料格式加選填 `advice`（feature `advice`）
 - [run 40279093799](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40279093799)（`1cd5dc9`）：單元測試 `Executed 121 tests, with 0 failures`、UI 測試 `Executed 17 tests, with 0 failures`；截圖確認「開挖建議」區塊顯示關機中的示範筆電「建議挖礦」（綠）與虧損機器「建議停挖」（橘、NT$-35）。IPA 393,533 bytes（runner 內，未上傳）
 
-## 0.6.2（build 10，開發中）：挖另一種幣的機器也算收益
+## 0.6.3（build 11，開發中）：累計收益（估算）
+
+- 使用者要求：顯示從開挖以來累計的估算收益（新台幣），標明是估算，月底再拿礦池網頁的帳號數字對帳。礦池把每種幣自動換成 BTC 存在帳號裡，帳號餘額沒有公開 API 可讀，所以只能估算。
+- 電腦端：每 5 分鐘把每台**正在挖**的機器當下的估算收益（跟每天估算同一個數字）乘上經過的時間累加，各自用自己的幣，台幣用當時的幣價與匯率換算；存成檔案，重開服務不會歸零。服務沒在跑的時間不補算。
+- 資料格式：feed 加選填 `cumulative`（feature `cumulative`）：`since`、`observedAt`、`totalTwd`、`totalBtc`（每筆依當時幣價換成 BTC 的合計，礦池帳號就是用 BTC 記帳，月底直接比 BTC），以及每台的 `machineId`、`coin`、`amount`、`twd`。舊版 App 不會要這個 feature，收到的資料不變。
+- App：清單「今日估算」區塊加「累計收益（估算）」、約當 BTC 與開始時間，註明不是實際入帳；詳情頁加該機器的累計幣數與台幣。
+- 示範資料：三天前開始累計，共 NT$349、約當 0.000134 BTC（A 4.8 PRL ≈ NT$289、B 0.025 QTC ≈ NT$60）。
+- 測試：單元測試多兩項（累計的解碼、格式檢查），UI 測試多一項（test21：清單的累計、B 的詳情頁）；契約檢查多 4 個正向、9 個反向案例。
+- [run 40620740699](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40620740699)（`e8a4637`）：App 編譯失敗，`EarningsViews.swift` 把不是 Optional 的 `Timestamp.date` 寫成 `guard let`；下一個 commit 修正。
+- [run 40621432567](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40621432567)（`8805930`）：單元測試 `Executed 125 tests, with 0 failures`、UI 測試 `Executed 21 tests, with 0 failures`；截圖確認詳情頁 B 的「累計收益（估算）0.025 QTC、NT$60、不是實際入帳」，清單的累計那一行被截在畫面最底下（測試有找到它），下一個 commit 讓測試先往上捲再截圖。
+- 遠端開始／停止（電腦端，同日）：除了筆電，office、RTX 5080、VCU118 也可以從 App 開始／停止（App 不用改，按鈕依來源的 `control` 顯示）。手機自己送出的指令不再發通知，刻意停止的機器顯示「手動停止」、不再發「已停止」通知。
+
+## 0.6.2（build 10，已併入工具箱 0.4.1 build 7 發布）：挖另一種幣的機器也算收益
 
 - 使用者要求：App 也要看到 FPGA 的收益。來源原本只有一組幣價（`market`），挖另一種幣（例如 QTC）的機器會被當成同一種幣計價而算錯，所以來源先不給它收益。
 - 資料格式：每台的 `earnings` 加選填 `coin`、`coinUsd`（feature `coins`，只有挖的幣跟 `market` 不同的機器才有）。舊版 App 不會要這個 feature，收到的資料不變。

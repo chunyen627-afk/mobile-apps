@@ -200,7 +200,7 @@ struct MachineDetailView: View {
             if let snapshot = model.snapshots.first(where: { $0.machineId == machineId }) {
                 DetailContent(snapshot: snapshot,
                               earnings: model.hasEarnings ? model.earnings(for: snapshot) : nil,
-                              market: model.market, now: model.displayNow,
+                              market: model.market, cumulative: model.cumulative, now: model.displayNow,
                               control: model.mode == .live ? RemoteControl(model: model, request: { pendingControl = $0 }) : nil)
             } else {
                 Text("目前沒有這台機器的資料").foregroundStyle(.secondary)
@@ -228,6 +228,7 @@ struct DetailContent: View {
     let snapshot: MachineSnapshot
     var earnings: MachineEarnings?
     var market: MarketReport?
+    var cumulative: CumulativeReport?
     var now = Date()
     var control: RemoteControl?
 
@@ -257,7 +258,8 @@ struct DetailContent: View {
             }
 
             if let earnings {
-                EarningsDetailSection(earnings: earnings, market: market, now: now)
+                EarningsDetailSection(earnings: earnings, market: market,
+                                      cumulative: cumulative?.machine(snapshot.machineId), since: cumulative?.since, now: now)
             }
 
             if let sample = snapshot.sample {

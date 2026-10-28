@@ -47,6 +47,44 @@ final class EarningsTests: XCTestCase {
         XCTAssertThrowsError(try feed(market: marketJSON.merging(["coin": "prl"]) { $1 }))
     }
 
+    private let cumulativeJSON: [String: Any] = [
+        "since": "2026-10-28T10:21:02.000+08:00", "observedAt": "2026-10-29T10:21:02.000+08:00", "totalTwd": 349.0,
+        "totalBtc": 0.000134,
+        "machines": [["machineId": "rig-a", "coin": "PRL", "amount": 4.8, "twd": 289.0],
+                     ["machineId": "rig-b", "coin": "QTC", "amount": 0.025, "twd": 60.0]],
+    ]
+
+    private func feed(cumulative: Any) throws -> MinerStatusFeed {
+        var object = feedJSON([SampleSpec(sequence: 1, at: Date(timeIntervalSince1970: 1_792_800_000), accepted: 1).json])
+        object["cumulative"] = cumulative
+        return try decodeFeed(object)
+    }
+
+    func testCumulativeDecodesAndIsOptional() throws {
+        XCTAssertNil(try feed().cumulative)
+        XCTAssertNil(try feed(cumulative: NSNull()).cumulative)
+        let decoded = try XCTUnwrap(try feed(cumulative: cumulativeJSON).cumulative)
+        XCTAssertEqual(decoded.totalTwd, 349)
+        XCTAssertEqual(decoded.totalBtc, 0.000134)
+        XCTAssertEqual(decoded.machine("rig-b")?.coin, "QTC")
+        XCTAssertEqual(decoded.machine("rig-b")?.amount, 0.025)
+        XCTAssertNil(decoded.machine("rig-c"))
+        let again = try JSONDecoder().decode(MinerStatusFeed.self, from: JSONEncoder().encode(try feed(cumulative: cumulativeJSON)))
+        XCTAssertEqual(again.cumulative, decoded)
+    }
+
+    func testCumulativeRejectsUnknownKeysAndBadValues() {
+        let rows = cumulativeJSON["machines"] as! [[String: Any]]
+        XCTAssertThrowsError(try feed(cumulative: cumulativeJSON.merging(["account": "x"]) { $1 }))
+        XCTAssertThrowsError(try feed(cumulative: cumulativeJSON.merging(["totalTwd": -1]) { $1 }))
+        XCTAssertThrowsError(try feed(cumulative: cumulativeJSON.merging(["since": NSNull()]) { $1 }))
+        XCTAssertThrowsError(try feed(cumulative: cumulativeJSON.merging(["totalBtc": -1]) { $1 }))
+        XCTAssertThrowsError(try feed(cumulative: cumulativeJSON.filter { $0.key != "totalBtc" }))
+        XCTAssertThrowsError(try feed(cumulative: cumulativeJSON.merging(["machines": [rows[0].merging(["coin": "prl"]) { $1 }]]) { $1 }))
+        XCTAssertThrowsError(try feed(cumulative: cumulativeJSON.merging(["machines": [rows[0].merging(["twd": -5]) { $1 }]]) { $1 }))
+        XCTAssertThrowsError(try feed(cumulative: cumulativeJSON.merging(["machines": Array(repeating: rows[0], count: 9)]) { $1 }))
+    }
+
     func testTimeOfUseRates() {
         let tariff = TouTariff()
         XCTAssertEqual(tariff.rate(at: date(2026, 7, 15, 10), calendar: calendar), 5.16)  // summer Wednesday, peak

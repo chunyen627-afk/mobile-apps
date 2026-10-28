@@ -124,6 +124,7 @@ struct DemoResult {
     let feedProblem: UpdateProblem?
     let clock: ClockReading
     let market: MarketReport?
+    let cumulative: CumulativeReport?
 }
 
 /// Holds the bundled template. `loadBundled()` returns nil when the resource is missing or not
@@ -151,6 +152,7 @@ struct DemoPlayer {
 
         var engine = StatusEngine()
         var market: MarketReport?
+        var cumulative: CumulativeReport?
         for step in scenario.steps {
             switch step {
             case let .samples(offset, sequence, accepted, edit):
@@ -163,13 +165,15 @@ struct DemoPlayer {
                 }
                 let feed = try decodeFeed(machines, at: time)
                 market = feed.market
+                cumulative = feed.cumulative
                 engine.ingest(feed, at: reading(offset))
             case let .requestFailure(offset):
                 engine.recordRequestFailure(at: reading(offset))
             }
         }
         let now = reading(scenario.evaluateAt)
-        return DemoResult(snapshots: engine.snapshots(at: now), feedProblem: engine.feedProblem, clock: now, market: market)
+        return DemoResult(snapshots: engine.snapshots(at: now), feedProblem: engine.feedProblem, clock: now, market: market,
+                          cumulative: cumulative)
     }
 
     /// Re-stamps the template machine for one step. Index 1 is a second, equally fictional machine.
@@ -226,6 +230,15 @@ struct DemoPlayer {
             // Fictional prices for the demo only.
             "market": ["coin": "PRL", "coinUsd": 1.85, "btcUsd": 80000.0, "usdTwd": 32.5,
                        "observedAt": demoTimestamp(time)] as [String: Any],
+            // Fictional running total, started three days before this step.
+            "cumulative": [
+                "since": demoTimestamp(time.addingTimeInterval(-3 * 86400)), "observedAt": demoTimestamp(time),
+                "totalTwd": 349.0, "totalBtc": 0.000134,
+                "machines": [
+                    ["machineId": "demo-rig-a", "coin": "PRL", "amount": 4.8, "twd": 289.0],
+                    ["machineId": "demo-rig-b", "coin": "QTC", "amount": 0.025, "twd": 60.0],
+                ],
+            ] as [String: Any],
         ]
         let data = try JSONSerialization.data(withJSONObject: object)
         return try JSONDecoder().decode(MinerStatusFeed.self, from: data)

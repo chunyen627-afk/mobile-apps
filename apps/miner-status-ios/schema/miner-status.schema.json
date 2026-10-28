@@ -37,6 +37,10 @@
     "advice": {
       "description": "OPTIONAL extension (feature `advice`): for machines whose electricity is billed, whether mining is currently worth it, including machines that are switched off and so absent from machines. Null when the publisher has no advisor.",
       "oneOf": [{ "type": "null" }, { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/advice" } }]
+    },
+    "cumulative": {
+      "description": "OPTIONAL extension (feature `cumulative`): each machine's estimated earnings added up since `since`, for checking against the pool account at the end of the month. An estimate, not money received. Null before anything has been added up.",
+      "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/cumulative" }]
     }
   },
   "allOf": [
@@ -236,6 +240,33 @@
         "btcUsd": { "type": ["number", "null"], "exclusiveMinimum": 0 },
         "usdTwd": { "type": ["number", "null"], "exclusiveMinimum": 0 },
         "observedAt": { "$ref": "#/$defs/timestampOrNull" }
+      }
+    },
+    "cumulative": {
+      "description": "Running estimate since `since`; each machine in its own coin, and in TWD at the price when it was earned. totalBtc is the same total in BTC at the price when it was earned, the unit the pool account keeps; null when it cannot be given.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["since", "observedAt", "totalTwd", "totalBtc", "machines"],
+      "properties": {
+        "since": { "$ref": "#/$defs/timestamp" },
+        "observedAt": { "$ref": "#/$defs/timestampOrNull" },
+        "totalTwd": { "type": "number", "minimum": 0 },
+        "totalBtc": { "type": ["number", "null"], "minimum": 0 },
+        "machines": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["machineId", "coin", "amount", "twd"],
+            "properties": {
+              "machineId": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$" },
+              "coin": { "type": "string", "pattern": "^[A-Z0-9]{2,10}$" },
+              "amount": { "type": "number", "minimum": 0 },
+              "twd": { "type": "number", "minimum": 0 }
+            }
+          }
+        }
       }
     },
     "tariff": {

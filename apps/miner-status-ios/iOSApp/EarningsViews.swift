@@ -16,6 +16,15 @@ enum EarningsText {
         value.map { "\($0.formatted(.number.precision(.fractionLength(8)))) BTC" } ?? DisplayText.noData
     }
 
+    /// "10/28 10:21" in Taipei time, where the source runs.
+    static func since(_ timestamp: Timestamp) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_Hant_TW")
+        formatter.timeZone = TimeZone(identifier: "Asia/Taipei")
+        formatter.dateFormat = "M/d HH:mm"
+        return formatter.string(from: timestamp.date)
+    }
+
     static func usd(_ value: Double?) -> String {
         value.map { "US$\($0.formatted(.number.precision(.fractionLength(0 ... 2))))" } ?? DisplayText.noData
     }
@@ -51,6 +60,19 @@ struct EarningsSummarySection: View {
             }
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier("earnings-summary")
+            if let cumulative = model.cumulative {
+                VStack(alignment: .leading, spacing: 4) {
+                    LabeledContent("累計收益（估算）", value: EarningsText.twd(cumulative.totalTwd)).font(.headline)
+                    if let btc = cumulative.totalBtc {
+                        LabeledContent("約當 BTC", value: EarningsText.btc(btc)).font(.caption)
+                    }
+                    Text("自 \(EarningsText.since(cumulative.since)) 起，不是實際入帳；BTC 依每筆當時的幣價換算，月底可和礦池帳號的 BTC 對帳。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("earnings-cumulative")
+            }
         } header: {
             // In the header so it stays put however tall the summary grows.
             HStack {
@@ -71,6 +93,8 @@ struct EarningsSummarySection: View {
 struct EarningsDetailSection: View {
     let earnings: MachineEarnings
     let market: MarketReport?
+    var cumulative: CumulativeMachine?
+    var since: Timestamp?
     var now = Date()
 
     var body: some View {
@@ -81,6 +105,15 @@ struct EarningsDetailSection: View {
             LabeledContent("耗電（顯卡＋額外）", value: earnings.powerW.map { "\(Int($0.rounded())) W" } ?? DisplayText.noData)
             LabeledContent("電費", value: earnings.electricityBilled ? EarningsText.twd(earnings.electricityTwdPerDay) : "不計")
             LabeledContent("淨收益", value: EarningsText.twd(earnings.netTwdPerDay)).font(.headline)
+        }
+        if let cumulative {
+            Section("累計收益（估算）") {
+                LabeledContent("挖到的幣", value: EarningsText.coin(cumulative.amount, cumulative.coin))
+                LabeledContent("收益", value: EarningsText.twd(cumulative.twd)).font(.headline)
+                if let since {
+                    Text("自 \(EarningsText.since(since)) 起，依當時幣價換算，不是實際入帳。").font(.caption).foregroundStyle(.secondary)
+                }
+            }
         }
         if let market {
             Section("幣價") {
