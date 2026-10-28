@@ -55,4 +55,5 @@ bash scripts/build.sh
 - [run 40332751139](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40332751139)（`37f9db4`）：相簿單元 41、礦機單元 121、工具箱 UI 4、相簿 UI 6，全部 0 失敗；IPA 48,096,236 bytes。截圖已人工檢視：相簿頁下方的分頁列不擋畫面；礦機頁、礦機詳情頁在分頁裡正常，有返回鍵
 - [run 40340299846](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40340299846)（`31f2b12`，已合併礦機 0.6.1：重開後自動接回來源，並修正啟動時第一次讀取被取消、清單空白最多 30 秒）：相簿單元 41、礦機單元 121、工具箱 UI 4、相簿 UI 6，全部 0 失敗；IPA 48,097,981 bytes。截圖已人工檢視：重開後回到上次的礦機分頁
 - [run 40548727208](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40548727208)（`f122f5e`，0.4.1 build 7，已合併礦機 0.6.2：挖另一種幣的機器用它自己的幣價算收益、礦池認列算力依大小換單位）：相簿單元 41、礦機單元 123、工具箱 UI 4、相簿 UI 6，全部 0 失敗；IPA 48,102,374 bytes。截圖已人工檢視：礦機分頁的示範礦機 B 以 QTC 計價，分頁列不擋畫面
+- [run 40623905139](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40623905139)（`679128b`，0.4.2 build 8，已合併礦機 0.6.3：累計收益估算與約當 BTC）：相簿單元 41、礦機單元 125、工具箱 UI 4、相簿 UI 6，全部 0 失敗；IPA 48,120,525 bytes。截圖已人工檢視：礦機分頁正常、分頁列不擋畫面；累計區塊的內容在礦機 App 的 run 40623881960 截圖確認
 - 實機：尚未安裝
