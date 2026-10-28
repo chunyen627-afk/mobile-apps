@@ -518,6 +518,26 @@ final class DeskRemoteUITests: XCTestCase {
         snapshot("29-usage-from-the-other-pc")
     }
 
+    /// The camera button (the simulator has no camera: UI tests get a made-up shot): the shot
+    /// shows as the preview and goes out with the message.
+    func test30CameraShotGoesOutWithTheMessage() throws {
+        try launchWithHelper()
+        openChat("claude", claudeA)
+        XCTAssertTrue(text("整理好了，安裝段落改成三步").waitForExistence(timeout: 10), "chat did not load")
+        let camera = element("chat-camera")
+        XCTAssertTrue(camera.waitForExistence(timeout: 5), "camera button missing")
+        camera.tap()
+        XCTAssertTrue(element("chat-photo-preview").waitForExistence(timeout: 5), "the shot is not shown")
+        let input = element("chat-input")
+        input.tap()
+        input.typeText("camera shot")
+        snapshot("30a-camera-shot")
+        app.buttons["chat-send"].tap()
+        XCTAssertTrue(text("（示範）收到：camera shot").waitForExistence(timeout: 25), "the shot was not sent")
+        XCTAssertFalse(element("chat-photo-preview").exists, "the preview should clear once sent")
+        snapshot("30-camera-sent")
+    }
+
     // MARK: - Helpers
 
     private struct Helper {

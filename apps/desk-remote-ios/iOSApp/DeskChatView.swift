@@ -692,6 +692,10 @@ struct DeskInputBar: View {
     let send: () -> Void
     @State private var picked: PhotosPickerItem?
     @State private var preparing = false
+    @State private var shooting = false
+    /// Simulator UI tests have no camera: the camera button hands over a made-up shot instead.
+    private static let uiTest = ProcessInfo.processInfo.environment["DESK_UI_TEST"] == "1"
+    private var canShoot: Bool { Self.uiTest || UIImagePickerController.isSourceTypeAvailable(.camera) }
 
     private var empty: Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && photo == nil }
 
@@ -727,6 +731,25 @@ struct DeskInputBar: View {
                 picked = nil
             }
         }
+        .fullScreenCover(isPresented: $shooting) {
+            DeskCamera { image in
+                shooting = false
+                photo = image.flatMap { $0.jpegData(compressionQuality: 0.9) }.flatMap { DeskPhoto.prepare($0) }
+            }
+            .ignoresSafeArea()
+        }
+    }
+
+    private func shoot() {
+        if Self.uiTest {
+            let shot = UIGraphicsImageRenderer(size: CGSize(width: 400, height: 300)).image { context in
+                UIColor.systemTeal.setFill()
+                context.fill(CGRect(x: 0, y: 0, width: 400, height: 300))
+            }
+            photo = shot.jpegData(compressionQuality: 0.9).flatMap { DeskPhoto.prepare($0) }
+        } else {
+            shooting = true
+        }
     }
 
     private var row: some View {
@@ -736,6 +759,12 @@ struct DeskInputBar: View {
             }
             .accessibilityLabel("加入照片")
             .accessibilityIdentifier("chat-photo")
+            if canShoot {
+                Button(action: shoot) { Image(systemName: "camera").font(.title3) }
+                    .disabled(preparing)
+                    .accessibilityLabel("拍照")
+                    .accessibilityIdentifier("chat-camera")
+            }
             TextField("輸入訊息", text: $text, axis: .vertical)
                 .lineLimit(1 ... 6)
                 .textFieldStyle(.roundedBorder)
@@ -748,5 +777,35 @@ struct DeskInputBar: View {
             .accessibilityLabel("送出")
             .accessibilityIdentifier("chat-send")
         }
+    }
+}
+
+/// The camera, for a photo that goes straight into the next message: the shot stays in memory
+/// and is never saved to the photo library (asked on 10/29).
+struct DeskCamera: UIViewControllerRepresentable {
+    let done: (UIImage?) -> Void
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = .camera
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ controller: UIImagePickerController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator { Coordinator(done: done) }
+
+    final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+        let done: (UIImage?) -> Void
+
+        init(done: @escaping (UIImage?) -> Void) { self.done = done }
+
+        func imagePickerController(_ picker: UIImagePickerController,
+                                   didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
+            done(info[.originalImage] as? UIImage)
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) { done(nil) }
     }
 }
