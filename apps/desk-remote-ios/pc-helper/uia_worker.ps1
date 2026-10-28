@@ -25,6 +25,25 @@ public static class DeskWin {
   [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
   [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
   [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X; public int Y; }
+  public delegate bool EnumProc(IntPtr hWnd, IntPtr lParam);
+  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc proc, IntPtr lParam);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder s, int n);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder s, int n);
+  // Hidden Chromium top-level windows of these processes with this title (closed to the tray).
+  public static System.Collections.Generic.List<IntPtr> HiddenTitled(uint[] pids, string title) {
+    var found = new System.Collections.Generic.List<IntPtr>();
+    EnumWindows((h, l) => {
+      uint pid; GetWindowThreadProcessId(h, out pid);
+      if (Array.IndexOf(pids, pid) >= 0 && !IsWindowVisible(h)) {
+        var c = new System.Text.StringBuilder(256); GetClassName(h, c, 256);
+        var t = new System.Text.StringBuilder(256); GetWindowText(h, t, 256);
+        if (c.ToString() == "Chrome_WidgetWin_1" && t.ToString() == title) found.Add(h);
+      }
+      return true;
+    }, IntPtr.Zero);
+    return found;
+  }
 }
 "@
 $AE = [System.Windows.Automation.AutomationElement]
@@ -46,6 +65,19 @@ function Find-Window($app) {
     $path = "$($p.Path)".ToLower()
     if ($app -eq 'claude' -and $path -like '*\windowsapps\claude_*\claude.exe' -and $w.Current.Name -eq 'Claude') { return $w }
     if ($app -eq 'codex' -and $p.ProcessName -eq 'ChatGPT') { return $w }
+  }
+  return $null
+}
+
+# Claude closed to the tray still answers UI Automation (home PC, 10/28): enough to read its
+# usage button, and nothing else is done with that window.
+function Find-HiddenWindow($app) {
+  if ($app -ne 'claude') { return $null }
+  $pids = @(Get-Process claude -ErrorAction SilentlyContinue |
+    Where-Object { "$($_.Path)".ToLower() -like '*\windowsapps\claude_*\claude.exe' } | ForEach-Object { [uint32]$_.Id })
+  if (-not $pids) { return $null }
+  foreach ($h in [DeskWin]::HiddenTitled([uint32[]]$pids, 'Claude')) {
+    try { return $AE::FromHandle($h) } catch { }
   }
   return $null
 }
@@ -799,7 +831,18 @@ function Run-Command($c) {
     'ping' { return @{ ok = $true } }
     'inspect' {
       $w = Find-Window $c.app
-      if (-not $w) { return @{ ok = $true; window = $false } }
+      if (-not $w) {
+        $usage = $null
+        $hidden = if ($s.usage_prefix) { Find-HiddenWindow $c.app } else { $null }
+        if ($hidden) {
+          $buttons = $hidden.FindAll($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Button)))
+          foreach ($b in $buttons) {
+            $n = $b.Current.Name
+            if ($n -and $n.StartsWith($s.usage_prefix)) { $usage = $n; break }
+          }
+        }
+        return @{ ok = $true; window = $false; usage = $usage }
+      }
       $prompt = Get-Prompt $w $s
       $edit = Find-ByName $w $CT::Edit $s.edit
       # The composer's model and usage buttons, in one pass over the buttons (Claude only).
