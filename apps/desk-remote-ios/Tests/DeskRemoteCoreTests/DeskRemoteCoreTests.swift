@@ -375,6 +375,21 @@ final class MoreControlsTests: XCTestCase {
         XCTAssertEqual(DeskText.appVersion([:]), "App 版本 ?（build ?）")
     }
 
+    func testUnreachablePCAddsTheZeroTierHint() {
+        let recent = DeskText.failure(.unreachable, networkChangedAgo: 30)
+        XCTAssertTrue(recent.hasPrefix(DeskText.failure(.unreachable) + "\n"))
+        XCTAssertTrue(recent.contains("手機剛換過網路") && recent.contains("ZeroTier 關掉再打開"))
+        let old = DeskText.failure(.timeout, networkChangedAgo: 3600)
+        XCTAssertTrue(old.contains("換過網路的話") && !old.contains("剛換過"))
+        XCTAssertEqual(DeskText.failure(.unreachable, networkChangedAgo: nil),
+                       DeskText.failure(.unreachable) + "\n" + DeskText.reconnectHint(networkChangedAgo: nil))
+        XCTAssertEqual(DeskText.failure(.unreachable, networkChangedAgo: 5, short: true),
+                       DeskText.failure(.unreachable) + "・手機剛換網路：請重連 ZeroTier")
+        // Answers from the helper are not a stuck VPN: no hint.
+        XCTAssertEqual(DeskText.failure(.unauthorized, networkChangedAgo: 5), DeskText.failure(.unauthorized))
+        XCTAssertEqual(DeskText.failure(.locked, networkChangedAgo: 5, short: true), DeskText.failure(.locked))
+    }
+
     func testBareWebAddressesBecomeLinks() throws {
         let parsed = try AttributedString(markdown: "看 https://github.com/x/y 和 [說明](https://example.org/doc)，路徑 C:\\work\\a.txt",
                                           options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))

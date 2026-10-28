@@ -13,6 +13,7 @@ struct DeskChatView: View {
     let app: DeskApp
     let session: SessionSummary
     @Environment(\.scenePhase) private var scenePhase
+    @ObservedObject private var network = DeskNetwork.shared
     @State private var log = TranscriptLog()
     @State private var failure: String?
     @State private var expanded: Set<String> = []
@@ -139,7 +140,8 @@ struct DeskChatView: View {
         }
         .navigationTitle(session.title)
         .navigationBarTitleDisplayMode(.inline)
-        .task(id: scenePhase == .active) { await follow() }
+        // A new network starts over at once instead of waiting out a long-poll on the old one.
+        .task(id: [scenePhase == .active ? 1 : 0, network.changes]) { await follow() }
     }
 
     @ViewBuilder
@@ -185,13 +187,10 @@ struct DeskChatView: View {
                 pending.removeAll { $0.mark != nil && log.hasUserText($0.text, after: $0.mark ?? 0) }
                 failure = nil
                 wait = 25
-            } catch let error as HelperFailure {
-                if error == .cancelled || Task.isCancelled { return }
-                failure = DeskText.failure(error)
-                try? await Task.sleep(nanoseconds: 5_000_000_000)
             } catch {
                 if Task.isCancelled { return }
-                failure = DeskText.failure(.unreachable)
+                guard let text = DeskNetwork.shared.failureText(error) else { return }
+                failure = text
                 try? await Task.sleep(nanoseconds: 5_000_000_000)
             }
         }

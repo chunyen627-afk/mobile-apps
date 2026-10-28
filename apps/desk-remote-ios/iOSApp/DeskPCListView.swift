@@ -56,6 +56,8 @@ struct DeskPCRow: View {
     let pc: DeskPC
     @State private var line = "連線中…"
     @State private var healthy: Bool?
+    /// The PC could not be reached at the last look: retry every 5 s instead of 30.
+    @State private var unreachable = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -68,7 +70,7 @@ struct DeskPCRow: View {
             }
         }
         .accessibilityElement(children: .combine)
-        .deskForegroundLoop(every: 30) { await refresh() }
+        .deskForegroundLoop(every: 30, failing: { unreachable }) { await refresh() }
     }
 
     private func refresh() async {
@@ -84,13 +86,12 @@ struct DeskPCRow: View {
                 line += "・\(waiting) 個管理員權限請求"
             }
             healthy = true
-        } catch let failure as HelperFailure {
-            if failure == .cancelled { return }
-            line = DeskText.failure(failure)
-            healthy = false
+            unreachable = false
         } catch {
-            line = DeskText.failure(.unreachable)
+            guard let text = DeskNetwork.shared.failureText(error, short: true) else { return }
+            line = text
             healthy = false
+            unreachable = DeskText.isConnectionFailure((error as? HelperFailure) ?? .unreachable)
         }
     }
 }

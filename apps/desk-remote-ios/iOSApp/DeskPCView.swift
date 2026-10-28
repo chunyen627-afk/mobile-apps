@@ -7,6 +7,8 @@ struct DeskPCView: View {
     let pcID: UUID
     @State private var state: HelperState?
     @State private var failure: String?
+    /// The PC could not be reached at the last look: retry every 5 s instead of 15.
+    @State private var unreachable = false
     @State private var editing: DeskPCEditTarget?
     @StateObject private var elevate = DeskElevateModel()
 
@@ -75,7 +77,7 @@ struct DeskPCView: View {
             }
         }
         .sheet(item: $editing) { DeskPCEditView(store: store, target: $0) }
-        .deskForegroundLoop(every: 15) { await refresh() }
+        .deskForegroundLoop(every: 15, failing: { unreachable }) { await refresh() }
         .refreshable { await refresh() }
     }
 
@@ -87,11 +89,12 @@ struct DeskPCView: View {
         do {
             state = try await client.state()
             failure = nil
+            unreachable = false
             if state?.can("elevate") == true { await elevate.refresh(store, pcID) }
-        } catch let error as HelperFailure {
-            if error != .cancelled { failure = DeskText.failure(error) }
         } catch {
-            failure = DeskText.failure(.unreachable)
+            guard let text = DeskNetwork.shared.failureText(error) else { return }
+            failure = text
+            unreachable = DeskText.isConnectionFailure((error as? HelperFailure) ?? .unreachable)
         }
     }
 }

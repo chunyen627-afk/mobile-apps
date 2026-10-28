@@ -26,6 +26,34 @@ public enum DeskText {
         }
     }
 
+    /// The request never reached the helper: what a stuck ZeroTier looks like from the phone.
+    public static func isConnectionFailure(_ failure: HelperFailure) -> Bool {
+        failure == .unreachable || failure == .timeout
+    }
+
+    /// How long ago the phone's network changed still counts as "just now" for the hint.
+    public static let recentNetworkChange: TimeInterval = 600
+
+    /// What to do when the PC cannot be reached. ZeroTier on iOS stalls after the phone changes
+    /// networks (measured 10/28: no recovery in over 3 minutes; after turning it off and on, about
+    /// a minute), and no app can switch another app's VPN, so the user toggles it and the app retries.
+    public static func reconnectHint(networkChangedAgo: TimeInterval?, short: Bool = false) -> String {
+        let recent = networkChangedAgo.map { $0 >= 0 && $0 < recentNetworkChange } ?? false
+        if short {
+            return recent ? "手機剛換網路：請重連 ZeroTier" : "換過網路請重連 ZeroTier"
+        }
+        return recent
+            ? "手機剛換過網路，ZeroTier 常會卡住：請把 ZeroTier 關掉再打開，約 1 分鐘內這裡會自動連上（每 5 秒重試）。"
+            : "手機換過網路的話，請把 ZeroTier 關掉再打開；這裡每 5 秒自動重試。"
+    }
+
+    /// `failure(_:)`, plus the reconnect hint when the PC could not be reached.
+    public static func failure(_ failure: HelperFailure, networkChangedAgo: TimeInterval?, short: Bool = false) -> String {
+        let text = self.failure(failure)
+        guard isConnectionFailure(failure) else { return text }
+        return text + (short ? "・" : "\n") + reconnectHint(networkChangedAgo: networkChangedAgo, short: short)
+    }
+
     /// "閒置 7 分鐘", "有人在用電腦", "已鎖定".
     public static func presence(_ presence: HelperState.Presence) -> String {
         if presence.locked == true { return "已鎖定（需要先解鎖）" }

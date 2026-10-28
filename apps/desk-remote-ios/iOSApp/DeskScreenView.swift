@@ -73,10 +73,8 @@ struct DeskScreenView: View {
             image = picture
             takenAt = Date()
             failure = nil
-        } catch let error as HelperFailure {
-            if error != .cancelled { failure = DeskText.failure(error) }
         } catch {
-            failure = DeskText.failure(.unreachable)
+            if let text = DeskNetwork.shared.failureText(error) { failure = text }
         }
     }
 }

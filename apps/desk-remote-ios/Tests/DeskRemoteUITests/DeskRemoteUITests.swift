@@ -171,7 +171,14 @@ final class DeskRemoteUITests: XCTestCase {
         launch(pc: "關機的電腦|\(helper.host)|\(dead)|\(helper.token)")
         let row = element("pc-row-關機的電腦")
         XCTAssertTrue(waitFor(row, labelContains: "無法連線", timeout: 20), "row says \(row.label)")
+        XCTAssertTrue(row.label.contains("重連 ZeroTier"), "row says \(row.label)")
         snapshot("11-unreachable")
+        // The PC page spells out what to do; it keeps retrying on its own.
+        row.tap()
+        let error = element("pc-error")
+        XCTAssertTrue(waitFor(error, labelContains: "ZeroTier 關掉再打開", timeout: 20), "page says \(error.label)")
+        XCTAssertTrue(error.label.contains("每 5 秒自動重試"), "page says \(error.label)")
+        snapshot("11b-unreachable-hint")
     }
 
     // MARK: - Driving the PC (fake helper)

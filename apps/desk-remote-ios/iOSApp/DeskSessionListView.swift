@@ -10,6 +10,8 @@ struct DeskSessionListView: View {
     let openChat: (SessionSummary) -> Void
     @State private var list: SessionList?
     @State private var failure: String?
+    /// The PC could not be reached at the last look: retry every 5 s instead of 10.
+    @State private var unreachable = false
     @State private var composing = false
 
     var body: some View {
@@ -51,7 +53,7 @@ struct DeskSessionListView: View {
                 openChat(session)
             }
         }
-        .deskForegroundLoop(every: 10) { await refresh() }
+        .deskForegroundLoop(every: 10, failing: { unreachable }) { await refresh() }
         .refreshable { await refresh() }
     }
 
@@ -63,10 +65,11 @@ struct DeskSessionListView: View {
         do {
             list = try await client.sessions(app)
             failure = nil
-        } catch let error as HelperFailure {
-            if error != .cancelled { failure = DeskText.failure(error) }
+            unreachable = false
         } catch {
-            failure = DeskText.failure(.unreachable)
+            guard let text = DeskNetwork.shared.failureText(error) else { return }
+            failure = text
+            unreachable = DeskText.isConnectionFailure((error as? HelperFailure) ?? .unreachable)
         }
     }
 }

@@ -59,22 +59,34 @@ enum DeskRoute: Hashable {
 extension View {
     /// Runs `action` now and then every `seconds` while the app is in the foreground and the view
     /// is on screen; leaving the foreground cancels it (the app never reads in the background).
-    func deskForegroundLoop(every seconds: UInt64, _ action: @escaping @MainActor () async -> Void) -> some View {
-        modifier(DeskForegroundLoop(seconds: seconds, action: action))
+    /// While `failing` says the PC could not be reached it retries every 5 seconds, and a change of
+    /// the phone's network reads again at once (ZeroTier comes back about a minute after a toggle).
+    func deskForegroundLoop(every seconds: UInt64, failing: @escaping @MainActor () -> Bool = { false },
+                            _ action: @escaping @MainActor () async -> Void) -> some View {
+        modifier(DeskForegroundLoop(seconds: seconds, failing: failing, action: action))
     }
 }
 
 private struct DeskForegroundLoop: ViewModifier {
+    static let retrySeconds: UInt64 = 5
     @Environment(\.scenePhase) private var scenePhase
+    @ObservedObject private var network = DeskNetwork.shared
     let seconds: UInt64
+    let failing: @MainActor () -> Bool
     let action: @MainActor () async -> Void
 
+    private struct Run: Equatable {
+        let active: Bool
+        let network: Int
+    }
+
     func body(content: Content) -> some View {
-        content.task(id: scenePhase == .active) {
+        content.task(id: Run(active: scenePhase == .active, network: network.changes)) {
             guard scenePhase == .active else { return }
             while !Task.isCancelled {
                 await action()
-                try? await Task.sleep(nanoseconds: seconds * 1_000_000_000)
+                let wait = await failing() ? min(seconds, Self.retrySeconds) : seconds
+                try? await Task.sleep(nanoseconds: wait * 1_000_000_000)
             }
         }
     }
