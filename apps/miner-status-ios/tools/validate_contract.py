@@ -397,6 +397,25 @@ def build_cases(base: dict) -> tuple[list, list]:
         ("health zero share interval", [(M + ("health",), dict(health, expectedShareSeconds=0))]),
         ("health missing poolOnline", [(M + ("health",), {k: v for k, v in health.items() if k != "poolOnline"})]),
     ]
+
+    # Optional cumulative extension (feature `cumulative`).
+    row = {"machineId": "rig-a", "coin": "PRL", "amount": 4.8, "twd": 289.0}
+    cumulative = {"since": "2026-10-28T10:21:02.000+08:00", "observedAt": "2026-10-29T10:21:02.000+08:00",
+                  "totalTwd": 349.0, "machines": [row, dict(row, machineId="rig-b", coin="QTC", amount=0.025, twd=60.0)]}
+    positive += [
+        ("cumulative present", [(("cumulative",), cumulative)]),
+        ("cumulative null", [(("cumulative",), None)]),
+        ("cumulative no machines, no update time", [(("cumulative",), dict(cumulative, machines=[], totalTwd=0, observedAt=None))]),
+    ]
+    negative += [
+        ("cumulative extra key", [(("cumulative",), dict(cumulative, account="x"))]),
+        ("cumulative null since", [(("cumulative",), dict(cumulative, since=None))]),
+        ("cumulative negative total", [(("cumulative",), dict(cumulative, totalTwd=-1))]),
+        ("cumulative row extra key", [(("cumulative",), dict(cumulative, machines=[dict(row, wallet="x")]))]),
+        ("cumulative row lowercase coin", [(("cumulative",), dict(cumulative, machines=[dict(row, coin="prl")]))]),
+        ("cumulative row negative amount", [(("cumulative",), dict(cumulative, machines=[dict(row, amount=-1)]))]),
+        ("cumulative too many machines", [(("cumulative",), dict(cumulative, machines=[row] * 9))]),
+    ]
     return negative, positive
 
 

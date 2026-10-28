@@ -32,11 +32,13 @@ public struct MinerStatusFeed: Codable, Hashable, Sendable {
     public let tariff: TariffReport?
     /// Optional extension: whether mining billed machines is worth it now; nil when absent or null.
     public let advice: [AdviceReport]?
+    /// Optional extension: estimated earnings added up since a start time; nil when absent or null.
+    public let cumulative: CumulativeReport?
 
     public var isDemo: Bool { dataOrigin == .demo }
 
     enum CodingKeys: String, CodingKey, CaseIterable {
-        case schemaVersion, dataOrigin, demoNotice, publishedAt, machines, market, tariff, advice
+        case schemaVersion, dataOrigin, demoNotice, publishedAt, machines, market, tariff, advice, cumulative
     }
 
     public init(from decoder: Decoder) throws {
@@ -75,6 +77,7 @@ public struct MinerStatusFeed: Codable, Hashable, Sendable {
         if let items = advice, items.count > 8 {
             throw DecodingError.dataCorruptedError(forKey: .advice, in: c, debugDescription: "at most 8 advice items")
         }
+        cumulative = c.contains(.cumulative) ? try c.decodeNullable(CumulativeReport.self, forKey: .cumulative) : nil
 
         // Stricter than the schema: duplicate ids would let samples from different
         // machines be compared against each other.
@@ -96,6 +99,7 @@ public struct MinerStatusFeed: Codable, Hashable, Sendable {
         try c.encodeIfPresent(market, forKey: .market)
         try c.encodeIfPresent(tariff, forKey: .tariff)
         try c.encodeIfPresent(advice, forKey: .advice)
+        try c.encodeIfPresent(cumulative, forKey: .cumulative)
     }
 }
 
@@ -424,6 +428,80 @@ public struct MarketReport: Codable, Hashable, Sendable {
         try c.encode(btcUsd, forKey: .btcUsd)
         try c.encode(usdTwd, forKey: .usdTwd)
         try c.encode(observedAt, forKey: .observedAt)
+    }
+}
+
+/// Each machine's estimated earnings added up since `since`, for checking against the pool account
+/// at the end of the month. An estimate, not money received.
+public struct CumulativeReport: Codable, Hashable, Sendable {
+    public let since: Timestamp
+    public let observedAt: Timestamp?
+    public let totalTwd: Double
+    public let machines: [CumulativeMachine]
+
+    enum CodingKeys: String, CodingKey, CaseIterable {
+        case since, observedAt, totalTwd, machines
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownKeys(decoder, allowed: CodingKeys.self)
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        since = try c.decode(Timestamp.self, forKey: .since)
+        observedAt = try c.decodeNullable(Timestamp.self, forKey: .observedAt)
+        totalTwd = try c.decode(Double.self, forKey: .totalTwd)
+        guard totalTwd.isFinite, totalTwd >= 0 else {
+            throw DecodingError.dataCorruptedError(forKey: .totalTwd, in: c, debugDescription: "totalTwd must be >= 0")
+        }
+        machines = try c.decode([CumulativeMachine].self, forKey: .machines)
+        guard machines.count <= 8 else {
+            throw DecodingError.dataCorruptedError(forKey: .machines, in: c, debugDescription: "at most 8 machines")
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(since, forKey: .since)
+        try c.encode(observedAt, forKey: .observedAt)
+        try c.encode(totalTwd, forKey: .totalTwd)
+        try c.encode(machines, forKey: .machines)
+    }
+
+    public func machine(_ machineId: String) -> CumulativeMachine? {
+        machines.first { $0.machineId == machineId }
+    }
+}
+
+public struct CumulativeMachine: Codable, Hashable, Sendable {
+    public let machineId: String
+    public let coin: String
+    public let amount: Double
+    public let twd: Double
+
+    enum CodingKeys: String, CodingKey, CaseIterable {
+        case machineId, coin, amount, twd
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownKeys(decoder, allowed: CodingKeys.self)
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        machineId = try c.decode(String.self, forKey: .machineId)
+        coin = try c.decode(String.self, forKey: .coin)
+        guard isCoinSymbol(coin) else {
+            throw DecodingError.dataCorruptedError(forKey: .coin, in: c, debugDescription: "coin must match ^[A-Z0-9]{2,10}$")
+        }
+        amount = try c.decode(Double.self, forKey: .amount)
+        twd = try c.decode(Double.self, forKey: .twd)
+        guard amount.isFinite, amount >= 0, twd.isFinite, twd >= 0 else {
+            throw DecodingError.dataCorruptedError(forKey: .amount, in: c, debugDescription: "amount and twd must be >= 0")
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(machineId, forKey: .machineId)
+        try c.encode(coin, forKey: .coin)
+        try c.encode(amount, forKey: .amount)
+        try c.encode(twd, forKey: .twd)
     }
 }
 

@@ -132,6 +132,8 @@ final class AppModel: ObservableObject {
 
     // Earnings
     @Published private(set) var market: MarketReport?
+    /// The source's running total of estimated earnings; nil when it sends none.
+    @Published private(set) var cumulative: CumulativeReport?
     @Published private(set) var sourceTariff: TariffReport? = SourceTariffStore.load()
     /// The source's mine-or-rest advice for billed machines; live mode only.
     @Published private(set) var advice: [AdviceReport] = []
@@ -169,6 +171,7 @@ final class AppModel: ObservableObject {
         mode = .demo
         self.scenario = scenario
         advice = []
+        cumulative = nil
         guard let demo else {
             snapshots = []
             feedProblem = nil
@@ -183,6 +186,7 @@ final class AppModel: ObservableObject {
             feedProblem = result.feedProblem
             demoClock = result.clock
             market = result.market
+            cumulative = result.cumulative
             demoError = nil
         } catch {
             snapshots = []
@@ -211,6 +215,7 @@ final class AppModel: ObservableObject {
         lastFailure = nil
         sourceSentDemoData = false
         market = nil
+        cumulative = nil
         advice = []
         LiveResume.enabled = true
         if isForeground { startPolling() }
@@ -377,6 +382,7 @@ final class AppModel: ObservableObject {
             lastFailure = nil
             sourceSentDemoData = feed.isDemo
             market = feed.market
+            cumulative = feed.cumulative
             advice = feed.advice ?? []
             if let tariff = feed.tariff, tariff != sourceTariff {
                 sourceTariff = tariff

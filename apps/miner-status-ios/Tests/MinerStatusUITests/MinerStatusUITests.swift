@@ -132,6 +132,29 @@ final class MinerStatusUITests: XCTestCase {
         XCTAssertTrue(price.exists, "QTC price not shown on detail")
     }
 
+    func test21RunningTotalIsMarkedAsAnEstimate() throws {
+        // The demo source's fictional running total: NT$349 in all, B 0.025 QTC ≈ NT$60.
+        let total = element("earnings-cumulative")
+        XCTAssertTrue(reveal(total), "running total missing")
+        XCTAssertTrue(waitFor(total, labelContains: "NT$349", timeout: 3), "running total says \(total.label)")
+        XCTAssertTrue(total.label.contains("不是實際入帳"), "running total not marked as an estimate: \(total.label)")
+        snapshot("21-running-total")
+        app.swipeDown()
+        app.swipeDown()
+        let row = element("machine-demo-rig-b")
+        XCTAssertTrue(row.waitForExistence(timeout: 5), "machine row B missing")
+        row.tap()
+        XCTAssertTrue(app.navigationBars["詳情（示範）"].waitForExistence(timeout: 5), "detail screen did not open")
+        let mined = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "0.025 QTC", "0.025 QTC")).firstMatch
+        for _ in 0 ..< 5 where !mined.waitForExistence(timeout: 2) { app.swipeUp() }
+        XCTAssertTrue(mined.exists, "B's running total not shown on detail")
+        XCTAssertTrue(app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label CONTAINS %@ OR value CONTAINS %@", "NT$60", "NT$60")).firstMatch.exists,
+                      "B's running total in NT$ not shown")
+        snapshot("21-running-total-detail")
+    }
+
     func test13ElectricityToggleChangesTotals() throws {
         let summary = element("earnings-summary")
         XCTAssertTrue(reveal(summary), "earnings summary missing")
