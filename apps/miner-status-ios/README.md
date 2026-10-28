@@ -7,7 +7,7 @@
 - **不同幣種的收益（0.6.2）**：挖另一種幣的機器（例如 FPGA 挖 QTC）用它自己的幣價換算收益，不會被當成主要幣種計價。
 - **自動接回（0.6.1）**：如果上次是在讀自訂來源，下次開啟會自動接回同一個來源。iOS 會把放在背景太久的 App 關掉；以前這時候回到 App，會從頭開到示範畫面。
 - **自訂來源**：使用者在「資料來源」填入網址並按「開始讀取」後，才以 GET 讀取，只在前景讀取。倉庫內沒有任何真實位址。
-- **遠端開始／停止（0.4.0）**：只對來源標示為可控制的機器，且使用者輸入控制密碼、按下並再確認後，才送出一個 POST。其餘一律唯讀。
+- **遠端開始／停止（0.4.0）**：只對來源標示為可控制的機器，且使用者輸入控制密碼、按下並再確認後，才送出一個 POST。其餘一律唯讀。App 不寫死哪幾台能控制；2026-10-28 起電腦端把每台礦機都標成可控制，App 不用改版就出現按鈕。
 
 ## 驗證狀態
 
@@ -15,13 +15,13 @@
 | --- | --- |
 | JSON 契約（schema）、合成示範 fixtures | 實作完成；Windows 上以 Python 實際執行契約檢查通過 |
 | 純 Swift 核心 `MinerStatusCore`（模型、狀態引擎、顯示文字、唯讀 HTTP client） | **編譯通過**（macOS CI） |
-| XCTest（95 項） | **模擬器測試通過**：95 項、0 失敗（[run 40117533077](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40117533077)，Xcode 16.4、iPhone 16 Pro 模擬器） |
-| SwiftUI App（示範＋自訂來源＋收益與警告） | **模擬器 UI 測試通過**：13 項、0 失敗，15 張截圖已人工檢視；0.2.0 的收益與警告尚未實機驗證，iPad 未驗證 |
+| XCTest（125 項） | **模擬器測試通過**：0.6.3 build 11 的 125 項、0 失敗（[run 40623881960](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40623881960)，Xcode 16.4、iPhone 16 Pro 模擬器） |
+| SwiftUI App（示範＋自訂來源＋收益、電費、開挖建議、遠端控制、累計收益） | **模擬器 UI 測試通過**：0.6.3 的 21 項、0 失敗（同一個 run），截圖已人工檢視；0.6.3 的累計收益尚未實機驗證，iPad 未驗證 |
 | Xcode 專案設定（XcodeGen `project.yml`，沿用 album-ios 架構）、建置腳本 `scripts/build.sh` | CI 實際執行通過，含 Release archive 與 bundle 檢查 |
 | Swift 語法剖析、靜態設定檢查 | Windows 上執行通過；只代表可剖析與設定內容相符 |
 | 真實資料來源 | **實機通過**（2026-10-25）：手機經私人虛擬網路讀電腦端唯讀彙整服務，兩台礦機都亮綠燈；電腦端程式與位址只在本機 |
-| CI workflow、IPA | `miner-status-ios.yml` push 到本分支即觸發；未簽署 IPA 以公開 prerelease [miner-status-0.1.0-build2](https://github.com/chunyen627-afk/mobile-apps/releases/tag/miner-status-0.1.0-build2) 發布（214,783 bytes） |
-| 實機 | **build 2 實機通過**（2026-10-25，SideStore 安裝，打得開、畫面正常；接真實來源兩台皆綠燈） |
+| CI workflow、IPA | `miner-status-ios.yml` push 到本分支即觸發。單獨版最後發布的是 [miner-status-0.6.0-build8](https://github.com/chunyen627-afk/mobile-apps/releases/tag/miner-status-0.6.0-build8)；0.6.1 起只隨工具箱發布，0.6.3 在 [toolbox-0.4.2-build8](https://github.com/chunyen627-afk/mobile-apps/releases/tag/toolbox-0.4.2-build8) |
+| 實機 | **build 2 實機通過**（2026-10-25，SideStore 安裝，打得開、畫面正常；接真實來源兩台皆綠燈）。之後改用工具箱裡的礦機分頁；工具箱 0.4.2 build 8 尚未確認裝到手機 |
 
 iPad 仍待驗證，詳見 [狀態](docs/STATUS.md) 與 [建置](docs/BUILD.md)。
 
