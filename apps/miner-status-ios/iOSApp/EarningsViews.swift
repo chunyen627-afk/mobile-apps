@@ -18,12 +18,11 @@ enum EarningsText {
 
     /// "10/28 10:21" in Taipei time, where the source runs.
     static func since(_ timestamp: Timestamp) -> String {
-        guard let date = timestamp.date else { return DisplayText.noData }
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "zh_Hant_TW")
         formatter.timeZone = TimeZone(identifier: "Asia/Taipei")
         formatter.dateFormat = "M/d HH:mm"
-        return formatter.string(from: date)
+        return formatter.string(from: timestamp.date)
     }
 
     static func usd(_ value: Double?) -> String {
