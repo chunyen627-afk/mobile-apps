@@ -2,7 +2,9 @@ import DeskRemoteCore
 import SwiftUI
 
 /// One desktop app's conversations on one PC, newest first, refreshed every 10 s; "+" starts a
-/// new conversation on the PC and opens it here.
+/// new conversation on the PC and opens it here. Coming in while the desktop app has no window
+/// (closed, or closed to the tray) opens it on the PC, quietly and unless someone is using the
+/// PC: actions bring it up anyway, so how it went is not said.
 struct DeskSessionListView: View {
     @ObservedObject var store: DeskStore
     let pcID: UUID
@@ -13,6 +15,7 @@ struct DeskSessionListView: View {
     /// The PC could not be reached at the last look: retry every 5 s instead of 10.
     @State private var unreachable = false
     @State private var composing = false
+    @State private var launchTried = false
 
     var body: some View {
         List {
@@ -55,6 +58,15 @@ struct DeskSessionListView: View {
         }
         .deskForegroundLoop(every: 10, failing: { unreachable }) { await refresh() }
         .refreshable { await refresh() }
+        .task { await launchIfClosed() }
+    }
+
+    /// Once per visit: only when the helper can open it and says it has no window.
+    private func launchIfClosed() async {
+        guard !launchTried, let client = store.client(pcID) else { return }
+        launchTried = true
+        guard let state = try? await client.state(), state.can("launch"), state.app(app)?.running == false else { return }
+        _ = try? await client.launch(app)
     }
 
     private func refresh() async {

@@ -35,9 +35,11 @@ struct DeskPCView: View {
                     NavigationLink(value: DeskRoute.sessions(pcID, app)) {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(app.displayName).font(.headline)
-                            Text(state.map { DeskText.appState($0.app(app)) } ?? " ")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
+                            if let state, let line = DeskText.appState(state.app(app)) {
+                                Text(line)
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                         .accessibilityElement(children: .combine)
                     }

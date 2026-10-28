@@ -6,13 +6,15 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 # Includes 3 Windows-only tests (the real PowerShell companion twice, a real screen capture),
 # which are skipped (and counted) on macOS.
-EXPECTED_HELPER_TESTS="${EXPECTED_HELPER_TESTS:-93}"
+EXPECTED_HELPER_TESTS="${EXPECTED_HELPER_TESTS:-98}"
 EXPECTED_TESTS="${EXPECTED_TESTS:-35}"
-EXPECTED_UI_TESTS="${EXPECTED_UI_TESTS:-27}"
+EXPECTED_UI_TESTS="${EXPECTED_UI_TESTS:-28}"
 FIXTURES=fixtures/fake-helper
 HELPER_PORT=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["port"])' "$FIXTURES/fake-config.json")
 # A second fake helper that reports someone at the keyboard (5 s idle), for "send anyway".
 BUSY_PORT="${BUSY_PORT:-8791}"
+# A third whose Codex has no window (closed to the tray), for "coming in opens it".
+CLOSED_PORT="${CLOSED_PORT:-8792}"
 DEAD_PORT="${DEAD_PORT:-8799}"
 BUNDLE_ID=org.personal.deskremote.app
 mkdir -p build
@@ -53,10 +55,12 @@ export_screenshots() {
 }
 HELPER_PID=""
 BUSY_PID=""
+CLOSED_PID=""
 on_exit() {
   local code=$?
   if [[ -n "$HELPER_PID" ]]; then kill "$HELPER_PID" 2>/dev/null || true; fi
   if [[ -n "$BUSY_PID" ]]; then kill "$BUSY_PID" 2>/dev/null || true; fi
+  if [[ -n "$CLOSED_PID" ]]; then kill "$CLOSED_PID" 2>/dev/null || true; fi
   export_screenshots
   annotate_failure "$code"
 }
@@ -96,7 +100,10 @@ HELPER_PID=$!
 python3 -I pc-helper/desk_remote_helper.py --fake "$FIXTURES" --fake-port "$BUSY_PORT" --fake-idle 5 \
   > build/fake-helper-busy.log 2>&1 &
 BUSY_PID=$!
-for port in "$HELPER_PORT" "$BUSY_PORT"; do
+python3 -I pc-helper/desk_remote_helper.py --fake "$FIXTURES" --fake-port "$CLOSED_PORT" --fake-closed codex \
+  > build/fake-helper-closed.log 2>&1 &
+CLOSED_PID=$!
+for port in "$HELPER_PORT" "$BUSY_PORT" "$CLOSED_PORT"; do
   for _ in $(seq 1 20); do
     curl -sf "http://127.0.0.1:${port}/health" >/dev/null && break
     sleep 0.5
@@ -106,6 +113,7 @@ done
 TEST_RUNNER_DESK_HELPER_HOST=127.0.0.1 \
 TEST_RUNNER_DESK_HELPER_PORT="$HELPER_PORT" \
 TEST_RUNNER_DESK_BUSY_PORT="$BUSY_PORT" \
+TEST_RUNNER_DESK_CLOSED_PORT="$CLOSED_PORT" \
 TEST_RUNNER_DESK_ELEVATE_KEY="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["elevate_key"])' "$FIXTURES/fake-config.json")" \
 TEST_RUNNER_DESK_HELPER_TOKEN="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["token"])' "$FIXTURES/fake-config.json")" \
 TEST_RUNNER_DESK_DEAD_PORT="$DEAD_PORT" \
@@ -121,9 +129,10 @@ if [[ -z "$CORE_RESULT" || -z "$UI_RESULT" ]]; then
   echo "error: expected ${EXPECTED_TESTS} unit and ${EXPECTED_UI_TESTS} UI tests executed with 0 failures; see build/test-summary.txt."
   exit 1
 fi
-kill "$HELPER_PID" "$BUSY_PID" 2>/dev/null || true
+kill "$HELPER_PID" "$BUSY_PID" "$CLOSED_PID" 2>/dev/null || true
 HELPER_PID=""
 BUSY_PID=""
+CLOSED_PID=""
 if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
   echo "::notice title=Helper unittest::${HELPER_RESULT} OK"
   echo "::notice title=XCTest unit::${CORE_RESULT}"

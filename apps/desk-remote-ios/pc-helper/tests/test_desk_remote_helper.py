@@ -277,6 +277,24 @@ class HelpersTests(unittest.TestCase):
         # Tick counts wrap around after 49.7 days.
         self.assertEqual(h.own_adjusted_idle(0xFFFFF000, 0x00000800, None, None), 6)
 
+    def test_a_second_action_still_counts_from_the_last_real_input(self):
+        presence = h.WindowsPresence()
+        ticks = {'now': 61000, 'last': 1000}
+        presence.ticks = lambda: ticks['now']
+        presence.last_input = lambda: ticks['last']
+        presence.begin_own()
+        ticks.update(now=62000, last=61500)  # the first message's keystrokes
+        presence.end_own()
+        ticks['now'] = 86000                  # the next phone message, 25 s later
+        self.assertEqual(presence.idle_seconds(), 85)
+        presence.begin_own()
+        self.assertEqual(presence.idle_seconds(), 85)
+        ticks['now'] = 87000
+        presence.end_own()
+        ticks.update(now=90000, last=89000)   # a person after that does count
+        presence.begin_own()
+        self.assertEqual(presence.idle_seconds(), 1)
+
     def test_focus_failure_names_the_window_in_front(self):
         base = h.FAILURE_TEXT['focus-failed']
         message = 'could not bring the window to the front; in front: Taskmgr'
@@ -378,6 +396,51 @@ class DrivingTests(FakeEnvironment):
         run_all(runner)
         self.assertEqual(runner.status(body['id'])['error'], 'app-not-running')
         self.assertNotIn('send', [c[0] for c in driver.calls])
+
+    def closed_presence(self, **extra):
+        presence = dict(self.fake.cfg['presence'], **extra)
+        presence['windows'] = dict(presence['windows'], codex=False)
+        return presence
+
+    def test_launch_shows_a_closed_app_and_the_state_says_so(self):
+        hub, driver, _, runner = drive(self.fake, self.closed_presence())
+        self.assertFalse(hub.state()['apps']['codex']['running'])
+        code, body = runner.submit('launch', 'codex', None, {})
+        self.assertEqual(code, 202)
+        run_all(runner)
+        done = runner.status(body['id'])
+        self.assertEqual((done['state'], done['verified'], done['message']), ('done', True, '已在電腦上開啟桌面版'))
+        self.assertEqual(driver.calls, [('launch', 'codex')])
+        self.assertTrue(hub.state()['apps']['codex']['running'])
+
+    def test_launch_leaves_an_open_app_alone(self):
+        _, driver, _, runner = drive(self.fake)
+        body = runner.submit('launch', 'claude', None, {})[1]
+        run_all(runner)
+        self.assertEqual(runner.status(body['id'])['message'], '桌面版已經開著')
+        self.assertEqual(driver.calls, [])
+
+    def test_launch_waits_for_nobody_at_the_keyboard_unless_forced(self):
+        _, driver, _, runner = drive(self.fake, self.closed_presence(idleSeconds=5))
+        code, body = runner.submit('launch', 'codex', None, {})
+        self.assertEqual((code, body['error']), (409, 'busy-user'))
+        self.assertEqual(runner.submit('launch', 'codex', None, {'force': True})[0], 202)
+        run_all(runner)
+        self.assertEqual(driver.calls, [('launch', 'codex')])
+
+    def test_launch_with_no_window_fails_quietly(self):
+        class DeadDriver(h.FakeDriver):
+            def launch(self, app):
+                self.calls.append(('launch', app))
+        sent = []
+        _, _, _, runner = drive(self.fake, self.closed_presence(), driver_class=DeadDriver,
+                                notify=lambda *a: sent.append(a))
+        runner.clock = FastClock()
+        sent.clear()  # the fixture's waiting permission question was announced when it was seen
+        body = runner.submit('launch', 'codex', None, {})[1]
+        run_all(runner)
+        self.assertEqual(runner.status(body['id'])['error'], 'app-not-running')
+        self.assertEqual(sent, [])  # the phone asked on its own and shows it
 
     def test_wrong_conversation_open_never_types(self):
         class StuckDriver(h.FakeDriver):

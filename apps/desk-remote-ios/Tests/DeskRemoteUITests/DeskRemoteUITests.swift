@@ -65,8 +65,9 @@ final class DeskRemoteUITests: XCTestCase {
         try launchWithHelper()
         openPC()
         XCTAssertTrue(waitFor(element("pc-presence"), labelContains: "閒置 7 分鐘", timeout: 10), "presence not shown")
-        XCTAssertTrue(waitFor(element("app-row-claude"), labelContains: "桌面版開著", timeout: 5),
-                      "Claude row says \(element("app-row-claude").label)")
+        XCTAssertTrue(element("app-row-claude").waitForExistence(timeout: 5), "Claude row missing")
+        XCTAssertFalse(element("app-row-claude").label.contains("桌面版"),
+                       "whether the window is open is not said: \(element("app-row-claude").label)")
         XCTAssertTrue(element("app-row-codex").exists, "Codex row missing")
         snapshot("04-pc-detail")
     }
@@ -489,6 +490,19 @@ final class DeskRemoteUITests: XCTestCase {
         snapshot("27-codex-mode-picked")
     }
 
+    /// Coming into a desktop app that has no window on the PC opens it there, without a word.
+    func test28ComingInOpensAClosedDesktopApp() throws {
+        let helper = try helperSettings()
+        let closed = try XCTUnwrap(ProcessInfo.processInfo.environment["DESK_CLOSED_PORT"], "DESK_CLOSED_PORT not set")
+        XCTAssertEqual(codexWindowOpen(helper, port: closed), false, "the fake Codex should start with no window")
+        launch(pc: "示範電腦|\(helper.host)|\(closed)|\(helper.token)")
+        openSessions("codex")
+        XCTAssertTrue(element("session-row-\(codexX)").waitForExistence(timeout: 10), "Codex conversations missing")
+        XCTAssertTrue(poll(timeout: 20) { codexWindowOpen(helper, port: closed) == true }, "Codex was not opened on the PC")
+        XCTAssertFalse(text("桌面版").exists, "the phone should not talk about the window")
+        snapshot("28-codex-opened-quietly")
+    }
+
     // MARK: - Helpers
 
     private struct Helper {
@@ -512,6 +526,23 @@ final class DeskRemoteUITests: XCTestCase {
         if let pc { app.launchEnvironment["DESK_UI_PC"] = pc }
         if let openURL { app.launchEnvironment["DESK_UI_OPEN_URL"] = openURL }
         app.launch()
+    }
+
+    /// What the fake helper on `port` says about Codex's window, asked directly.
+    private func codexWindowOpen(_ helper: Helper, port: String) -> Bool? {
+        guard let url = URL(string: "http://\(helper.host):\(port)/v1/state") else { return nil }
+        var request = URLRequest(url: url, timeoutInterval: 5)
+        request.setValue("Bearer \(helper.token)", forHTTPHeaderField: "Authorization")
+        var running: Bool?
+        let done = DispatchSemaphore(value: 0)
+        URLSession.shared.dataTask(with: request) { data, _, _ in
+            let state = data.flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any]
+            let apps = state?["apps"] as? [String: Any]
+            running = (apps?["codex"] as? [String: Any])?["running"] as? Bool
+            done.signal()
+        }.resume()
+        _ = done.wait(timeout: .now() + 6)
+        return running
     }
 
     private func launchWithHelper(openURL: String? = nil) throws {

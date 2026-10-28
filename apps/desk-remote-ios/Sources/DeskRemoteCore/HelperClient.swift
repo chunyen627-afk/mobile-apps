@@ -186,6 +186,11 @@ public struct HelperClient: Sendable {
         try await post(["v1", app.rawValue, "sessions", id, "open"], ActionRequest(force: force ? true : nil))
     }
 
+    /// Shows the desktop app's window on the PC: starts it, or brings it back from the tray.
+    public func launch(_ app: DeskApp, force: Bool = false) async throws -> ActionStatus {
+        try await post(["v1", app.rawValue, "launch"], ActionRequest(force: force ? true : nil))
+    }
+
     // MARK: - Administrator commands
 
     public func elevateList() async throws -> ElevateList {

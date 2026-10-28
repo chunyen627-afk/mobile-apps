@@ -63,13 +63,11 @@ public enum DeskText {
         return "閒置 \(seconds / 3600) 小時"
     }
 
-    public static func appState(_ state: HelperState.AppState?) -> String {
+    /// Only a missing app is worth a line: whether its window is open does not matter on the
+    /// phone (coming in opens it), so it is not said (asked on 10/28).
+    public static func appState(_ state: HelperState.AppState?) -> String? {
         guard let state, state.available else { return "這台電腦沒有找到資料" }
-        switch state.running {
-        case .some(true): return "桌面版開著"
-        case .some(false): return "桌面版沒開（仍可看紀錄）"
-        case .none: return "無法判斷是否開著"
-        }
+        return nil
     }
 
     public static func sessionStatus(_ status: String) -> String? {

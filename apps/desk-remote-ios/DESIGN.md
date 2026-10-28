@@ -227,6 +227,7 @@ iPhone App ──HTTP（只走 ZeroTier，Bearer token）──▶ 小幫手 des
 | `POST /v1/{app}/sessions/{id}/messages` | `{text, clientMsgId}` → `202 {actionId}` |
 | `POST /v1/{app}/sessions/{id}/permission` | `{promptId, decision: allow_once\|deny}` |
 | `POST /v1/{app}/sessions` | 新對話 `{text, project?}` |
+| `POST /v1/{app}/launch` | 叫出桌面版視窗（沒開就啟動、縮在系統匣就叫回）`{force?}`；能力 `launch` |
 | `GET /v1/actions/{actionId}` | 動作結果：`queued\|running\|done\|failed`＋原因 |
 | `GET /v1/elevate` | 待核准清單（含內容、nonce、到期） |
 | `POST /v1/elevate/{nonce}` | `{decision, hmac}` |

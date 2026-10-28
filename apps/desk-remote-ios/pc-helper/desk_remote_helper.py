@@ -36,7 +36,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.5'
+VERSION = '0.5.6'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -986,8 +986,15 @@ class WindowsPresence:
         return own_adjusted_idle(last, now, self.own, self.real_before)
 
     def begin_own(self):
-        self.real_before = self.last_input()
-        self.own = (self.ticks(), None)
+        """When the last input is still the helper's own from the action before, the real input
+        before that stays the one to count from (live 10/28: a second phone message 25 s after
+        the first was refused, the first one's keystrokes counted as a person)."""
+        last, now = self.last_input(), self.ticks()
+        if self.real_before is not None and last is not None and own_input(last, now, self.own):
+            self.own = (self.own[0], None)  # nobody has touched it since: one window from the first start
+            return
+        self.real_before = last
+        self.own = (now, None)
 
     def end_own(self):
         if self.own:
@@ -1049,19 +1056,29 @@ class WindowsPresence:
             self.cache, self.cached_at = {'windows': windows}, now
         return {'idleSeconds': self.idle_seconds(), 'locked': self.locked(), 'windows': self.cache['windows']}
 
+    def forget_windows(self):
+        """The next snapshot looks at the windows again (one was just shown)."""
+        self.cache = None
+
+
+def own_input(last, now, own, grace_ms=1500):
+    """True when the input tick `last` lies inside the helper's own window [start, end + grace]."""
+    def since(tick):
+        return ((now - tick) & 0xFFFFFFFF)
+    if not own:
+        return False
+    start, end = own
+    after_start = since(start) >= since(last)                   # last input is not before start
+    before_end = end is None or since(last) + grace_ms >= since(end)  # not later than end + grace
+    return after_start and before_end
+
 
 def own_adjusted_idle(last, now, own, real_before, grace_ms=1500):
     """Idle seconds from tick counts (32-bit, wrapping). Input inside the helper's own window
     [start, end + grace] counts from the real input before it instead."""
-    def since(tick):
-        return ((now - tick) & 0xFFFFFFFF)
-    if own and real_before is not None:
-        start, end = own
-        after_start = since(start) >= since(last)                   # last input is not before start
-        before_end = end is None or since(last) + grace_ms >= since(end)  # not later than end + grace
-        if after_start and before_end:
-            last = real_before
-    return since(last) // 1000
+    if real_before is not None and own_input(last, now, own, grace_ms):
+        last = real_before
+    return ((now - last) & 0xFFFFFFFF) // 1000
 
 
 class FixedPresence:
@@ -1070,6 +1087,9 @@ class FixedPresence:
 
     def snapshot(self):
         return self.values
+
+    def forget_windows(self):
+        pass
 
     def begin_own(self):
         pass
@@ -1442,6 +1462,24 @@ class WindowsDriver:
         except OSError as exc:
             raise ActionError('app-not-running', f'Codex could not take the link: {exc}')
 
+    def launch(self, app):
+        """Starts the app through its Start menu entry; when it is already running, closed to the
+        tray (both were on the home PC, 10/28), the entry shows its window again. Codex outside its
+        package after the 0x80070020 fault: start the package's own exe instead."""
+        try:
+            os.startfile(f'shell:AppsFolder\\{LAUNCH_IDS[app]}')
+            return
+        except OSError:
+            if app != 'codex':
+                raise ActionError('app-not-running', 'the app could not be started')
+        exe = codex_package_exe()
+        if not exe:
+            raise ActionError('app-not-running', 'the Codex package was not found')
+        try:
+            os.startfile(exe)
+        except OSError as exc:
+            raise ActionError('app-not-running', f'Codex could not be started: {exc}')
+
     def invoke(self, app, name, doc=None):
         self.ask(app, cmd='invoke', name=name, doc=doc)
 
@@ -1481,6 +1519,10 @@ class WindowsDriver:
 
     def stop(self, app, doc):
         return self.ask(app, cmd='stop', doc=doc).get('how')
+
+
+# Start menu (AppsFolder) ids of the two packaged desktop apps, the same on every PC.
+LAUNCH_IDS = {'claude': 'Claude_pzs8sxrjxfjjc!Claude', 'codex': 'OpenAI.Codex_2p2nqsd0c76g0!App'}
 
 
 def codex_package_exe():
@@ -1865,7 +1907,8 @@ class ActionRunner:
         self.update(action, state='running', message='處理中')
         handler = {'send': self.do_send, 'permission': self.do_permission, 'new': self.do_new,
                    'open': self.do_open, 'answer': self.do_answer, 'model': self.do_model,
-                   'effort': self.do_effort, 'mode': self.do_mode, 'stop': self.do_stop}[action['kind']]
+                   'effort': self.do_effort, 'mode': self.do_mode, 'stop': self.do_stop,
+                   'launch': self.do_launch}[action['kind']]
         try:
             handler(action)
         except ActionError as exc:
@@ -1883,8 +1926,9 @@ class ActionRunner:
 
     def tell(self, action, failed=False):
         """Only a failure goes to ntfy: the phone that asked already shows each success (the user
-        asked on 10/27 not to be notified of what they did themselves)."""
-        if not self.notify or not failed:
+        asked on 10/27 not to be notified of what they did themselves). Opening the desktop app
+        is asked for by the phone on its own, which shows how it went."""
+        if not self.notify or not failed or action['kind'] == 'launch':
             return
         verb = {'send': '送出訊息', 'permission': '回覆權限', 'new': '開新對話', 'open': '打開對話',
                 'answer': '回答選項題', 'model': '切換模型', 'effort': '切換推理強度', 'mode': '切換權限模式',
@@ -2021,6 +2065,26 @@ class ActionRunner:
     def do_open(self, action):
         self.open_conversation(action)
         self.update(action, state='done', message='已在電腦上打開')
+
+    def window_shown(self, app):
+        self.presence.forget_windows()
+        return bool((self.presence.snapshot().get('windows') or {}).get(app))
+
+    def do_launch(self, action):
+        """Shows the desktop app's window: starts the app, or brings it back from the tray."""
+        app = action['app']
+        if self.window_shown(app):
+            self.update(action, state='done', verified=True, message='桌面版已經開著')
+            return
+        self.recheck(action)
+        self.presence.begin_own()
+        self.driver.launch(app)
+        deadline = self.clock() + self.verify_seconds * 2  # a cold start takes longer than a switch
+        while not self.window_shown(app):
+            if self.clock() >= deadline:
+                raise ActionError('app-not-running', 'no window showed up')
+            time.sleep(0.5)
+        self.update(action, state='done', verified=True, message='已在電腦上開啟桌面版')
 
     def do_send(self, action):
         app, info, text = action['app'], action['info'], action['text']
@@ -2506,6 +2570,8 @@ def handler_for(hub, gate, networks, runner=None):
             body = self.read_body(PHOTO_BODY if parts[-1:] == ['messages'] else MAX_BODY)
             if body is None:
                 return None
+            if parts[1:] == ['launch'] and parts[0] in APPS:
+                return self.send_json(*runner.submit('launch', parts[0], None, body))
             if len(parts) >= 2 and parts[0] in APPS and parts[1] == 'sessions':
                 app = parts[0]
                 if len(parts) == 2:
@@ -2847,11 +2913,21 @@ class FakeDriver:
             path.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8')
         return 'fake'
 
+    def windows(self):
+        """The fake presence's window flags: an app started closed (--fake-closed) has none."""
+        return self.hub.presence.snapshot().setdefault('windows', {})
+
     def docs(self, app):
-        return [self.open_doc.get(app)]
+        return None if self.windows().get(app) is False else [self.open_doc.get(app)]
+
+    def launch(self, app):
+        self.calls.append(('launch', app))
+        self.windows()[app] = True
 
     def open(self, app, info):
         self.calls.append(('open', app, info['id']))
+        if self.windows().get(app) is False:
+            self.windows()[app] = True  # the link shows the window again
         shown = self.page_titles.get(info['id'])
         if shown is None and app == 'codex':
             shown = self.hub.sources[app].import_titles().get(info['id'])  # as Codex does (live 10/28)
@@ -2986,7 +3062,7 @@ def build_driving(hub, driver, notify, pc_name, cfg, interval, verify_seconds):
     runner = ActionRunner(hub, driver, hub.presence, watcher, notify, pc_name, hub.strings,
                           idle_seconds=int(cfg.get('idle_seconds', 60)), verify_seconds=verify_seconds)
     hub.capabilities = ['read', 'send', 'permission', 'new', 'open', 'question', 'model', 'effort', 'mode', 'stop',
-                        'photo']
+                        'photo', 'launch']
     hub.alerts = dict(hub.alerts, **(cfg.get('alerts') or {}))
     threading.Thread(target=watcher.run_forever, daemon=True).start()
     threading.Thread(target=runner.run_forever, daemon=True).start()
@@ -2999,6 +3075,7 @@ def main(argv=None):
     parser.add_argument('--fake', type=Path, default=None, help='serve hand-written fixtures (simulator tests)')
     parser.add_argument('--fake-port', type=int, default=None, help='fake mode: listen on this port instead')
     parser.add_argument('--fake-idle', type=int, default=None, help='fake mode: report this many idle seconds')
+    parser.add_argument('--fake-closed', default='', help='fake mode: these apps (comma-separated) start with no window')
     args = parser.parse_args(argv)
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
@@ -3009,6 +3086,9 @@ def main(argv=None):
         presence = dict(cfg['presence'])
         if args.fake_idle is not None:
             presence['idleSeconds'] = args.fake_idle
+        presence['windows'] = dict(presence.get('windows') or {})
+        for app in filter(None, args.fake_closed.split(',')):
+            presence['windows'][app] = False
         if args.fake_port:
             cfg['port'] = args.fake_port
         networks = [ipaddress.ip_network(item) for item in cfg['allowed_networks']]
