@@ -243,14 +243,15 @@
       }
     },
     "cumulative": {
-      "description": "Running estimate since `since`; each machine in its own coin, and in TWD at the price when it was earned.",
+      "description": "Running estimate since `since`; each machine in its own coin, and in TWD at the price when it was earned. totalBtc is the same total in BTC at the price when it was earned, the unit the pool account keeps; null when it cannot be given.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["since", "observedAt", "totalTwd", "machines"],
+      "required": ["since", "observedAt", "totalTwd", "totalBtc", "machines"],
       "properties": {
         "since": { "$ref": "#/$defs/timestamp" },
         "observedAt": { "$ref": "#/$defs/timestampOrNull" },
         "totalTwd": { "type": "number", "minimum": 0 },
+        "totalBtc": { "type": ["number", "null"], "minimum": 0 },
         "machines": {
           "type": "array",
           "maxItems": 8,

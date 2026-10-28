@@ -437,10 +437,12 @@ public struct CumulativeReport: Codable, Hashable, Sendable {
     public let since: Timestamp
     public let observedAt: Timestamp?
     public let totalTwd: Double
+    /// The same total in BTC at each moment's price, the unit the pool account keeps.
+    public let totalBtc: Double?
     public let machines: [CumulativeMachine]
 
     enum CodingKeys: String, CodingKey, CaseIterable {
-        case since, observedAt, totalTwd, machines
+        case since, observedAt, totalTwd, totalBtc, machines
     }
 
     public init(from decoder: Decoder) throws {
@@ -452,6 +454,7 @@ public struct CumulativeReport: Codable, Hashable, Sendable {
         guard totalTwd.isFinite, totalTwd >= 0 else {
             throw DecodingError.dataCorruptedError(forKey: .totalTwd, in: c, debugDescription: "totalTwd must be >= 0")
         }
+        totalBtc = try c.decodeNumber(forKey: .totalBtc, minimum: 0)
         machines = try c.decode([CumulativeMachine].self, forKey: .machines)
         guard machines.count <= 8 else {
             throw DecodingError.dataCorruptedError(forKey: .machines, in: c, debugDescription: "at most 8 machines")
@@ -463,6 +466,7 @@ public struct CumulativeReport: Codable, Hashable, Sendable {
         try c.encode(since, forKey: .since)
         try c.encode(observedAt, forKey: .observedAt)
         try c.encode(totalTwd, forKey: .totalTwd)
+        try c.encode(totalBtc, forKey: .totalBtc)
         try c.encode(machines, forKey: .machines)
     }
 

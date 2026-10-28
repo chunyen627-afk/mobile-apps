@@ -124,10 +124,11 @@ UI 測試與截圖找到並修正的畫面問題：
 
 - 使用者要求：顯示從開挖以來累計的估算收益（新台幣），標明是估算，月底再拿礦池網頁的帳號數字對帳。礦池把每種幣自動換成 BTC 存在帳號裡，帳號餘額沒有公開 API 可讀，所以只能估算。
 - 電腦端：每 5 分鐘把每台**正在挖**的機器當下的估算收益（跟每天估算同一個數字）乘上經過的時間累加，各自用自己的幣，台幣用當時的幣價與匯率換算；存成檔案，重開服務不會歸零。服務沒在跑的時間不補算。
-- 資料格式：feed 加選填 `cumulative`（feature `cumulative`）：`since`、`observedAt`、`totalTwd`，以及每台的 `machineId`、`coin`、`amount`、`twd`。舊版 App 不會要這個 feature，收到的資料不變。
-- App：清單「今日估算」區塊加「累計收益（估算）」與開始時間，註明不是實際入帳；詳情頁加該機器的累計幣數與台幣。
-- 示範資料：三天前開始累計，共 NT$349（A 4.8 PRL ≈ NT$289、B 0.025 QTC ≈ NT$60）。
-- 測試：單元測試多兩項（累計的解碼、格式檢查），UI 測試多一項（test21：清單的累計、B 的詳情頁）；契約檢查多 3 個正向、7 個反向案例。
+- 資料格式：feed 加選填 `cumulative`（feature `cumulative`）：`since`、`observedAt`、`totalTwd`、`totalBtc`（每筆依當時幣價換成 BTC 的合計，礦池帳號就是用 BTC 記帳，月底直接比 BTC），以及每台的 `machineId`、`coin`、`amount`、`twd`。舊版 App 不會要這個 feature，收到的資料不變。
+- App：清單「今日估算」區塊加「累計收益（估算）」、約當 BTC 與開始時間，註明不是實際入帳；詳情頁加該機器的累計幣數與台幣。
+- 示範資料：三天前開始累計，共 NT$349、約當 0.000134 BTC（A 4.8 PRL ≈ NT$289、B 0.025 QTC ≈ NT$60）。
+- 測試：單元測試多兩項（累計的解碼、格式檢查），UI 測試多一項（test21：清單的累計、B 的詳情頁）；契約檢查多 4 個正向、9 個反向案例。
+- [run 40620740699](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40620740699)（`e8a4637`）：App 編譯失敗，`EarningsViews.swift` 把不是 Optional 的 `Timestamp.date` 寫成 `guard let`；下一個 commit 修正。
 
 ## 0.6.2（build 10，已併入工具箱 0.4.1 build 7 發布）：挖另一種幣的機器也算收益
 

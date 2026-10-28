@@ -63,7 +63,10 @@ struct EarningsSummarySection: View {
             if let cumulative = model.cumulative {
                 VStack(alignment: .leading, spacing: 4) {
                     LabeledContent("累計收益（估算）", value: EarningsText.twd(cumulative.totalTwd)).font(.headline)
-                    Text("自 \(EarningsText.since(cumulative.since)) 起，不是實際入帳；月底可和礦池帳號換成的 BTC 對帳。")
+                    if let btc = cumulative.totalBtc {
+                        LabeledContent("約當 BTC", value: EarningsText.btc(btc)).font(.caption)
+                    }
+                    Text("自 \(EarningsText.since(cumulative.since)) 起，不是實際入帳；BTC 依每筆當時的幣價換算，月底可和礦池帳號的 BTC 對帳。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

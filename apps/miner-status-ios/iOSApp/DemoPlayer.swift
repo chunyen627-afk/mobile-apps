@@ -233,7 +233,7 @@ struct DemoPlayer {
             // Fictional running total, started three days before this step.
             "cumulative": [
                 "since": demoTimestamp(time.addingTimeInterval(-3 * 86400)), "observedAt": demoTimestamp(time),
-                "totalTwd": 349.0,
+                "totalTwd": 349.0, "totalBtc": 0.000134,
                 "machines": [
                     ["machineId": "demo-rig-a", "coin": "PRL", "amount": 4.8, "twd": 289.0],
                     ["machineId": "demo-rig-b", "coin": "QTC", "amount": 0.025, "twd": 60.0],

@@ -138,6 +138,7 @@ final class MinerStatusUITests: XCTestCase {
         XCTAssertTrue(reveal(total), "running total missing")
         XCTAssertTrue(waitFor(total, labelContains: "NT$349", timeout: 3), "running total says \(total.label)")
         XCTAssertTrue(total.label.contains("不是實際入帳"), "running total not marked as an estimate: \(total.label)")
+        XCTAssertTrue(total.label.contains("0.00013400 BTC"), "running total has no BTC: \(total.label)")
         snapshot("21-running-total")
         app.swipeDown()
         app.swipeDown()
