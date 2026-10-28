@@ -124,14 +124,23 @@ public enum DeskText {
         return "上下文 \(percent)%（\(tokens(context.used)) / \(tokens(window))）"
     }
 
-    /// The chat's subtitle: "Opus 5.5・高・上下文 18%"; nil when the helper sent nothing.
+    /// The chat's subtitle: "Opus 5.5・高・上下文 18%", or the helper's note when it knows nothing
+    /// yet ("匯入的舊對話，回覆一次後才有資料"); nil when the helper sent nothing.
     public static func metaLine(_ meta: ConversationMeta?) -> String? {
         guard let meta else { return nil }
         var parts = [meta.model, meta.effort].compactMap { $0 }
         if let context = meta.context {
             parts.append(context.percent.map { "上下文 \($0)%" } ?? "上下文 \(tokens(context.used))")
+        } else if let note = meta.note {
+            parts.append(note)
         }
         return parts.isEmpty ? nil : parts.joined(separator: "・")
+    }
+
+    /// "代我核准", or "代我核准（下一則回覆起生效）" for a Codex pick no reply has recorded yet.
+    public static func permission(_ meta: ConversationMeta?) -> String? {
+        guard let permission = meta?.permission else { return nil }
+        return meta?.permissionPending == true ? "\(permission)（下一則回覆起生效）" : permission
     }
 
     /// "每週 46%・週日上午11:00 重設" or "每週 5%・11/2 18:49 重設".

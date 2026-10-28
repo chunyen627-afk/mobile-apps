@@ -69,9 +69,13 @@ struct DeskModelSheet: View {
                     if let effort = meta?.effort {
                         LabeledContent("推理強度", value: effort)
                     }
-                    if let permission = meta?.permission {
+                    if let permission = DeskText.permission(meta) {
                         LabeledContent("權限模式", value: permission)
                             .accessibilityIdentifier("meta-permission")
+                    }
+                    if let note = meta?.note {
+                        Text(note).font(.footnote).foregroundStyle(.secondary)
+                            .accessibilityIdentifier("meta-note")
                     }
                     if let context = meta?.context {
                         VStack(alignment: .leading, spacing: 4) {

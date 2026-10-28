@@ -757,10 +757,20 @@ class MetaTests(FakeEnvironment):
     def test_codex_meta_and_limits_from_the_rollout(self):
         self.assertEqual(self.meta('codex', X), {
             'model': 'GPT-6.1 Sol', 'modelId': 'gpt-6.1-sol', 'effort': '高',
-            'context': {'used': 64600, 'window': 258400, 'percent': 25}, 'permission': '代我核准'})
+            'context': {'used': 64600, 'window': 258400, 'percent': 25}, 'permission': '代我核准', 'note': None})
         usage = self.sources['codex'].usage()
         self.assertEqual(usage['windows'], [{'label': '每週', 'percent': 5, 'resetsAt': h.iso(1793616560), 'resetsText': None}])
         self.assertEqual(usage['sampledAt'], '2026-10-26T10:01:05Z')
+
+    def test_an_imported_codex_thread_says_it_has_no_data_yet(self):
+        # Y's rollout has no turn_context and the database has no model: imported from another account.
+        self.assertEqual(self.meta('codex', Y), {
+            'model': None, 'modelId': None, 'effort': None, 'context': None, 'permission': None,
+            'note': '匯入的舊對話，回覆一次後才有資料'})
+        # A rollout tail that holds no turn_context still gets the model from the database.
+        parser = h.CodexParser()
+        self.assertEqual(self.sources['codex'].meta(X, parser)['model'], 'GPT-6.1 Sol')
+        self.assertIsNone(self.sources['codex'].meta(X, parser)['note'])
 
     def test_claude_limits_are_the_signed_in_organisations_newest(self):
         usage = self.sources['claude'].usage()
@@ -857,6 +867,64 @@ class MoreControlsTests(FakeEnvironment):
         run_all(runner)
         status = runner.status(body['id'])
         self.assertEqual((status['verified'], status['message']), (False, '已選「要求核准」（下一則回覆起生效）'))
+
+    def test_a_codex_mode_pick_shows_until_the_next_turn_records_one(self):
+        hub, _, watcher, runner = drive(self.fake)
+        self.assertIsNone(hub.events('codex', Y, 0, '', 0)['meta']['permission'])
+        body = runner.submit('mode', 'codex', Y, {'mode': '代我核准'})[1]
+        run_all(runner)
+        watcher.tick()
+        meta = hub.events('codex', Y, 0, '', 0)['meta']
+        self.assertEqual((meta['permission'], meta.get('permissionPending')), ('代我核准', True))
+        self.assertEqual(meta['note'], '匯入的舊對話，回覆一次後才有資料')
+        # The next turn writes its own mode; from then on the rollout answers, not the pick.
+        later = h.iso(time.time() + 5)
+        with Path(hub.transcript('codex', Y).path).open('a', encoding='utf-8') as handle:
+            handle.write(json.dumps({'timestamp': later, 'type': 'turn_context',
+                                     'payload': {'model': 'gpt-6.1-sol', 'approvals_reviewer': 'user'}}) + '\n')
+        meta = hub.events('codex', Y, 0, '', 0)['meta']
+        self.assertEqual((meta['permission'], meta.get('permissionPending'), meta['model']), ('要求核准', None, 'GPT-6.1 Sol'))
+        self.assertNotIn(('codex', Y), hub.chosen_modes)
+
+    def test_an_imported_codex_page_is_recognised_by_its_import_title(self):
+        hub, driver, _, runner = drive(self.fake)
+        self.assertEqual(hub.info('codex', Y)['aliases'], ['iPhone App 做法評估'])
+        body = runner.submit('mode', 'codex', Y, {'mode': '代我核准'})[1]
+        run_all(runner)
+        self.assertEqual(runner.status(body['id'])['state'], 'done', runner.status(body['id']))
+        self.assertEqual(driver.docs('codex'), ['iPhone App 做法評估'])
+        self.assertEqual(hub.info('codex', Y)['doc'], 'iPhone App 做法評估')  # learned: no reopening next time
+        opens = len([c for c in driver.calls if c[0] == 'open'])
+        body = runner.submit('send', 'codex', Y, {'text': '舊對話也收得到'})[1]
+        run_all(runner)
+        self.assertEqual(runner.status(body['id'])['state'], 'done', runner.status(body['id']))
+        self.assertEqual(len([c for c in driver.calls if c[0] == 'open']), opens + 1)  # only to bring it up front
+
+    def test_a_codex_page_its_link_opened_under_another_name_counts_unless_taken(self):
+        hub, driver, _, runner = drive(self.fake)
+        driver.page_titles[Y] = '評估 做法'  # neither its database nor its import title (like 測試 回覆)
+        body = runner.submit('mode', 'codex', Y, {'mode': '代我核准'})[1]
+        run_all(runner)
+        self.assertEqual(runner.status(body['id'])['state'], 'done', runner.status(body['id']))
+        self.assertEqual(hub.info('codex', Y)['doc'], '評估 做法')
+        # Already on screen under that unknown name (opened by hand): step away and back to see the link work.
+        hub.page_names.clear()
+        hub.info_cache.clear()
+        before = len(driver.calls)
+        body = runner.submit('mode', 'codex', Y, {'mode': '要求核准'})[1]
+        run_all(runner)
+        self.assertEqual(runner.status(body['id'])['state'], 'done', runner.status(body['id']))
+        self.assertEqual([c[2] for c in driver.calls[before:] if c[0] == 'open'], [Y, X, Y])
+        self.assertEqual(hub.info('codex', Y)['doc'], '評估 做法')
+        # A page title another conversation goes by is never taken for this one.
+        hub.page_names.clear()
+        hub.info_cache.clear()
+        driver.open_doc['codex'] = '別的頁面'
+        driver.page_titles[Y] = hub.info('codex', X)['doc']
+        body = runner.submit('mode', 'codex', Y, {'mode': '要求核准'})[1]
+        run_all(runner)
+        self.assertIn(('invoke', 'codex', '評估 iPhone App 的做法'), driver.calls)  # fell back to the sidebar
+        self.assertNotIn(('codex', Y), hub.page_names)
 
     def test_stop_presses_the_button_only_while_a_turn_runs(self):
         _, driver, watcher, runner = drive(self.fake)

@@ -315,10 +315,26 @@ final class MetaAndUsageTests: XCTestCase {
         XCTAssertEqual(DeskText.context(unknown.context!), "上下文已用 9,800 tokens")
         XCTAssertNil(DeskText.metaLine(ConversationMeta(model: nil, effort: nil, context: nil)))
         XCTAssertNil(DeskText.metaLine(nil))
+        XCTAssertNil(DeskText.permission(full))
         let weekly = PlanUsage.Window(label: "每週", percent: 46, resetsAt: nil, resetsText: "週日上午11:00 重設")
         XCTAssertEqual(DeskText.usageWindow(weekly), "每週 46%・週日上午11:00 重設")
         let codex = PlanUsage.Window(label: "每週", percent: 5, resetsAt: "2026-11-02T10:49:20Z", resetsText: nil)
         XCTAssertEqual(DeskText.usageWindow(codex, timeZone: TimeZone(identifier: "Asia/Taipei")!), "每週 5%・11/2 18:49 重設")
+    }
+
+    func testImportedCodexThreadShowsTheNoteAndAPendingModePick() throws {
+        let page = try HelperClient.decode(EventPage.self, status: 200, data: data("""
+        {"ok":true,"epoch":"e","reset":true,"events":[],"earlier":false,"cursor":0,"status":"idle","prompt":null,
+         "meta":{"model":null,"modelId":null,"effort":null,"context":null,"permission":"代我核准",
+                 "permissionPending":true,"note":"匯入的舊對話，回覆一次後才有資料"}}
+        """))
+        XCTAssertEqual(DeskText.metaLine(page.meta), "匯入的舊對話，回覆一次後才有資料")
+        XCTAssertEqual(DeskText.permission(page.meta), "代我核准（下一則回覆起生效）")
+        // Once the model is known (the Codex button on screen) the note follows it until a reply.
+        let seen = ConversationMeta(model: "GPT-6.1 Sol", effort: nil, context: nil, permission: "要求核准",
+                                    note: "匯入的舊對話，回覆一次後才有資料")
+        XCTAssertEqual(DeskText.metaLine(seen), "GPT-6.1 Sol・匯入的舊對話，回覆一次後才有資料")
+        XCTAssertEqual(DeskText.permission(seen), "要求核准")
     }
 
     func testLogKeepsMetaWhenAPageHasNone() {

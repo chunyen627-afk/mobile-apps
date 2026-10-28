@@ -36,7 +36,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.4'
+VERSION = '0.5.5'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -157,6 +157,7 @@ def ui_model(name, strip):
 
 # Codex's approvals_reviewer in turn_context -> the permission menu's wording.
 CODEX_MODES = {'user': '要求核准', 'auto_review': '代我核准'}
+IMPORTED_NOTE = '匯入的舊對話，回覆一次後才有資料'
 
 
 def open_link(pc_name, app=None, session_id=None, title=None, elevate=False):
@@ -352,6 +353,7 @@ class CodexParser:
         self.calls = {}
         self.status = 'idle'
         self.model = self.effort = self.mode = None
+        self.turn_ts = None  # when the last turn_context (model, effort, mode) was written
         self.context = self.window = None
         self.rate_limits = self.rate_ts = None
 
@@ -364,6 +366,7 @@ class CodexParser:
             self.model = payload.get('model') or self.model
             self.effort = payload.get('effort') or self.effort
             self.mode = CODEX_MODES.get(payload.get('approvals_reviewer'), self.mode)
+            self.turn_ts = ts or self.turn_ts
             return []
         if kind == 'event_msg':
             if ptype == 'token_count':
@@ -736,9 +739,59 @@ class CodexSource:
     def __init__(self, home):
         self.home = Path(home)
         self.warning = None
+        self.recorded_cache = {}
+        self.imports = (None, {})
 
     def available(self):
         return (self.home / 'sessions').is_dir()
+
+    def import_titles(self):
+        """Thread id -> the title Codex gave a conversation it imported from another agent
+        (Claude Code sessions, listed in external_agent_session_imports.json). Its sidebar and
+        page may show that title rather than the database's (read 10/28)."""
+        path = self.home / 'external_agent_session_imports.json'
+        try:
+            stamp = path.stat().st_mtime
+        except OSError:
+            return {}
+        if self.imports[0] == stamp:
+            return self.imports[1]
+        titles = {}
+        try:
+            data = json.loads(path.read_text(encoding='utf-8'))
+            for record in (data.get('records') if isinstance(data, dict) else None) or []:
+                if isinstance(record, dict) and isinstance(record.get('imported_thread_id'), str) \
+                        and isinstance(record.get('title'), str) and record['title'].strip():
+                    titles[record['imported_thread_id']] = record['title'].strip()
+        except (OSError, ValueError):
+            titles = {}
+        self.imports = (stamp, titles)
+        return titles
+
+    def recorded(self, thread_id):
+        """(model, effort) the Codex database holds for a thread, cached for a few seconds; None
+        when it cannot tell. A thread Codex imported from Claude Code has (None, None) there, and
+        no turn_context in its rollout, until it replies in Codex (read 10/28)."""
+        now = time.monotonic()
+        cached = self.recorded_cache.get(thread_id)
+        if cached and now - cached[0] < 10:
+            return cached[1]
+        value = None
+        try:
+            connection = self.database()
+            if connection is not None:
+                try:
+                    columns = {row[1] for row in connection.execute('PRAGMA table_info(threads)')}
+                    if {'model', 'reasoning_effort'} <= columns:
+                        row = connection.execute('SELECT model, reasoning_effort FROM threads WHERE id = ?',
+                                                 (thread_id,)).fetchone()
+                        value = (row[0] or None, row[1] or None) if row else None
+                finally:
+                    connection.close()
+        except sqlite3.Error:
+            pass
+        self.recorded_cache[thread_id] = (now, value)
+        return value
 
     def database(self):
         path = self.home / 'state_5.sqlite'
@@ -799,20 +852,34 @@ class CodexSource:
         return Path(found[0]) if found else None
 
     def info(self, thread_id):
-        """Title (the sidebar name, which is also the page title) and deep link of one thread."""
+        """Title (the sidebar name, which is also the page title) and deep link of one thread;
+        `aliases` are other names its page may carry (an imported thread's import title)."""
         if not CODEX_ID.match(thread_id):
             return None
         for row in self.list_sessions(100):
             if row['id'] == thread_id:
+                imported = self.import_titles().get(thread_id)
                 return {'id': thread_id, 'title': row['title'], 'link': f'codex://threads/{thread_id}',
-                        'doc': row['title']}
+                        'doc': row['title'], 'aliases': [imported] if imported and imported != row['title'] else []}
         return None
 
-    @staticmethod
-    def meta(thread_id, parser):
-        return {'model': model_label(parser.model), 'modelId': parser.model,
-                'effort': EFFORT_LABELS.get(parser.effort, parser.effort),
-                'context': context_info(parser.context, parser.window), 'permission': parser.mode}
+    def names(self, limit=100):
+        """thread id -> every name a listed thread's page may carry."""
+        imports = self.import_titles()
+        return {row['id']: {row['title'], imports.get(row['id'])} - {None} for row in self.list_sessions(limit)}
+
+    def meta(self, thread_id, parser):
+        """From the rollout; the database fills in a model the read part of it does not name.
+        With neither, the thread has had no turn in Codex yet: the phone says so."""
+        model, effort, note = parser.model, parser.effort, None
+        if model is None:
+            recorded = self.recorded(thread_id)
+            if recorded is not None:
+                model, effort = recorded[0], effort or recorded[1]
+                if model is None:
+                    note = IMPORTED_NOTE
+        return {'model': model_label(model), 'modelId': model, 'effort': EFFORT_LABELS.get(effort, effort),
+                'context': context_info(parser.context, parser.window), 'permission': parser.mode, 'note': note}
 
     def usage(self):
         """Plan limits from the newest `token_count` event that carries them, in the most recent
@@ -1099,6 +1166,8 @@ class Hub:
         self.usage_cache = (0.0, None)
         self.screen = None                # () -> JPEG bytes of the PC's screen, when it can be read
         self.alerts = {'usage_percent': 80, 'context_percent': 80}
+        self.chosen_modes = {}            # (app, id) -> (mode, when): a Codex pick its rollout shows only next turn
+        self.page_names = {}              # (app, id) -> the page title last seen for it, when its files say otherwise
         self.lock = threading.Lock()
 
     def state(self):
@@ -1154,9 +1223,16 @@ class Hub:
         and Codex records a switch only with the next reply."""
         with transcript.lock:
             meta = self.sources[app].meta(session_id, transcript.parser)
+            turn_ts = getattr(transcript.parser, 'turn_ts', None)
+        chosen = self.chosen_modes.get((app, session_id))
+        if chosen and (turn_ts or '') > chosen[1]:
+            self.chosen_modes.pop((app, session_id), None)  # a turn since the pick: the rollout knows
+        elif chosen:
+            meta['permission'], meta['permissionPending'] = chosen[0], True
         seen = self.ui(app)
         info = self.info(app, session_id)
-        if info and seen.get('docs') == [info['doc']]:
+        docs = seen.get('docs') or []
+        if info and len(docs) == 1 and docs[0] in [info['doc']] + list(info.get('aliases') or []):
             label, effort = ui_model(seen.get('model'), (self.strings.get(app) or {}).get('model_strip'))
             if label:
                 meta['model'], meta['effort'] = label, effort or meta['effort']
@@ -1239,8 +1315,20 @@ class Hub:
         if cached and now - cached[0] < 10:
             return cached[1]
         value = self.sources[app].info(session_id)
+        seen = self.page_names.get(key)
+        if value and seen and seen != value['doc']:
+            value = dict(value, doc=seen, aliases=[value['doc']] + [a for a in value.get('aliases') or [] if a != seen])
         self.info_cache[key] = (now, value)
         return value
+
+    def learn_page_name(self, app, session_id, info, doc):
+        """The page opened from this conversation's own link is titled `doc`: use that name."""
+        if doc != info['doc']:
+            logging.info('%s page name differs from its files', app)
+            info['aliases'] = [info['doc']] + [a for a in info.get('aliases') or [] if a != doc]
+            info['doc'] = doc  # the running action holds this dict
+            self.page_names[(app, session_id)] = doc
+            self.info_cache.pop((app, session_id), None)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1816,26 +1904,79 @@ class ActionRunner:
         if denied:
             raise ActionError(denied[1]['error'], denied[1]['message'])
 
-    def wait_doc(self, app, doc):
-        """True once exactly one page has this title. A missing window counts as not yet: the
-        link may still be bringing the app up from the tray."""
+    @staticmethod
+    def page_of(docs, info):
+        """The one open page that carries one of this conversation's names, else None."""
+        names = [info['doc']] + list(info.get('aliases') or [])
+        hits = [doc for doc in docs or [] if doc in names]
+        return hits[0] if len(hits) == 1 else None
+
+    def wait_doc(self, app, info):
+        """The page title once exactly one page has one of the conversation's names, else None.
+        A missing window counts as not yet: the link may still be bringing the app up from the tray."""
         deadline = self.clock() + self.doc_wait
         while True:
             docs = self.driver.docs(app)
-            if docs is not None and docs.count(doc) == 1:
-                return True
+            page = self.page_of(docs, info)
+            if page is not None:
+                return page
             if self.clock() >= deadline:
                 if docs is None:
                     raise ActionError('app-not-running', '')
-                return False
+                return None
             time.sleep(0.25)
+
+    def unclaimed(self, app, session_id, doc):
+        """True when no other listed conversation goes by this page title."""
+        names = self.hub.sources[app].names() if hasattr(self.hub.sources[app], 'names') else {}
+        return not any(doc in found for other, found in names.items() if other != session_id)
+
+    def adopt_linked_page(self, action, before):
+        """Codex may title an imported thread's page with neither its database title nor its
+        import title (live 10/28: "測試:A1 回覆" showed as "測試 回覆"). The page its own link
+        has just switched to is it, unless another conversation goes by that title. When that
+        page was already on screen the switch cannot be seen, so step to another conversation
+        and follow the link again."""
+        app, info, session_id = action['app'], action['info'], action['sessionId']
+        now = self.driver.docs(app)
+        if not now or len(now) != 1 or not self.unclaimed(app, session_id, now[0]):
+            return False
+        if now == before:
+            rows = self.hub.sources[app].list_sessions(10)
+            other = next((self.hub.info(app, row['id']) for row in rows if row['id'] != session_id), None)
+            if other is None or self.wait_doc_after_open(app, other) is None:
+                return False
+            before = self.driver.docs(app)
+            self.driver.open(app, info)
+            now = self.wait_change(app, before)
+            if not now or len(now) != 1 or not self.unclaimed(app, session_id, now[0]):
+                return False
+        self.hub.learn_page_name(app, session_id, info, self.page_of(now, info) or now[0])
+        return True
+
+    def wait_doc_after_open(self, app, info):
+        self.driver.open(app, info)
+        return self.wait_doc(app, info)
+
+    def wait_change(self, app, before):
+        """The open pages once they differ from `before` and hold still for a moment, else None."""
+        deadline = self.clock() + self.doc_wait
+        while self.clock() < deadline:
+            docs = self.driver.docs(app)
+            if docs and docs != before:
+                time.sleep(min(1.0, self.settle_seconds))  # the title may still change once
+                return self.driver.docs(app)
+            time.sleep(0.25)
+        return None
 
     def open_conversation(self, action):
         """Opens the conversation by its own link. The app may be closed to the tray (Codex was,
         live 10/27): the link brings its window back, so no window is not a reason to stop yet."""
         app, info = action['app'], action['info']
         docs = self.driver.docs(app)
-        if docs is not None and docs.count(info['doc']) == 1:
+        page = self.page_of(docs, info)
+        if page is not None:
+            self.hub.learn_page_name(app, action['sessionId'], info, page)
             if action.get('needsFront', True):
                 # Windows lets a link activation take the foreground but refuses this helper's own
                 # SetForegroundWindow while another app is in front (live 10/27), so the open
@@ -1848,22 +1989,31 @@ class ActionRunner:
         self.recheck(action)
         self.presence.begin_own()
         self.driver.open(app, info)
-        if self.wait_doc(app, info['doc']):
+        page = self.wait_doc(app, info)
+        if page is not None:
+            self.hub.learn_page_name(app, action['sessionId'], info, page)
             # The title changes before the new page is ready to type into (found live: a
             # message sent right after the switch was lost), so let it settle.
+            time.sleep(self.settle_seconds)
+            return
+        if app == 'codex' and self.adopt_linked_page(action, docs):
             time.sleep(self.settle_seconds)
             return
         # Fallback: the sidebar entry with this title, only when the title is unique. Codex names
         # the entry by the title; Claude adds a note ("<title> 由 Claude 從「…」啟動"). Claude
         # once stopped following its links altogether (live 10/27) while its sidebar still worked.
         titles = [row['title'] for row in self.hub.sources[app].list_sessions(100)]
-        if titles.count(info['title']) != 1:
+        if titles.count(info['title']) > 1:
             raise ActionError('duplicate-title', '')
+        if titles.count(info['title']) == 0:
+            raise ActionError('title-mismatch', '')
         if app == 'codex':
             self.driver.invoke(app, info['title'])
         else:
             self.driver.invoke_title(app, info['title'])
-        if self.wait_doc(app, info['doc']):
+        page = self.wait_doc(app, info)
+        if page is not None:
+            self.hub.learn_page_name(app, action['sessionId'], info, page)
             time.sleep(self.settle_seconds)
             return
         raise ActionError('title-mismatch', '')
@@ -2028,6 +2178,8 @@ class ActionRunner:
         how = self.driver.set_mode(app, info['doc'], label)
         self.presence.end_own()
         logging.info('mode %s %s by %s', app, label, how)
+        if app == 'codex':
+            self.hub.chosen_modes[(app, action['sessionId'])] = (label, iso(time.time()))
         if how == 'already':
             self.update(action, state='done', verified=True, message=f'本來就是 {label}')
         elif app == 'codex':
@@ -2073,7 +2225,7 @@ class ActionRunner:
             if info is None:
                 raise ActionError('app-not-running', '')
             self.driver.open(app, info)
-            self.wait_doc(app, info['doc'])
+            self.wait_doc(app, info)
             time.sleep(self.settle_seconds)
         self.driver.new_send(app, button, text)
         self.presence.end_own()
@@ -2500,17 +2652,17 @@ class FakeSetup:
         connection = sqlite3.connect(home / 'state_5.sqlite')
         connection.execute('CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT, title TEXT, name TEXT, '
                            'recency_at_ms INTEGER, updated_at_ms INTEGER, updated_at INTEGER, archived INTEGER, '
-                           'cwd TEXT, approval_mode TEXT, source TEXT)')
+                           'cwd TEXT, approval_mode TEXT, source TEXT, model TEXT, reasoning_effort TEXT)')
         for item in threads:
             ms = self.now_ms - int(item.get('minutesAgo', 0) * 60000)
             rollout = home / 'sessions' / item['rollout'] if item.get('rollout') else None
             if rollout is not None and item.get('minutesAgo', 0) > 2:
                 old = ms / 1000
                 os.utime(rollout, (old, old))
-            connection.execute('INSERT INTO threads VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+            connection.execute('INSERT INTO threads VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
                                (item['id'], str(rollout) if rollout else None, item.get('title'), item.get('name'),
                                 ms, ms, ms // 1000, item.get('archived', 0), item.get('cwd'),
-                                item.get('approval'), item.get('source', 'vscode')))
+                                item.get('approval'), item.get('source', 'vscode'), item.get('model'), item.get('effort')))
         connection.commit()
         connection.close()
 
@@ -2546,9 +2698,9 @@ class FakeSetup:
             session_id = str(uuid.uuid4())
             path = pc / 'codex' / 'sessions' / '2026' / '10' / '26' / f'rollout-2026-10-26T12-00-00-{session_id}.jsonl'
             connection = sqlite3.connect(pc / 'codex' / 'state_5.sqlite')
-            connection.execute('INSERT INTO threads VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+            connection.execute('INSERT INTO threads VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
                                (session_id, str(path), title, title, now_ms, now_ms, now_ms // 1000, 0,
-                                'C:\\work\\demo-app', None, 'vscode'))
+                                'C:\\work\\demo-app', None, 'vscode', 'gpt-6.1-sol', 'high'))
             connection.commit()
             connection.close()
         path.write_text('', encoding='utf-8')
@@ -2588,6 +2740,7 @@ class FakeDriver:
         self.open_doc = {}
         self.codex_models = {}  # page title -> model picked on the phone
         self.running = set()    # page titles whose turn is running (a stop button shows)
+        self.page_titles = {}   # id -> the title its page shows, where tests make it differ
         for key in setup.prompts_data:
             app, session_id = key.split('/', 1)
             info = hub.info(app, session_id)
@@ -2601,8 +2754,8 @@ class FakeDriver:
 
     def session_for_doc(self, app, doc):
         for row in self.hub.sources[app].list_sessions(100):
-            info = self.hub.sources[app].info(row['id'])
-            if info and info['doc'] == doc:
+            info = self.hub.info(app, row['id'])
+            if info and doc in [info['doc']] + list(info.get('aliases') or []) + [self.page_titles.get(row['id'])]:
                 return row['id']
         return None
 
@@ -2699,7 +2852,10 @@ class FakeDriver:
 
     def open(self, app, info):
         self.calls.append(('open', app, info['id']))
-        self.open_doc[app] = info['doc']
+        shown = self.page_titles.get(info['id'])
+        if shown is None and app == 'codex':
+            shown = self.hub.sources[app].import_titles().get(info['id'])  # as Codex does (live 10/28)
+        self.open_doc[app] = shown or info['doc']
 
     def invoke_title(self, app, title):
         self.invoke(app, title)

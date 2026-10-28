@@ -96,13 +96,20 @@ public struct ConversationMeta: Decodable, Equatable, Sendable {
     public let context: Context?
     /// The permission mode in the desktop app's own words ("自動", "代我核准", ...).
     public let permission: String?
+    /// true while `permission` is a Codex pick from the phone that no reply has recorded yet (helper 0.5.5).
+    public let permissionPending: Bool?
+    /// Why nothing is known yet, e.g. a Codex thread imported from another account (helper 0.5.5).
+    public let note: String?
 
-    public init(model: String?, modelId: String? = nil, effort: String?, context: Context?, permission: String? = nil) {
+    public init(model: String?, modelId: String? = nil, effort: String?, context: Context?, permission: String? = nil,
+                permissionPending: Bool? = nil, note: String? = nil) {
         self.model = model
         self.modelId = modelId
         self.effort = effort
         self.context = context
         self.permission = permission
+        self.permissionPending = permissionPending
+        self.note = note
     }
 }
 

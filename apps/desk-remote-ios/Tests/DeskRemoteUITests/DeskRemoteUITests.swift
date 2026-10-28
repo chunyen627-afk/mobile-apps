@@ -465,6 +465,30 @@ final class DeskRemoteUITests: XCTestCase {
                       "sheet still shows the old mode: \(said(element("meta-permission")))")
     }
 
+    /// Codex thread Y has no turn on record (like one imported from another account): the bar
+    /// says so instead of vanishing, and a mode picked there shows until a reply records one.
+    func test27ImportedCodexThreadNoteAndModePick() throws {
+        try launchWithHelper()
+        openChat("codex", codexY)
+        let bar = element("chat-meta")
+        XCTAssertTrue(waitFor(bar, labelContains: "匯入的舊對話，回覆一次後才有資料", timeout: 10), "meta bar says \(said(bar))")
+        snapshot("27a-imported-note")
+        bar.tap()
+        XCTAssertTrue(element("meta-note").waitForExistence(timeout: 5), "the sheet does not explain the missing data")
+        let mode = element("mode-代我核准")
+        XCTAssertTrue(revealInSheet(mode), "Codex mode choices missing")
+        mode.tap()
+        XCTAssertTrue(revealInSheet(element("mode-busy")), "no mode progress shown")
+        XCTAssertTrue(waitFor(element("mode-busy"), labelContains: "下一則回覆起生效", timeout: 20),
+                      "mode pick did not finish: \(said(element("mode-busy")))")
+        element("meta-done").tap()
+        XCTAssertTrue(bar.waitForExistence(timeout: 10), "chat did not come back")
+        bar.tap()
+        XCTAssertTrue(waitFor(element("meta-permission"), labelContains: "代我核准（下一則回覆起生效）", timeout: 30),
+                      "sheet does not show the pick: \(said(element("meta-permission")))")
+        snapshot("27-codex-mode-picked")
+    }
+
     // MARK: - Helpers
 
     private struct Helper {

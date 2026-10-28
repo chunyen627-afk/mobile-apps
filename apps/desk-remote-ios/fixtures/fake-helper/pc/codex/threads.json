@@ -5,7 +5,9 @@
     "title": "測試：請回覆 A1",
     "minutesAgo": 5,
     "cwd": "C:\\work\\demo-app",
-    "rollout": "2026/10/26/rollout-2026-10-26T10-00-00-0a000000-0000-4000-8000-000000000001.jsonl"
+    "rollout": "2026/10/26/rollout-2026-10-26T10-00-00-0a000000-0000-4000-8000-000000000001.jsonl",
+    "model": "gpt-6.1-sol",
+    "effort": "high"
   },
   {
     "id": "0a000000-0000-4000-8000-000000000002",
@@ -21,7 +23,9 @@
     "title": "Guardian review",
     "minutesAgo": 4,
     "source": "{\"subagent\":{\"other\":\"guardian\"}}",
-    "rollout": null
+    "rollout": null,
+    "model": "codex-auto-review",
+    "effort": "low"
   },
   {
     "id": "0a000000-0000-4000-8000-000000000004",
