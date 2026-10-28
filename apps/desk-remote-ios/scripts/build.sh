@@ -8,7 +8,7 @@ cd "$(dirname "$0")/.."
 # which are skipped (and counted) on macOS.
 EXPECTED_HELPER_TESTS="${EXPECTED_HELPER_TESTS:-109}"
 EXPECTED_TESTS="${EXPECTED_TESTS:-36}"
-EXPECTED_UI_TESTS="${EXPECTED_UI_TESTS:-30}"
+EXPECTED_UI_TESTS="${EXPECTED_UI_TESTS:-31}"
 FIXTURES=fixtures/fake-helper
 HELPER_PORT=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["port"])' "$FIXTURES/fake-config.json")
 # A second fake helper that reports someone at the keyboard (5 s idle), for "send anyway".

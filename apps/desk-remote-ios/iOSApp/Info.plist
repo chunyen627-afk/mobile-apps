@@ -18,6 +18,8 @@
 </dict></array>
 <key>NSLocalNetworkUsageDescription</key><string>連到您在私人網路裡設定的電腦，讀取 Claude 與 Codex 桌面版的對話。</string>
 <key>NSCameraUsageDescription</key><string>拍照後直接傳到電腦上的對話，照片不會存到相簿。</string>
+<key>NSMicrophoneUsageDescription</key><string>按麥克風後把你說的話轉成文字，放進要傳給電腦的訊息。</string>
+<key>NSSpeechRecognitionUsageDescription</key><string>把你說的話轉成文字（繁體中文），放進要傳給電腦的訊息。</string>
 <key>NSFaceIDUsageDescription</key><string>核准電腦上需要系統管理員權限的指令前，確認是您本人。</string>
 <key>NSAppTransportSecurity</key><dict>
 <key>NSAllowsLocalNetworking</key><true/>

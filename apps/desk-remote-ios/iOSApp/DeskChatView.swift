@@ -693,6 +693,7 @@ struct DeskInputBar: View {
     @State private var picked: PhotosPickerItem?
     @State private var preparing = false
     @State private var shooting = false
+    @StateObject private var dictation = DeskDictation()
     /// Simulator UI tests have no camera: the camera button hands over a made-up shot instead.
     private static let uiTest = ProcessInfo.processInfo.environment["DESK_UI_TEST"] == "1"
     private var canShoot: Bool { Self.uiTest || UIImagePickerController.isSourceTypeAvailable(.camera) }
@@ -716,6 +717,9 @@ struct DeskInputBar: View {
                     Text("會先貼上照片，再送出文字").font(.caption2).foregroundStyle(.secondary)
                 }
             }
+            if let failure = dictation.failure {
+                Text(failure).font(.caption2).foregroundStyle(.red).accessibilityIdentifier("chat-mic-failure")
+            }
             row
         }
         .padding(.horizontal, 12)
@@ -731,12 +735,24 @@ struct DeskInputBar: View {
                 picked = nil
             }
         }
+        .onDisappear { dictation.cancel() }
         .fullScreenCover(isPresented: $shooting) {
             DeskCamera { image in
                 shooting = false
                 photo = image.flatMap { $0.jpegData(compressionQuality: 0.9) }.flatMap { DeskPhoto.prepare($0) }
             }
             .ignoresSafeArea()
+        }
+    }
+
+    /// The keyboard goes away: speaking needs no keyboard (asked on 10/29). Simulator UI tests
+    /// cannot speak: the microphone types a fixed phrase instead.
+    private func listen() {
+        focused.wrappedValue = false
+        if Self.uiTest {
+            text += "語音輸入測試"
+        } else {
+            dictation.toggle($text)
         }
     }
 
@@ -765,12 +781,21 @@ struct DeskInputBar: View {
                     .accessibilityLabel("拍照")
                     .accessibilityIdentifier("chat-camera")
             }
-            TextField("輸入訊息", text: $text, axis: .vertical)
+            Button(action: listen) {
+                Image(systemName: dictation.listening ? "mic.fill" : "mic").font(.title3)
+                    .foregroundStyle(dictation.listening ? Color.red : Color.accentColor)
+            }
+            .accessibilityLabel(dictation.listening ? "停止語音輸入" : "語音輸入")
+            .accessibilityIdentifier("chat-mic")
+            TextField(dictation.listening ? "請說話…" : "輸入訊息", text: $text, axis: .vertical)
                 .lineLimit(1 ... 6)
                 .textFieldStyle(.roundedBorder)
                 .focused(focused)
                 .accessibilityIdentifier("chat-input")
-            Button(action: send) {
+            Button {
+                dictation.cancel()
+                send()
+            } label: {
                 Image(systemName: "paperplane.fill").font(.title3)
             }
             .disabled(empty || preparing)

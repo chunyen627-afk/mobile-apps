@@ -538,6 +538,26 @@ final class DeskRemoteUITests: XCTestCase {
         snapshot("30-camera-sent")
     }
 
+    /// The microphone button (the simulator cannot speak: UI tests get a fixed phrase) puts the
+    /// words into the box without the keyboard, after what was already typed.
+    func test31MicrophoneTypesIntoTheBox() throws {
+        try launchWithHelper()
+        openChat("claude", claudeA)
+        XCTAssertTrue(text("整理好了，安裝段落改成三步").waitForExistence(timeout: 10), "chat did not load")
+        let mic = element("chat-mic")
+        XCTAssertTrue(mic.waitForExistence(timeout: 5), "microphone button missing")
+        let input = element("chat-input")
+        input.tap()
+        input.typeText("先打字，")
+        mic.tap()
+        XCTAssertTrue(waitFor(input, labelContains: "先打字，語音輸入測試", timeout: 5), "box says \(said(input))")
+        XCTAssertTrue(poll(timeout: 5) { !self.app.keyboards.firstMatch.exists }, "the keyboard should go away")
+        snapshot("31a-dictated")
+        app.buttons["chat-send"].tap()
+        XCTAssertTrue(text("（示範）收到：先打字，語音輸入測試").waitForExistence(timeout: 25), "the dictated text was not sent")
+        snapshot("31-dictated-sent")
+    }
+
     // MARK: - Helpers
 
     private struct Helper {
