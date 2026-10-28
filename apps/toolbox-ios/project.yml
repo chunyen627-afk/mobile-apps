@@ -19,8 +19,8 @@ settings:
     SWIFT_STRICT_CONCURRENCY: targeted
     TARGETED_DEVICE_FAMILY: "1"
     # Continues the album's numbering: the toolbox installs over the album (0.3.2 build 5).
-    MARKETING_VERSION: "0.4.1"
-    CURRENT_PROJECT_VERSION: "7"
+    MARKETING_VERSION: "0.4.2"
+    CURRENT_PROJECT_VERSION: "8"
 targets:
   # Named Lightbox, as the album app it replaces: the same bundle identifier, executable and
   # Swift module, so the album's unit tests (`@testable import Lightbox`) run here unchanged.
