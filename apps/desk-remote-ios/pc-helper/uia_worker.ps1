@@ -825,6 +825,46 @@ function Stop-Turn($w, $page, $s) {
   return 'invoke'
 }
 
+# The usage button expands to a card (Claude 4.x, read 10/28): the group named usage_card holds,
+# per limit, a Text label, a Text with its reset time and a ProgressBar named like the label whose
+# value is the percent. Expanding works through UI Automation alone, also on a window in the
+# tray. A card someone opened stays open; one opened here is closed again.
+function Read-UsageCard($w, $s) {
+  $btn = $null
+  foreach ($b in $w.FindAll($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Button)))) {
+    $n = $b.Current.Name
+    if ($n -and $n.StartsWith($s.usage_prefix)) { $btn = $b; break }
+  }
+  if (-not $btn) { Fail 'not-found' 'usage button not found' }
+  try { $ec = $btn.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern) } catch { Fail 'not-invokable' 'the usage button does not expand' }
+  $opened = $false
+  if ($ec.Current.ExpandCollapseState -ne [System.Windows.Automation.ExpandCollapseState]::Expanded) { $ec.Expand(); $opened = $true }
+  try {
+    $group = $null
+    for ($i = 0; $i -lt 12 -and -not $group; $i++) {
+      $group = Find-ByName $w $CT::Group $s.usage_card
+      if (-not $group) { Start-Sleep -Milliseconds 250 }
+    }
+    if (-not $group) { Fail 'not-found' 'the usage card did not show' }
+    $rows = @(); $texts = @()
+    foreach ($e in $group.FindAll($Tree::Descendants, [System.Windows.Automation.Condition]::TrueCondition)) {
+      $type = $e.Current.ControlType
+      if ($type -eq $CT::Text) { $texts += $e.Current.Name }
+      elseif ($type -eq $CT::ProgressBar) {
+        $value = $null
+        try { $value = $e.GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern).Current.Value } catch { }
+        $label = $e.Current.Name
+        $reset = @($texts | Where-Object { $_ -and $_ -ne $label }) | Select-Object -Last 1
+        $rows += ,@{ label = $label; percent = $value; reset = $reset }
+        $texts = @()
+      }
+    }
+    return @{ rows = $rows; how = $(if ($opened) { 'expanded' } else { 'open' }) }
+  } finally {
+    if ($opened) { try { $ec.Collapse() } catch { } }
+  }
+}
+
 function Run-Command($c) {
   $s = $c.strings
   switch ($c.cmd) {
@@ -881,6 +921,13 @@ function Run-Command($c) {
       $w = Need-Window $c.app
       $page = Need-Doc $w $c.doc
       return @{ ok = $true; how = (Stop-Turn $w $page $s) }
+    }
+    'usage_card' {
+      $w = Find-Window $c.app
+      if (-not $w) { $w = Find-HiddenWindow $c.app }
+      if (-not $w) { Fail 'app-not-running' 'window not found' }
+      $card = Read-UsageCard $w $s
+      return @{ ok = $true; rows = @($card.rows); how = $card.how }
     }
     'docs' {
       $w = Find-Window $c.app

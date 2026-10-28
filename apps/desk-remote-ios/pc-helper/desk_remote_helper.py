@@ -36,7 +36,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.9'
+VERSION = '0.5.10'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -149,15 +149,54 @@ def account_mark(app, raw):
     return hashlib.sha256(f'{app}:{raw}'.encode('utf-8')).hexdigest()[:16] if raw else None
 
 
-def merge_claude_usage(from_file, button, button_at, now):
-    """The history file's newest sample, corrected by the composer's usage button. Claude stopped
-    writing the file for days (live 10/28: the office's 3.6556 since 10/27 17:49, the home PC's
-    4.29 since its update), while the button showed the current week: so the weekly percent
-    comes from the button whenever it was read after the file's sample, and a 5-hour figure
-    older than five hours is left out (that window has reset since). `sampledAt` is the oldest
-    time behind what is shown."""
+# The usage card's row names (Claude 4.x) -> the phone's window labels.
+CARD_LABELS = {'工作階段限制': '工作階段', '每週 · 所有模型': '每週'}
+
+
+def relative_reset(text, read_at):
+    """'2 小時 56 分後重設' read at `read_at` -> the reset's epoch seconds; None for other wording
+    (the weekly row says '週日上午11:00 重設', which stays text)."""
+    match = re.fullmatch(r'(?:(\d+)\s*天\s*)?(?:(\d+)\s*小時\s*)?(?:(\d+)\s*分(?:鐘)?\s*)?後重設', (text or '').strip())
+    if not match or not any(match.groups()):
+        return None
+    days, hours, minutes = (int(part or 0) for part in match.groups())
+    return read_at + days * 86400 + hours * 3600 + minutes * 60
+
+
+def card_windows(rows, read_at, now):
+    """The usage card's rows as windows; a row whose reset has passed since it was read is left out."""
+    windows = []
+    for row in rows or []:
+        if not isinstance(row, dict) or not isinstance(row.get('percent'), (int, float)):
+            continue
+        reset = row.get('reset') or None
+        resets_at = relative_reset(reset, read_at)
+        if resets_at is not None and resets_at <= now:
+            continue
+        windows.append({'label': CARD_LABELS.get(row.get('label'), row.get('label') or '用量'), 'percent': round(row['percent']),
+                        'resetsAt': iso(resets_at) if resets_at is not None else None,
+                        'resetsText': None if resets_at is not None else reset})
+    return windows
+
+
+def merge_claude_usage(from_file, button, button_at, now, card=None, card_at=None):
+    """Claude's limits from the freshest of three readings. The usage card (the button expanded,
+    read every few minutes while nobody uses the PC) is the only one with the session limit; the
+    button shows the week; the history file stopped for days (live 10/28: the office's 3.6556
+    since 10/27 17:49, the home PC's 4.29 since its update). The weekly percent comes from the
+    button whenever it was read after the card or the file; a 5-hour figure from the file older
+    than five hours is left out (that window has reset since). `sampledAt` is the oldest time
+    behind what is shown."""
     file_at = datetime.fromisoformat(from_file['sampledAt'].replace('Z', '+00:00')).timestamp() if from_file else None
     weekly = button if button and button_at and button['label'].startswith('每週') else None
+    if card and card_at and (file_at is None or card_at > file_at):
+        windows = card_windows(card, card_at, now)
+        if windows:
+            times = [card_at]
+            if weekly and button_at > card_at:
+                week = {'label': '每週', 'percent': weekly['percent'], 'resetsAt': None, 'resetsText': weekly['resetsText']}
+                windows = [w for w in windows if w['label'] != '每週'] + [week]
+            return {'windows': windows, 'sampledAt': iso(min(times))}
     fresher = weekly is not None and (file_at is None or button_at > file_at)
     windows, times = [], []
     for window in (from_file or {}).get('windows') or []:
@@ -1280,7 +1319,8 @@ class Hub:
                 out[app] = None
         seen = self.ui('claude')
         button = ui_usage(seen.get('usage'), (self.strings.get('claude') or {}).get('usage_prefix'))
-        out['claude'] = merge_claude_usage(out.get('claude'), button, seen.get('usageAt'), time.time())
+        out['claude'] = merge_claude_usage(out.get('claude'), button, seen.get('usageAt'), time.time(),
+                                           seen.get('card'), seen.get('cardAt'))
         for app, source in self.sources.items():
             if out.get(app) and hasattr(source, 'account'):
                 try:
@@ -1533,6 +1573,11 @@ class WindowsDriver:
         except OSError as exc:
             raise ActionError('app-not-running', f'Codex could not be started: {exc}')
 
+    def usage_card(self, app):
+        """The rows of the usage card ({label, percent, reset}), read with the button expanded."""
+        rows = self.ask(app, cmd='usage_card').get('rows') or []
+        return [rows] if isinstance(rows, dict) else rows
+
     def invoke(self, app, name, doc=None):
         self.ask(app, cmd='invoke', name=name, doc=doc)
 
@@ -1720,8 +1765,9 @@ class UiWatcher:
         except (OSError, ValueError, UnicodeDecodeError):
             saved = {}
         for app, seen in (saved.items() if isinstance(saved, dict) else []):
-            if app in APPS and isinstance(seen, dict) and isinstance(seen.get('usage'), str):
-                self.state[app] = {'usage': seen['usage'], 'usageAt': seen.get('usageAt')}
+            if app in APPS and isinstance(seen, dict):
+                self.state[app] = {key: seen.get(key) for key in ('usage', 'usageAt', 'card', 'cardAt')}
+        self.card_every, self.card_idle, self.last_card_check = 300, 60, None
         self.turns = {}         # (app, id) -> last parser status
         self.questions = {}     # (app, id) -> option question waiting at the last look
         self.checked_once = False
@@ -1751,6 +1797,7 @@ class UiWatcher:
                 usage, usage_at = before.get('usage'), before.get('usageAt')
             self.state[app] = {'docs': docs, 'prompt': prompt, 'window': answer.get('window'),
                                'model': answer.get('model'), 'usage': usage, 'usageAt': usage_at,
+                               'card': before.get('card'), 'cardAt': before.get('cardAt'),
                                'mode': answer.get('mode'), 'running': answer.get('running')}
             if self.memory and answer.get('usage') and answer['usage'] != before.get('usage'):
                 self.remember_usage()
@@ -1772,9 +1819,33 @@ class UiWatcher:
         with self.lock:
             return dict(self.state.get(app) or {})
 
+    def check_card(self, app='claude'):
+        """Every few minutes while nobody uses the PC: the usage card, the only place the session
+        limit shows (the button expanded and closed again; the card shows for a moment, so not
+        while someone is at the PC, and never on a locked one)."""
+        if not (self.hub.strings.get(app) or {}).get('usage_card') or not hasattr(self.driver, 'usage_card'):
+            return
+        if self.last_card_check is not None and time.monotonic() - self.last_card_check < self.card_every:
+            return
+        presence = self.hub.presence.snapshot()
+        idle = presence.get('idleSeconds')
+        if presence.get('locked') or idle is None or idle < self.card_idle:
+            return
+        self.last_card_check = time.monotonic()
+        try:
+            rows = self.driver.usage_card(app)
+        except ActionError:
+            return
+        if rows:
+            with self.lock:
+                self.state.setdefault(app, {}).update(card=rows, cardAt=time.time())
+                if self.memory:
+                    self.remember_usage()
+
     def remember_usage(self):
-        """Saves each app's last usage button reading (called with the lock held)."""
-        seen = {app: {'usage': s['usage'], 'usageAt': s.get('usageAt')} for app, s in self.state.items() if s.get('usage')}
+        """Saves each app's last usage button and card readings (called with the lock held)."""
+        seen = {app: {key: s.get(key) for key in ('usage', 'usageAt', 'card', 'cardAt')}
+                for app, s in self.state.items() if s.get('usage') or s.get('card')}
         try:
             self.memory.write_text(json.dumps(seen, ensure_ascii=False), encoding='utf-8')
         except OSError:
@@ -1851,6 +1922,7 @@ class UiWatcher:
     def tick(self):
         for app in APPS:
             self.look(app)
+        self.check_card()
         if time.monotonic() - self.last_turn_check > 15:
             self.last_turn_check = time.monotonic()
             self.check_turns()
@@ -3086,6 +3158,12 @@ class FakeDriver:
     def launch(self, app):
         self.calls.append(('launch', app))
         self.windows()[app] = True
+
+    def usage_card(self, app):
+        if app != 'claude':
+            raise ActionError('not-found', '')
+        return [{'label': '工作階段限制', 'percent': 5, 'reset': '2 小時 56 分後重設'},
+                {'label': '每週 · 所有模型', 'percent': 46, 'reset': '週日上午11:00 重設'}]
 
     def open(self, app, info):
         self.calls.append(('open', app, info['id']))

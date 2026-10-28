@@ -931,13 +931,56 @@ for line in sys.stdin:
         watcher.look('claude')
         self.assertEqual((watcher.current('claude')['usageAt'], '46%' in watcher.current('claude')['usage']), (read_at, True))
 
+    def test_the_usage_card_gives_the_session_limit_and_its_reset_time(self):
+        t = 1793200000
+        self.assertEqual(h.relative_reset('2 小時 56 分後重設', t), t + 2 * 3600 + 56 * 60)
+        self.assertEqual(h.relative_reset('45 分後重設', t), t + 45 * 60)
+        self.assertEqual(h.relative_reset('1 天 3 小時後重設', t), t + 86400 + 3 * 3600)
+        self.assertIsNone(h.relative_reset('週日上午11:00 重設', t))
+        self.assertIsNone(h.relative_reset('後重設', t))
+        rows = [{'label': '工作階段限制', 'percent': 5.0, 'reset': '2 小時 56 分後重設'},
+                {'label': '每週 · 所有模型', 'percent': 62, 'reset': '週日上午11:00 重設'}, {'label': 'x'}]
+        session = {'label': '工作階段', 'percent': 5, 'resetsAt': h.iso(t + 10560), 'resetsText': None}
+        week = {'label': '每週', 'percent': 62, 'resetsAt': None, 'resetsText': '週日上午11:00 重設'}
+        self.assertEqual(h.card_windows(rows, t, t + 60), [session, week])
+        self.assertEqual(h.card_windows(rows, t, t + 10560), [week])  # the session has reset since
+        sample = {'windows': [{'label': '5 小時', 'percent': 7, 'resetsAt': None, 'resetsText': None}],
+                  'sampledAt': h.iso(t - 86400)}
+        button = {'label': '每週 · 所有模型', 'percent': 63, 'resetsText': '週日上午11:00 重設'}
+        # The card wins over an older file; a button read after the card gives the week.
+        self.assertEqual(h.merge_claude_usage(sample, None, None, t + 60, rows, t),
+                         {'windows': [session, week], 'sampledAt': h.iso(t)})
+        merged = h.merge_claude_usage(sample, button, t + 30, t + 60, rows, t)
+        self.assertEqual([(w['label'], w['percent']) for w in merged['windows']], [('工作階段', 5), ('每週', 63)])
+        # A card older than the file, or none, leaves the earlier rules.
+        self.assertEqual(h.merge_claude_usage(sample, button, t, t, rows, t - 2 * 86400)['windows'][-1]['percent'], 63)
+
+    def test_the_card_is_read_only_while_nobody_uses_the_pc_and_not_too_often(self):
+        presence = dict(self.fake.cfg['presence'], idleSeconds=5)
+        hub, driver, watcher, _ = drive(self.fake, presence)
+        self.assertIsNone(watcher.current('claude').get('card'))  # someone at the PC: not read
+        presence['idleSeconds'] = 420
+        reads = []
+        real = driver.usage_card
+        driver.usage_card = lambda app: reads.append(app) or real(app)
+        watcher.tick()
+        watcher.tick()
+        self.assertEqual(reads, ['claude'])  # once, then not again within five minutes
+        self.assertEqual(watcher.current('claude')['card'][0]['percent'], 5)
+        watcher.last_card_check -= 301
+        presence['locked'] = True
+        watcher.tick()
+        self.assertEqual(reads, ['claude'])  # never on a locked PC
+
     def test_the_last_usage_button_reading_survives_a_restart(self):
         hub, driver, _, _ = drive(self.fake)
         memory = self.fake.root / 'usage_seen.json'
         watcher = h.UiWatcher(hub, driver, memory=memory)
         watcher.look('claude')
+        watcher.check_card()
         saved = json.loads(memory.read_text(encoding='utf-8'))
         self.assertIn('46%', saved['claude']['usage'])
+        self.assertEqual(saved['claude']['card'][0]['label'], '工作階段限制')
         hidden = dict(driver.inspect('claude'), usage=None, window=False)
         driver.inspect = lambda app: hidden
         again = h.UiWatcher(hub, driver, memory=memory)  # the helper started again, window in the tray
@@ -952,9 +995,12 @@ for line in sys.stdin:
         hub, _, _, _ = drive(self.fake)
         hub.capabilities = hub.capabilities + ['model']
         state = hub.state()
-        # The fixture's file sample is old: its 5-hour figure is left out, the button gives the week.
-        self.assertEqual(state['usage']['claude']['windows'],
-                         [{'label': '每週', 'percent': 46, 'resetsAt': None, 'resetsText': '週日上午11:00 重設'}])
+        # The usage card was read at the first look (nobody at the PC): the session and the week.
+        session, week = state['usage']['claude']['windows']
+        self.assertEqual((session['label'], session['percent'], session['resetsText']), ('工作階段', 5, None))
+        self.assertAlmostEqual(h.datetime.fromisoformat(session['resetsAt'].replace('Z', '+00:00')).timestamp(),
+                               time.time() + 2 * 3600 + 56 * 60, delta=120)
+        self.assertEqual(week, {'label': '每週', 'percent': 46, 'resetsAt': None, 'resetsText': '週日上午11:00 重設'})
         self.assertEqual(state['usage']['codex']['windows'][0]['percent'], 5)
         self.assertEqual(state['models']['claude'], ['Opus 5.5', 'Sonnet 5.5', 'Haiku 5.5', 'Fable 5.1'])
         self.assertIn('GPT-6.1 Terra', state['models']['codex'])
