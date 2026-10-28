@@ -17,9 +17,11 @@
 
 ## 安裝與資料
 
-- 沿用相簿的 Bundle ID `org.personal.lightbox.album`，版本接續相簿編號（目前 0.4.2 build 8）。**覆蓋安裝在相簿上**，相簿的連線設定、密碼與已存清單都會保留，不要先刪除相簿。
+- 沿用相簿的 Bundle ID `org.personal.lightbox.album`，版本接續相簿編號（目前 0.4.2 build 8）。
+- **手機上已經有工具箱**：新版直接覆蓋安裝在工具箱上，不要先刪；相簿與礦機的設定都會保留，不用重填。
+- **第一次從相簿換成工具箱**：覆蓋安裝在相簿上，相簿的連線設定、密碼與已存清單都會保留，不要先刪除相簿。
 - 主畫面名稱是「工具箱」。`Info.plist` 的 `CFBundleDisplayName` 是英文 `Toolbox`，因為 SideStore 拿它當 Apple App ID 名稱，不接受中文；中文名稱放在 `zh-Hant.lproj/InfoPlist.strings`。
-- 礦機的設定（資料來源網址、控制密碼、收益與電費設定）**不會**從單獨的礦機 App 帶過來，在工具箱裡要重新設定一次。設定好之後，就可以在 SideStore 停用單獨的礦機 App，空出名額。
+- 礦機的設定（資料來源網址、控制密碼、收益與電費設定）**不會**從單獨的礦機 App 帶過來，第一次在工具箱裡要重新設定一次。設定好之後，就可以在 SideStore 停用單獨的礦機 App，空出名額。
 - 產物是**未簽署 IPA**，大小約 50 MB（主要是相簿用的 VLC 播放器），要用自己的 Apple 帳號簽署後安裝。
 
 ## 建置與測試
@@ -56,4 +58,5 @@ bash scripts/build.sh
 - [run 40340299846](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40340299846)（`31f2b12`，已合併礦機 0.6.1：重開後自動接回來源，並修正啟動時第一次讀取被取消、清單空白最多 30 秒）：相簿單元 41、礦機單元 121、工具箱 UI 4、相簿 UI 6，全部 0 失敗；IPA 48,097,981 bytes。截圖已人工檢視：重開後回到上次的礦機分頁
 - [run 40548727208](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40548727208)（`f122f5e`，0.4.1 build 7，已合併礦機 0.6.2：挖另一種幣的機器用它自己的幣價算收益、礦池認列算力依大小換單位）：相簿單元 41、礦機單元 123、工具箱 UI 4、相簿 UI 6，全部 0 失敗；IPA 48,102,374 bytes。截圖已人工檢視：礦機分頁的示範礦機 B 以 QTC 計價，分頁列不擋畫面
 - [run 40623905139](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40623905139)（`679128b`，0.4.2 build 8，已合併礦機 0.6.3：累計收益估算與約當 BTC）：相簿單元 41、礦機單元 125、工具箱 UI 4、相簿 UI 6，全部 0 失敗；IPA 48,120,525 bytes。截圖已人工檢視：礦機分頁正常、分頁列不擋畫面；累計區塊的內容在礦機 App 的 run 40623881960 截圖確認
-- 實機：尚未安裝
+- 發布：[run 40631339706](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40631339706)（`7fa7c8a`，只多了上一行說明）重跑同樣四組測試，全部 0 失敗，發布公開 prerelease [toolbox-0.4.2-build8](https://github.com/chunyen627-afk/mobile-apps/releases/tag/toolbox-0.4.2-build8)；IPA 48,120,525 bytes，SHA256 `1a94a5365783df14c9b84e0648d6e45ecaec96b5282d78e6c29009aa216ca8c7`
+- 實機：使用者手機上已裝工具箱（較早的版本）；0.4.2 build 8 尚未確認安裝
