@@ -3337,7 +3337,10 @@ class FakeDriver:
         # "長任務" keeps the turn running for a while, so the phone can stop it.
         self.running.add(doc)
         delay = 60 if '長任務' in text else self.reply_after
-        self.later(app, path, f'（示範）收到：{text[:30] or "照片"}', delay, doc)
+        reply = f'（示範）收到：{text[:30] or "照片"}'
+        if '表格' in text:  # a reply with a Markdown table, as the desktop apps write them
+            reply += FAKE_TABLE
+        self.later(app, path, reply, delay, doc)
 
     def new_send(self, app, button, text):
         self.calls.append(('new_send', app, button))
@@ -3449,6 +3452,18 @@ def build_driving(hub, driver, notify, pc_name, cfg, interval, verify_seconds, m
     threading.Thread(target=runner.run_forever, daemon=True).start()
     return runner
 
+
+FAKE_TABLE = '''
+
+## 各卡現況
+
+| 卡 | 現在 | 達成率 | 還能多多少（推估） |
+| --- | --- | --- | --- |
+| RTX 5080 | 192 TH/s、187 W | 89% | **+15～25 TH/s**，只要改設定 |
+| 中間 3060 | 38.4 TH/s | 82% | +6～8，要拉出來或加大夾扇 |
+
+- 先改設定
+- 再看溫度'''
 
 # The window that blocked sending on 10/29, as fake mode shows it (a made-up program name).
 FAKE_POPUP = {'hwnd': 4242, 'title': 'Windows 安全性', 'process': 'SecurityHealthHost',

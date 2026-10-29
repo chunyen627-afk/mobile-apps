@@ -446,15 +446,24 @@ struct DeskBubble: View {
         HStack {
             if mine { Spacer(minLength: 40) }
             VStack(alignment: .leading, spacing: 6) {
-                ForEach(Array(DeskText.segments(event.text).enumerated()), id: \.offset) { _, segment in
-                    if segment.code {
-                        Text(segment.text)
+                ForEach(Array(DeskText.blocks(event.text).enumerated()), id: \.offset) { _, block in
+                    switch block {
+                    case .code(let code):
+                        Text(code)
                             .font(.system(.footnote, design: .monospaced))
                             .padding(8)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 6))
-                    } else {
-                        Text(Self.markdown(segment.text))
+                    case .prose(let prose):
+                        Text(Self.markdown(prose))
+                    case .heading(let level, let heading):
+                        Text(Self.markdown(heading))
+                            .font(level <= 1 ? .title3.bold() : level == 2 ? .headline : .subheadline.bold())
+                            .padding(.top, 2)
+                    case .table(let header, let rows):
+                        DeskTable(header: header, rows: rows)
+                    case .rule:
+                        Divider()
                     }
                 }
                 if event.truncated == true {
@@ -483,6 +492,56 @@ struct DeskBubble: View {
         let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         // Bare web addresses become tappable too, not only Markdown links (asked on the phone 10/27).
         return DeskText.linkingWebAddresses((try? AttributedString(markdown: text, options: options)) ?? AttributedString(text))
+    }
+}
+
+/// A Markdown table as the desktop apps draw it: a grey header row, a thin line under each row,
+/// long cells wrapping; a table wider than the bubble scrolls sideways.
+struct DeskTable: View {
+    let header: [String]
+    let rows: [[String]]
+    /// A column as wide as its longest line, up to this; longer cells wrap.
+    private static let widest: CGFloat = 170
+
+    var body: some View {
+        let widths = columnWidths()
+        ScrollView(.horizontal, showsIndicators: false) {
+            Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 7) {
+                GridRow {
+                    ForEach(header.indices, id: \.self) { column in
+                        cell(header[column], width: widths[column]).foregroundStyle(.secondary)
+                    }
+                }
+                ForEach(rows.indices, id: \.self) { row in
+                    Divider()
+                    GridRow {
+                        ForEach(header.indices, id: \.self) { column in
+                            cell(rows[row][column], width: widths[column])
+                        }
+                    }
+                }
+            }
+            .padding(.vertical, 4)
+        }
+        .accessibilityIdentifier("bubble-table")
+    }
+
+    private func cell(_ text: String, width: CGFloat) -> some View {
+        Text(DeskBubble.markdown(text))
+            .font(.subheadline)
+            .frame(width: width, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func columnWidths() -> [CGFloat] {
+        let font = UIFont.preferredFont(forTextStyle: .subheadline)
+        return header.indices.map { column in
+            let texts = [header[column]] + rows.map { $0[column] }
+            let longest = texts.map { text in
+                (String(DeskBubble.markdown(text).characters) as NSString).size(withAttributes: [.font: font]).width
+            }.max() ?? 0
+            return min(Self.widest, max(28, ceil(longest) + 2))
+        }
     }
 }
 

@@ -525,6 +525,39 @@ final class TextTests: XCTestCase {
         XCTAssertEqual(DeskText.segments("a ``` b").map { $0.code }, [false, false])
     }
 
+    func testBlocksLayOutTablesHeadingsListsAndRules() {
+        let text = """
+        還有空間：
+
+        ## 各卡現況
+        | 卡 | 現在 | 達成率 |
+        | --- | :---: | ---: |
+        | RTX 5080 | **192** TH/s | 89% |
+        | 中間 3060 | 38.4 TH/s |
+        | a \\| b | c | d | 多的 |
+        - 先改設定
+          * 再看溫度
+        ---
+        ```
+        | 不是表格 |
+        | --- |
+        ```
+        """
+        XCTAssertEqual(DeskText.blocks(text), [
+            .prose("還有空間："),
+            .heading(level: 2, text: "各卡現況"),
+            .table(header: ["卡", "現在", "達成率"],
+                   rows: [["RTX 5080", "**192** TH/s", "89%"], ["中間 3060", "38.4 TH/s", ""], ["a | b", "c", "d"]]),
+            .prose("• 先改設定\n  • 再看溫度"),
+            .rule,
+            .code("| 不是表格 |\n| --- |"),
+        ])
+        // A lone line with pipes, or a header whose separator does not match, stays prose.
+        XCTAssertEqual(DeskText.blocks("a | b\nc | d"), [.prose("a | b\nc | d")])
+        XCTAssertEqual(DeskText.blocks("| a | b |\n| --- |"), [.prose("| a | b |\n| --- |")])
+        XCTAssertEqual(DeskText.blocks("#標籤不是標題"), [.prose("#標籤不是標題")])
+    }
+
     func testPCFormProblems() {
         let token = String(repeating: "x", count: 32)
         XCTAssertNil(DeskPC.problem(name: "辦公室", host: "10.1.2.3", port: "18790", token: token, tokenRequired: true))

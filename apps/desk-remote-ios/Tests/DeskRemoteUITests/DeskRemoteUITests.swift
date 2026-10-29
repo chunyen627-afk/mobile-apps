@@ -618,6 +618,25 @@ final class DeskRemoteUITests: XCTestCase {
         snapshot("33-three-photos-sent")
     }
 
+    /// A reply with a Markdown table, a heading and a list is laid out as the desktop apps show
+    /// it, not as rows of "|".
+    func test34TablesShowAsTables() throws {
+        try launchWithHelper()
+        openChat("claude", claudeA)
+        let input = element("chat-input")
+        XCTAssertTrue(input.waitForExistence(timeout: 10), "chat did not load")
+        input.tap()
+        input.typeText("請用表格整理")
+        app.buttons["chat-send"].tap()
+        let table = element("bubble-table")
+        XCTAssertTrue(table.waitForExistence(timeout: 25), "the table was not drawn as a table")
+        XCTAssertFalse(text("| --- |").exists, "the table's separator row is shown as text")
+        XCTAssertFalse(text("## 各卡現況").exists, "the heading marks are shown")
+        XCTAssertTrue(text("• 先改設定").exists, "the list has no bullets")
+        app.swipeUp()
+        snapshot("34-table")
+    }
+
     // MARK: - Helpers
 
     /// How many photos the fake helper's transcript of `session` holds from the user.

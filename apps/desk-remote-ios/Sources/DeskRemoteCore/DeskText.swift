@@ -1,6 +1,15 @@
 import Foundation
 
 /// Every user-facing sentence that depends on helper data, kept here so XCTest can pin it.
+/// One block of a chat message, as `DeskText.blocks` lays it out.
+public enum DeskBlock: Equatable, Sendable {
+    case prose(String)
+    case code(String)
+    case heading(level: Int, text: String)
+    case table(header: [String], rows: [[String]])
+    case rule
+}
+
 public enum DeskText {
     /// Below this many idle seconds someone is taken to be using the PC (design: 60 s).
     public static let idleThreshold = 60
@@ -190,6 +199,117 @@ public enum DeskText {
             out[lower ..< upper].link = url
         }
         return out
+    }
+
+    /// A reply laid out the way the desktop apps show it: prose, code, tables, headings and rules
+    /// (asked on 10/29: tables were shown as rows of "|").
+    public static func blocks(_ text: String) -> [DeskBlock] {
+        var out: [DeskBlock] = []
+        for segment in segments(text) {
+            if segment.code {
+                out.append(.code(segment.text))
+            } else {
+                out += proseBlocks(segment.text)
+            }
+        }
+        return out
+    }
+
+    private static func proseBlocks(_ text: String) -> [DeskBlock] {
+        var out: [DeskBlock] = []
+        var prose: [String] = []
+        func flush() {
+            let joined = prose.joined(separator: "\n").trimmingCharacters(in: .newlines)
+            if !joined.isEmpty { out.append(.prose(joined)) }
+            prose = []
+        }
+        let lines = text.components(separatedBy: "\n")
+        var index = 0
+        while index < lines.count {
+            let line = lines[index]
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if index + 1 < lines.count, trimmed.contains("|"), isTableSeparator(lines[index + 1]) {
+                let header = tableCells(trimmed)
+                if header.count >= 1, tableCells(lines[index + 1]).count == header.count {
+                    flush()
+                    var rows: [[String]] = []
+                    index += 2
+                    while index < lines.count, lines[index].contains("|"),
+                          !lines[index].trimmingCharacters(in: .whitespaces).isEmpty {
+                        var cells = tableCells(lines[index].trimmingCharacters(in: .whitespaces))
+                        cells = Array(cells.prefix(header.count))
+                        cells += Array(repeating: "", count: header.count - cells.count)
+                        rows.append(cells)
+                        index += 1
+                    }
+                    out.append(.table(header: header, rows: rows))
+                    continue
+                }
+            }
+            if let heading = headingText(trimmed) {
+                flush()
+                out.append(.heading(level: heading.level, text: heading.text))
+            } else if trimmed.count >= 3, Set(trimmed).count == 1, "-*_".contains(trimmed.first!) {
+                flush()
+                out.append(.rule)
+            } else {
+                prose.append(bulleted(line))
+            }
+            index += 1
+        }
+        flush()
+        return out
+    }
+
+    /// "| --- | :---: |" (the pipes at the ends are optional).
+    static func isTableSeparator(_ line: String) -> Bool {
+        let cells = tableCells(line.trimmingCharacters(in: .whitespaces))
+        guard !cells.isEmpty, line.contains("-") else { return false }
+        return cells.allSatisfy { cell in
+            let core = cell.trimmingCharacters(in: CharacterSet(charactersIn: ":"))
+            return !core.isEmpty && core.allSatisfy { $0 == "-" }
+        }
+    }
+
+    /// The cells of one table row; "\|" stays a "|" inside a cell.
+    static func tableCells(_ line: String) -> [String] {
+        var body = line.trimmingCharacters(in: .whitespaces)
+        if body.hasPrefix("|") { body.removeFirst() }
+        if body.hasSuffix("|") && !body.hasSuffix("\\|") { body.removeLast() }
+        var cells: [String] = []
+        var current = ""
+        var escaped = false
+        for character in body {
+            if escaped {
+                current.append(character == "|" ? "|" : "\\\(character)")
+                escaped = false
+            } else if character == "\\" {
+                escaped = true
+            } else if character == "|" {
+                cells.append(current.trimmingCharacters(in: .whitespaces))
+                current = ""
+            } else {
+                current.append(character)
+            }
+        }
+        if escaped { current.append("\\") }
+        cells.append(current.trimmingCharacters(in: .whitespaces))
+        return cells
+    }
+
+    private static func headingText(_ line: String) -> (level: Int, text: String)? {
+        let hashes = line.prefix(while: { $0 == "#" }).count
+        guard (1 ... 6).contains(hashes), line.dropFirst(hashes).first == " " else { return nil }
+        let text = line.dropFirst(hashes).trimmingCharacters(in: .whitespaces)
+        return text.isEmpty ? nil : (hashes, text)
+    }
+
+    /// "- item" / "* item" / "+ item" as "• item", keeping the indent of nested items.
+    private static func bulleted(_ line: String) -> String {
+        let indent = line.prefix(while: { $0 == " " || $0 == "\t" })
+        let rest = line.dropFirst(indent.count)
+        guard let marker = rest.first, "-*+".contains(marker), rest.dropFirst().first == " " else { return line }
+        return String(indent) + "• " + String(rest.dropFirst(2))
     }
 
     /// Text split into prose and ``` fenced code blocks, for the chat bubbles.
