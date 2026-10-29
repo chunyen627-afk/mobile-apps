@@ -1346,6 +1346,7 @@ class Hub:
         self.elevate = None               # ElevateRelay once the elevated companion is installed
         self.ui = lambda app: {}          # what the watcher last read on each app's screen
         self.popups = lambda: []          # windows on the desktop waiting for an answer
+        self.versions = lambda: {}        # each desktop app's installed and running version
         self.strings = {}                 # ui_strings.json, once windows can be driven
         self.usage_cache = (0.0, None)
         self.latest_cache = (0.0, None)
@@ -1381,7 +1382,7 @@ class Hub:
                                            'uac': bool(presence.get('uac'))},
                 'warnings': warnings, 'elevate': elevate, 'usage': self.usage(), 'models': choices('model', 'models'),
                 'efforts': choices('effort', 'efforts'), 'modes': choices('mode', 'modes'), 'stop': stop,
-                'popups': self.popups(), 'recent': self.recent(), 'fast': fast}
+                'popups': self.popups(), 'recent': self.recent(), 'fast': fast, 'versions': self.versions()}
 
     def recent(self, per_app=3):
         """Each app's few most recently written conversations, newest first, for the phone's PC
@@ -1701,6 +1702,54 @@ class WindowsDriver:
         found = self.worker.request({'cmd': 'popups'}).get('popups') or []
         return [found] if isinstance(found, dict) else found
 
+    installed_cache = (0.0, {})
+
+    def versions(self):
+        """{app: {'installed', 'running'}}: the installed package's version (asked of Windows at
+        most every 10 minutes: one PowerShell call) and the newest one running (None if closed)."""
+        import subprocess
+        stamp, installed = self.installed_cache
+        if not installed or time.monotonic() - stamp > 600:
+            names = ','.join(f"'{package}'" for package, _ in APP_PACKAGES.values())
+            try:
+                done = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command',
+                                       f'foreach ($n in {names}) {{ Get-AppxPackage -Name $n | ForEach-Object {{ $_.Name + " " + $_.Version }} }}'],
+                                      capture_output=True, timeout=60, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+                lines = done.stdout.decode('utf-8', 'replace').split()
+                by_package = dict(zip(lines[0::2], lines[1::2]))
+                installed = {app: by_package.get(package) for app, (package, _) in APP_PACKAGES.items()}
+                self.installed_cache = (time.monotonic(), installed)
+            except (OSError, subprocess.TimeoutExpired):
+                logging.exception('reading the installed versions failed')
+        out = {}
+        for app, (package, exe) in APP_PACKAGES.items():
+            running = set(package_processes(package, exe).values())
+            out[app] = {'installed': installed.get(app),
+                        'running': max(running, key=version_key) if running else None,
+                        'old': bool(installed.get(app)) and any(version_key(v) < version_key(installed[app]) for v in running)}
+        return out
+
+    def restart_app(self, app):
+        """Ends every process of the app's package and starts the installed (newest) one. Only
+        Codex: ending Claude would end every Claude Code session in it (the user's rule)."""
+        if app != 'codex':
+            raise ActionError('not-supported', 'only Codex is restarted')
+        package, exe = APP_PACKAGES[app]
+        kernel32 = ctypes.windll.kernel32
+        for pid in package_processes(package, exe):
+            handle = kernel32.OpenProcess(0x0001, False, pid)  # PROCESS_TERMINATE
+            if handle:
+                try:
+                    kernel32.TerminateProcess(handle, 0)
+                finally:
+                    kernel32.CloseHandle(handle)
+        deadline = time.monotonic() + 20
+        while package_processes(package, exe):
+            if time.monotonic() >= deadline:
+                raise ActionError('restart-failed', 'the old Codex did not end')
+            time.sleep(0.5)
+        self.launch(app)
+
     def press_popup(self, popup, button):
         """Presses `button` in `popup` while it still has its title; True once it has closed."""
         return bool(self.worker.request({'cmd': 'press_popup', 'hwnd': popup['hwnd'], 'title': popup['title'],
@@ -1866,6 +1915,44 @@ def process_running(name):
         kernel32.CloseHandle(ctypes.c_void_p(snapshot))
 
 
+# The desktop apps' packages and executables, for their versions (asked 10/30: always the newest).
+APP_PACKAGES = {'claude': ('Claude', 'claude.exe'), 'codex': ('OpenAI.Codex', 'chatgpt.exe')}
+
+
+def package_version(path, package):
+    """'26.1016.6573.0' from ...\\WindowsApps\\OpenAI.Codex_26.1016.6573.0_x64__...\\app\\ChatGPT.exe."""
+    found = re.search(r'\\windowsapps\\' + re.escape(package.lower()) + r'_(\d+(?:\.\d+){1,3})_', str(path).lower())
+    return found.group(1) if found else None
+
+
+def version_key(text):
+    return tuple(int(part) for part in str(text).split('.') if part.isdigit())
+
+
+def package_processes(package, exe):
+    """{pid: version} of the running processes of `package`'s `exe`."""
+    psapi, kernel32 = ctypes.windll.psapi, ctypes.windll.kernel32
+    pids = (ctypes.c_uint * 4096)()
+    needed = ctypes.c_uint()
+    if not psapi.EnumProcesses(ctypes.byref(pids), ctypes.sizeof(pids), ctypes.byref(needed)):
+        return {}
+    found = {}
+    for pid in pids[:needed.value // ctypes.sizeof(ctypes.c_uint)]:
+        handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            continue
+        try:
+            buffer = ctypes.create_unicode_buffer(1024)
+            size = ctypes.c_uint(1024)
+            if kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
+                version = package_version(buffer.value, package)
+                if version and buffer.value.lower().endswith('\\' + exe):
+                    found[pid] = version
+        finally:
+            kernel32.CloseHandle(handle)
+    return found
+
+
 def running_images(name):
     """Full paths of running processes whose executable is `name` (case-insensitive)."""
     psapi, kernel32 = ctypes.windll.psapi, ctypes.windll.kernel32
@@ -1918,6 +2005,9 @@ class UiWatcher:
         self.context_alerted, self.usage_alerted = set(), set()
         self.popups = []        # pop-up windows on the desktop at the last look, each with an id
         self.uac_since = self.uac_told = None  # when a UAC prompt was first seen; whether the phone was told
+        self.versions, self.versions_checked = {}, None  # each app's installed and running version
+        self.update_told, self.restart_tried = set(), {}  # (app, version) told; Codex version -> when restarted
+        self.busy = lambda: False                         # a phone action is queued or running
         self.last_usage_check = 0.0
         self.usage_checked_once = False
         self.last_turn_check = 0.0
@@ -2103,6 +2193,70 @@ class UiWatcher:
             except OSError:
                 logging.exception('notification failed')
 
+    RESTART_IDLE = 600  # seconds nobody has touched the PC before Codex is restarted into a new version
+
+    def check_versions(self, now=None):
+        """Always the newest desktop apps (asked 10/30). Windows installs a new Codex in the
+        background while the old one keeps running (office 10/29: 26.1023 installed, 26.1016
+        running, and its window would not come back from the tray): restart it once nothing is
+        lost by it. Claude is only told: restarting it ends every Claude Code session in it."""
+        if not hasattr(self.driver, 'versions'):
+            return
+        now = time.monotonic() if now is None else now
+        if self.versions_checked is not None and now - self.versions_checked < 60:
+            return
+        self.versions_checked = now
+        try:
+            found = self.driver.versions()
+        except (ActionError, OSError):
+            return
+        with self.lock:
+            self.versions = found
+        claude = found.get('claude') or {}
+        if claude.get('old') and ('claude', claude['installed']) not in self.update_told:
+            self.update_told.add(('claude', claude['installed']))
+            self.send('🆕 Claude 桌面版新版已裝好', f"{self.pc_name}・新版 {claude['installed']}，目前跑的是 {claude['running']}；"
+                      '重開 Claude 桌面版才會套用（會關掉裡面的 Claude Code 工作，所以不自動重開）', 3, ['new'],
+                      open_link(self.pc_name))
+        codex = found.get('codex') or {}
+        if not codex.get('old'):
+            return
+        version = codex['installed']
+        tried = self.restart_tried.get(version)
+        if tried is None and self.codex_restartable():
+            self.restart_tried[version] = now
+            logging.info('restarting codex %s into %s', codex['running'], version)
+            try:
+                self.driver.restart_app('codex')
+            except ActionError as exc:
+                logging.warning('restarting codex failed: %s %s', exc.code, exc.message)
+        elif tried is not None and now - tried > 180 and ('codex', version) not in self.update_told:
+            self.update_told.add(('codex', version))
+            self.send('⚠️ Codex 沒能重開成新版', f"{self.pc_name}・新版 {version} 已裝好，但還在跑 {codex['running']}；"
+                      '可在電腦上結束 Codex 再打開', 4, ['warning'], open_link(self.pc_name))
+
+    def codex_restartable(self):
+        """Nothing is lost by ending Codex now: nobody at the PC for RESTART_IDLE seconds, no
+        phone action queued, no conversation being written or waiting on an answer."""
+        presence = self.hub.presence.snapshot()
+        idle = presence.get('idleSeconds')
+        if presence.get('uac'):
+            return False
+        if not presence.get('locked') and (idle is None or idle < self.RESTART_IDLE):  # locked: nobody on it
+            return False
+        if self.busy() or (self.state.get('codex') or {}).get('prompt'):
+            return False
+        try:
+            rows = self.hub.sources['codex'].list_sessions(15)
+        except (OSError, ValueError, sqlite3.Error):
+            return False
+        return not any(row['status'] in ('active', 'needs-action') for row in rows)
+
+    def version_list(self):
+        with self.lock:
+            return {app: {'installed': info.get('installed'), 'running': info.get('running'), 'update': bool(info.get('old'))}
+                    for app, info in self.versions.items()}
+
     UAC_GRACE = 20  # seconds: someone at the PC answers their own UAC prompt before this
 
     def check_uac(self, now=None):
@@ -2121,6 +2275,7 @@ class UiWatcher:
 
     def tick(self):
         self.check_uac()
+        self.check_versions()
         for app in APPS:
             self.look(app)
         self.check_popups()
@@ -3460,6 +3615,23 @@ class FakeDriver:
         self.calls.append(('launch', app, again))
         self.windows()[app] = True
 
+    def versions(self):
+        """As WindowsDriver.versions; `fake_versions` sets {app: (installed, running)}."""
+        found = getattr(self, 'fake_versions', None) or {'claude': ('4.29.0.0', '4.29.0.0'),
+                                                         'codex': ('26.1023.6123.0', '26.1023.6123.0')}
+        return {app: {'installed': installed, 'running': running,
+                      'old': bool(running) and version_key(running) < version_key(installed)}
+                for app, (installed, running) in found.items()}
+
+    def restart_app(self, app):
+        self.calls.append(('restart', app))
+        if app != 'codex':
+            raise ActionError('not-supported', '')
+        versions = dict(getattr(self, 'fake_versions', None) or {})
+        if app in versions and not getattr(self, 'restart_sticks', False):
+            versions[app] = (versions[app][0], versions[app][0])
+            self.fake_versions = versions
+
     def usage_card(self, app):
         if app != 'claude':
             raise ActionError('not-found', '')
@@ -3612,9 +3784,11 @@ def build_driving(hub, driver, notify, pc_name, cfg, interval, verify_seconds, m
     hub.prompts = watcher.prompt_for
     hub.ui = watcher.current
     hub.popups = watcher.popup_list
+    hub.versions = watcher.version_list
     hub.strings = load_strings()
     runner = ActionRunner(hub, driver, hub.presence, watcher, notify, pc_name, hub.strings,
                           idle_seconds=int(cfg.get('idle_seconds', 60)), verify_seconds=verify_seconds)
+    watcher.busy = lambda: bool(runner.queue)
     hub.capabilities = ['read', 'send', 'permission', 'new', 'open', 'question', 'model', 'effort', 'mode', 'stop',
                         'photo', 'launch', 'photos', 'popups', 'fast']
     hub.alerts = dict(hub.alerts, **(cfg.get('alerts') or {}))

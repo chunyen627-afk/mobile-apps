@@ -1180,6 +1180,80 @@ class RecentTests(FakeEnvironment):
         self.assertEqual({r['app'] for r in hub.state()['recent']}, {'claude'})
 
 
+class VersionTests(FakeEnvironment):
+    """Always the newest desktop apps (asked 10/30): an old Codex restarts when nothing is lost,
+    a new Claude is only told about."""
+
+    def version_setup(self, idle=900, **versions):
+        sent = []
+        presence = dict(self.fake.cfg['presence'], idleSeconds=idle)
+        hub, driver, watcher, runner = drive(self.fake, presence, notify=lambda *a: sent.append(a))
+        hub.versions = watcher.version_list
+        driver.fake_versions = versions
+        sent.clear()
+        driver.calls.clear()
+        watcher.versions_checked = None
+        # The fixture keeps one Codex conversation being written: let it be idle here.
+        watcher.hub.sources['codex'].list_sessions = lambda limit, now=None: [{'id': X, 'status': 'idle'}]
+        return hub, driver, watcher, sent, presence
+
+    def test_an_old_codex_restarts_into_the_installed_one_when_idle(self):
+        hub, driver, watcher, sent, _ = self.version_setup(codex=('26.1023.6123.0', '26.1016.6573.0'))
+        watcher.check_versions(now=1000)
+        self.assertIn(('restart', 'codex'), driver.calls)
+        self.assertEqual(sent, [], 'a restart that worked is not news')
+        watcher.check_versions(now=1061)
+        self.assertEqual(hub.state()['versions']['codex'],
+                         {'installed': '26.1023.6123.0', 'running': '26.1023.6123.0', 'update': False})
+        watcher.check_versions(now=1400)
+        self.assertEqual(driver.calls.count(('restart', 'codex')), 1)
+
+    def test_codex_waits_while_someone_uses_the_pc_or_a_turn_runs(self):
+        _, driver, watcher, _, presence = self.version_setup(idle=30, codex=('26.1023.6123.0', '26.1016.6573.0'))
+        watcher.check_versions(now=1000)
+        self.assertNotIn(('restart', 'codex'), driver.calls, 'someone is at the PC')
+        presence['idleSeconds'] = 900
+        watcher.hub.sources['codex'].list_sessions = lambda limit, now=None: [{'id': X, 'status': 'active'}]
+        watcher.check_versions(now=1061)
+        self.assertNotIn(('restart', 'codex'), driver.calls, 'a reply is being written')
+        watcher.hub.sources['codex'].list_sessions = lambda limit, now=None: [{'id': X, 'status': 'idle'}]
+        watcher.busy = lambda: True
+        watcher.check_versions(now=1122)
+        self.assertNotIn(('restart', 'codex'), driver.calls, 'a phone action is queued')
+        watcher.busy = lambda: False
+        watcher.check_versions(now=1183)
+        self.assertIn(('restart', 'codex'), driver.calls)
+
+    def test_a_restart_that_does_not_take_is_told_once(self):
+        _, driver, watcher, sent, _ = self.version_setup(codex=('26.1023.6123.0', '26.1016.6573.0'))
+        driver.restart_sticks = True
+        watcher.check_versions(now=1000)
+        watcher.check_versions(now=1100)
+        self.assertEqual(sent, [])
+        watcher.check_versions(now=1200)
+        watcher.check_versions(now=1300)
+        self.assertEqual(len(sent), 1, sent)
+        self.assertIn('Codex', sent[0][0])
+        self.assertEqual(driver.calls.count(('restart', 'codex')), 1, 'tried once per version')
+
+    def test_a_new_claude_is_told_once_and_never_restarted(self):
+        hub, driver, watcher, sent, _ = self.version_setup(claude=('4.30.0.0', '4.29.0.0'))
+        watcher.check_versions(now=1000)
+        watcher.check_versions(now=1100)
+        self.assertNotIn(('restart', 'claude'), driver.calls)
+        self.assertEqual(len(sent), 1, sent)
+        self.assertIn('4.30.0.0', sent[0][1])
+        self.assertIn('不自動重開', sent[0][1])
+        self.assertTrue(hub.state()['versions']['claude']['update'])
+
+    def test_versions_read_from_package_paths(self):
+        path = r'C:\Program Files\WindowsApps\OpenAI.Codex_26.1016.6573.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe'
+        self.assertEqual(h.package_version(path, 'OpenAI.Codex'), '26.1016.6573.0')
+        self.assertIsNone(h.package_version(path, 'Claude'))
+        self.assertLess(h.version_key('26.1016.6573.0'), h.version_key('26.1023.6123.0'))
+        self.assertLess(h.version_key('3.6556.2.0'), h.version_key('4.29.0.0'))
+
+
 class UacTests(FakeEnvironment):
     """A UAC prompt left on the PC (asked 10/29): sending says so and the phone is told once."""
 

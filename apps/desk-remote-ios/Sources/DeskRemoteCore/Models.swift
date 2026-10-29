@@ -67,6 +67,16 @@ public struct HelperState: Decodable, Equatable, Sendable {
     public let recent: [Recent]?
     /// Codex's fast mode (the lightning switch), nil while its setting cannot be read (helper 0.5.12).
     public let fast: [String: Bool?]?
+    /// Each desktop app's installed and running version (helper 0.5.12).
+    public let versions: [String: AppVersion]?
+
+    public struct AppVersion: Decodable, Equatable, Sendable {
+        public let installed: String?
+        /// nil while the app is not running.
+        public let running: String?
+        /// A newer version is installed than the one running.
+        public let update: Bool
+    }
 
     /// One of the PC list's links: a conversation and the desktop app it is in.
     public struct Recent: Decodable, Equatable, Hashable, Identifiable, Sendable {
@@ -110,6 +120,7 @@ public struct HelperState: Decodable, Equatable, Sendable {
     public func models(_ app: DeskApp) -> [String] { can("model") ? models?[app.rawValue] ?? [] : [] }
     public func efforts(_ app: DeskApp) -> [String] { can("effort") ? efforts?[app.rawValue] ?? [] : [] }
     public func modes(_ app: DeskApp) -> [String] { can("mode") ? modes?[app.rawValue] ?? [] : [] }
+    public func version(_ app: DeskApp) -> AppVersion? { versions?[app.rawValue] }
     /// The app has a fast mode the phone can switch.
     public func hasFast(_ app: DeskApp) -> Bool { can("fast") && fast?.keys.contains(app.rawValue) == true }
     public func fastOn(_ app: DeskApp) -> Bool? { fast?[app.rawValue] ?? nil }

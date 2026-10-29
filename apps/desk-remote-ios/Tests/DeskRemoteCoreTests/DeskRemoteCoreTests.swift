@@ -398,6 +398,28 @@ final class MetaAndUsageTests: XCTestCase {
         XCTAssertEqual(request?["fast"] as? Bool, false)
     }
 
+    func testVersionLinesSayWhatHappensWithANewerOne() throws {
+        let state = try HelperClient.decode(HelperState.self, status: 200, data: data("""
+        {"ok":true,"pc":{"name":"P","helperVersion":"0.5.12"},"capabilities":["read"],"apps":{},
+         "presence":{"idleSeconds":1,"locked":false},"warnings":[],
+         "versions":{"codex":{"installed":"26.1023.6123.0","running":"26.1016.6573.0","update":true},
+                     "claude":{"installed":"4.30.0.0","running":"4.29.0.0","update":true}}}
+        """))
+        XCTAssertEqual(DeskText.versionLine(.codex, state.version(.codex)),
+                       "跑的是 26.1016.6573.0，新版 26.1023.6123.0 已裝好：電腦閒置 10 分鐘後自動重開")
+        XCTAssertEqual(DeskText.versionLine(.claude, state.version(.claude)),
+                       "跑的是 4.29.0.0，新版 4.30.0.0 已裝好：要自己重開 Claude 桌面版")
+        let current = try JSONDecoder().decode(HelperState.AppVersion.self, from: data("""
+        {"installed":"26.1023.6123.0","running":"26.1023.6123.0","update":false}
+        """))
+        XCTAssertEqual(DeskText.versionLine(.codex, current), "版本 26.1023.6123.0")
+        let closed = try JSONDecoder().decode(HelperState.AppVersion.self, from: data("""
+        {"installed":"26.1023.6123.0","running":null,"update":false}
+        """))
+        XCTAssertEqual(DeskText.versionLine(.codex, closed), "版本 26.1023.6123.0（沒有開著）")
+        XCTAssertNil(DeskText.versionLine(.codex, nil), "older helpers say nothing")
+    }
+
     func testAUACPromptIsNamedNotTakenForALock() throws {
         let state = try HelperClient.decode(HelperState.self, status: 200, data: data("""
         {"ok":true,"pc":{"name":"P","helperVersion":"0.5.12"},"capabilities":["read"],"apps":{},

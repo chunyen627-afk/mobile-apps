@@ -167,6 +167,19 @@ public enum DeskText {
         return text
     }
 
+    /// The PC page's version line: "版本 26.1023.6123.0", or what happens with a newer one installed
+    /// (Codex restarts itself when the PC is idle; Claude is left to the user, 10/30).
+    public static func versionLine(_ app: DeskApp, _ version: HelperState.AppVersion?) -> String? {
+        guard let version, let installed = version.installed ?? version.running else { return nil }
+        guard version.update, let running = version.running else {
+            return version.running == nil ? "版本 \(installed)（沒有開著）" : "版本 \(version.running ?? installed)"
+        }
+        switch app {
+        case .codex: return "跑的是 \(running)，新版 \(installed) 已裝好：電腦閒置 10 分鐘後自動重開"
+        case .claude: return "跑的是 \(running)，新版 \(installed) 已裝好：要自己重開 Claude 桌面版"
+        }
+    }
+
     /// The PC list's time for a conversation: "回覆中", "等你回答・5 分鐘前", "3 小時前".
     public static func latestTime(_ session: SessionSummary, now: Date = Date()) -> String {
         let when = relative(session.updatedAt, now: now) ?? ""
