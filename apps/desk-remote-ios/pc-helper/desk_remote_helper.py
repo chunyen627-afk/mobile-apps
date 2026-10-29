@@ -1652,16 +1652,19 @@ class WindowsDriver:
         except OSError as exc:
             raise ActionError('app-not-running', f'Codex could not take the link: {exc}')
 
-    def launch(self, app):
+    def launch(self, app, again=False):
         """Starts the app through its Start menu entry; when it is already running, closed to the
         tray (both were on the home PC, 10/28), the entry shows its window again. Codex outside its
-        package after the 0x80070020 fault: start the package's own exe instead."""
-        try:
-            os.startfile(f'shell:AppsFolder\\{LAUNCH_IDS[app]}')
-            return
-        except OSError:
-            if app != 'codex':
-                raise ActionError('app-not-running', 'the app could not be started')
+        package after the 0x80070020 fault, or a second try (`again`) when the entry showed
+        nothing: start the package's own exe instead."""
+        if not again:
+            try:
+                os.startfile(f'shell:AppsFolder\\{LAUNCH_IDS[app]}')
+                return
+            except OSError:
+                pass
+        if app != 'codex':
+            raise ActionError('app-not-running', 'the app could not be started')
         exe = codex_package_exe()
         if not exe:
             raise ActionError('app-not-running', 'the Codex package was not found')
@@ -2487,12 +2490,22 @@ class ActionRunner:
         self.recheck(action)
         self.presence.begin_own()
         self.driver.launch(app)
-        deadline = self.clock() + self.verify_seconds * 2  # a cold start takes longer than a switch
+        if not self.wait_shown(app, self.verify_seconds) and app == 'codex':
+            # The Start menu entry reports success and shows nothing while the running Codex is an
+            # older build than the installed package (office 10/29); the package's exe shows it.
+            logging.info('codex window did not show from the Start menu entry; starting its exe')
+            self.driver.launch(app, again=True)
+        if not self.wait_shown(app, self.verify_seconds * 2):  # a cold start takes longer than a switch
+            raise ActionError('app-not-running', 'no window showed up')
+        self.update(action, state='done', verified=True, message='已在電腦上開啟桌面版')
+
+    def wait_shown(self, app, seconds):
+        deadline = self.clock() + seconds
         while not self.window_shown(app):
             if self.clock() >= deadline:
-                raise ActionError('app-not-running', 'no window showed up')
+                return False
             time.sleep(0.5)
-        self.update(action, state='done', verified=True, message='已在電腦上開啟桌面版')
+        return True
 
     def do_send(self, action):
         app, info, text = action['app'], action['info'], action['text']
@@ -3388,8 +3401,8 @@ class FakeDriver:
     def docs(self, app):
         return None if self.windows().get(app) is False else [self.open_doc.get(app)]
 
-    def launch(self, app):
-        self.calls.append(('launch', app))
+    def launch(self, app, again=False):
+        self.calls.append(('launch', app, again))
         self.windows()[app] = True
 
     def usage_card(self, app):

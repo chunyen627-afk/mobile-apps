@@ -411,7 +411,7 @@ class DrivingTests(FakeEnvironment):
         run_all(runner)
         done = runner.status(body['id'])
         self.assertEqual((done['state'], done['verified'], done['message']), ('done', True, '已在電腦上開啟桌面版'))
-        self.assertEqual(driver.calls, [('launch', 'codex')])
+        self.assertEqual(driver.calls, [('launch', 'codex', False)])
         self.assertTrue(hub.state()['apps']['codex']['running'])
 
     def test_launch_leaves_an_open_app_alone(self):
@@ -427,12 +427,12 @@ class DrivingTests(FakeEnvironment):
         self.assertEqual((code, body['error']), (409, 'busy-user'))
         self.assertEqual(runner.submit('launch', 'codex', None, {'force': True})[0], 202)
         run_all(runner)
-        self.assertEqual(driver.calls, [('launch', 'codex')])
+        self.assertEqual(driver.calls, [('launch', 'codex', False)])
 
     def test_launch_with_no_window_fails_quietly(self):
         class DeadDriver(h.FakeDriver):
-            def launch(self, app):
-                self.calls.append(('launch', app))
+            def launch(self, app, again=False):
+                self.calls.append(('launch', app, again))
         sent = []
         _, _, _, runner = drive(self.fake, self.closed_presence(), driver_class=DeadDriver,
                                 notify=lambda *a: sent.append(a))
@@ -442,6 +442,21 @@ class DrivingTests(FakeEnvironment):
         run_all(runner)
         self.assertEqual(runner.status(body['id'])['error'], 'app-not-running')
         self.assertEqual(sent, [])  # the phone asked on its own and shows it
+        self.assertEqual(runner.driver.calls, [('launch', 'codex', False), ('launch', 'codex', True)], 'no second try')
+
+    def test_codex_from_the_tray_gets_a_second_try_with_its_exe(self):
+        class OldBuildDriver(h.FakeDriver):
+            # The Start menu entry does nothing while an older Codex build runs (office 10/29).
+            def launch(self, app, again=False):
+                self.calls.append(('launch', app, again))
+                if again:
+                    self.windows()[app] = True
+        _, driver, _, runner = drive(self.fake, self.closed_presence(), driver_class=OldBuildDriver)
+        runner.clock = FastClock()
+        body = runner.submit('launch', 'codex', None, {})[1]
+        run_all(runner)
+        self.assertEqual(runner.status(body['id'])['message'], '已在電腦上開啟桌面版')
+        self.assertEqual(driver.calls, [('launch', 'codex', False), ('launch', 'codex', True)])
 
     def test_wrong_conversation_open_never_types(self):
         class StuckDriver(h.FakeDriver):
