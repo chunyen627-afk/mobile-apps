@@ -857,7 +857,7 @@ class CodexSource:
 
     def fast(self):
         """Whether fast mode (the lightning toggle) is on: the desktop app writes its pick to
-        config.toml as service_tier ("default" when off, read from the app 10/29), under the
+        config.toml as service_tier ("default" when off, "priority" when on: the home PC's, 10/29), under the
         active profile when there is one. None when the file cannot be read."""
         try:
             text = (self.home / 'config.toml').read_text(encoding='utf-8')
@@ -3328,7 +3328,7 @@ class FakeDriver:
         if source.fast() == on:
             return 'already'
         with self.lock:
-            (source.home / 'config.toml').write_text(f'service_tier = "{"fast" if on else "default"}"\n', encoding='utf-8')
+            (source.home / 'config.toml').write_text(f'service_tier = "{"priority" if on else "default"}"\n', encoding='utf-8')
         return 'fake'
 
     def set_mode(self, app, doc, label):
