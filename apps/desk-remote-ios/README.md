@@ -28,8 +28,8 @@
 | 開新對話 | ✅ | ✅ | 模擬器、真電腦 |
 | 停止正在執行的那一輪 | ✅ | ✅（手機 0.5.2 起） | 模擬器、真電腦 |
 | 傳照片（先貼照片再貼文字） | ✅ | ✅ | 模擬器；真電腦只測過 Claude |
-| 直接拍照傳送（輸入列的相機按鈕；照片只留在記憶體，不存到相簿；沒有相機的裝置不顯示） | ✅ | ✅ | App 0.5.5 起；模擬器沒有相機，UI 測試改用假照片走完預覽與送出，[run 40732902166](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40732902166) 通過、截圖已檢視；**手機上的相機實測待做** |
-| 語音輸入按鈕（輸入列的麥克風；按一下開始、再按停止，繁體中文語音辨識，邊說邊出現在輸入框、接在已打的字後面；按下時鍵盤收起；按送出會停止收音） | ✅ | ✅ | App 0.5.5 起；模擬器不能說話，UI 測試改成按鈕直接填入固定文字，驗證不叫出鍵盤與送出，[run 40732902166](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40732902166) 通過、截圖已檢視；**手機上的實際辨識待測**。也可以照舊用鍵盤上的聽寫 |
+| 直接拍照傳送（輸入列的相機按鈕；照片只留在記憶體，不存到相簿；沒有相機的裝置不顯示） | ✅ | ✅ | App 0.5.5 起；模擬器沒有相機，UI 測試改用假照片走完預覽與送出，[run 40732902166](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40732902166) 通過、截圖已檢視；手機實測通過（2026-10-29 使用者回報，0.5.5 build 8） |
+| 語音輸入按鈕（輸入列的麥克風；按一下開始、再按停止，繁體中文語音辨識，邊說邊出現在輸入框、接在已打的字後面；按下時鍵盤收起；按送出會停止收音） | ✅ | ✅ | App 0.5.5 起；模擬器不能說話，UI 測試改成按鈕直接填入固定文字，驗證不叫出鍵盤與送出，[run 40732902166](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40732902166) 通過、截圖已檢視；手機實際辨識通過（2026-10-29 使用者回報，0.5.5 build 8）。也可以照舊用鍵盤上的聽寫 |
 | 切換模型 | ✅ | ✅ | 模擬器；**真電腦尚未實測** |
 | 切換推理強度 | ✅ | —（不做，見「還沒做的」） | 模擬器、真電腦 |
 | 切換權限模式 | ✅ | ✅（畫面不顯示目前模式，下一則回覆起生效；小幫手 0.5.5 起手機先顯示剛選的模式，App 0.5.4 起加註「（下一則回覆起生效）」，有回覆後改用紀錄裡的） | 模擬器、真電腦（Claude；Codex 2026-10-28 在匯入的舊對話選「代我核准」，下一輪紀錄確為 `auto_review`） |
@@ -65,7 +65,7 @@
 | 0.5.2 build 5 | [run 40471604033](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40471604033)：小幫手 87、單元 31、UI 26，截圖已檢視 | [desk-remote-0.5.2-build5](https://github.com/chunyen627-afk/mobile-apps/releases/tag/desk-remote-0.5.2-build5)（IPA 446,442 bytes，SHA256 `e85f3134…3842`） | 已裝到 iPhone（使用者回報） |
 | 0.5.3 build 6 | [run 40651208666](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40651208666)：小幫手 89、單元 34、UI 26（同內容 [run 40648993340](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40648993340) 截圖已檢視） | [desk-remote-0.5.3-build6](https://github.com/chunyen627-afk/mobile-apps/releases/tag/desk-remote-0.5.3-build6)（IPA 462,686 bytes，SHA256 `b2faa6ff…581a`） | 待裝 |
 | 0.5.4 build 7 | [run 40699706436](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40699706436) 通過（同內容 [run 40695880965](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40695880965)：小幫手 98、單元 35、UI 28，截圖已檢視） | [desk-remote-0.5.4-build7](https://github.com/chunyen627-afk/mobile-apps/releases/tag/desk-remote-0.5.4-build7)（IPA 467,444 bytes，SHA256 `a2136e0c…7c1a`） | 使用者跳過，直接裝 0.5.5 |
-| 0.5.5 build 8 | [run 40777815467](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40777815467) 通過（同內容 [run 40732902166](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40732902166)：小幫手 109、單元 36、UI 31，截圖已檢視） | [desk-remote-0.5.5-build8](https://github.com/chunyen627-afk/mobile-apps/releases/tag/desk-remote-0.5.5-build8)（IPA 497,270 bytes，SHA256 `08ce90c0…841f`） | 已裝到 iPhone（使用者回報）；相機與語音辨識待手機實測 |
+| 0.5.5 build 8 | [run 40777815467](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40777815467) 通過（同內容 [run 40732902166](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40732902166)：小幫手 109、單元 36、UI 31，截圖已檢視） | [desk-remote-0.5.5-build8](https://github.com/chunyen627-afk/mobile-apps/releases/tag/desk-remote-0.5.5-build8)（IPA 497,270 bytes，SHA256 `08ce90c0…841f`） | 已裝到 iPhone；相機拍照傳送、語音輸入實測通過（使用者回報） |
 
 實測時發現並修好的問題（細節見 commit 紀錄）：
 - **送出**：切換對話後輸入框還是舊頁面 → 只在標題相符的頁面找輸入框並讀回確認；Alt 鍵搶前景會打開 Electron 選單列 → 拿掉；Chromium 下點擊前的元件檢查無效 → 改成檢查該點最上層視窗。
