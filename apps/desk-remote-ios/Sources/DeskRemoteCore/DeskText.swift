@@ -165,10 +165,10 @@ public enum DeskText {
         return text
     }
 
-    /// The PC list's time for an app's last conversation: "回覆中", "等你回答・5 分鐘前", "3 小時前".
-    public static func latestTime(_ latest: HelperState.Latest, now: Date = Date()) -> String {
-        let when = relative(latest.updatedAt, now: now) ?? ""
-        switch latest.status {
+    /// The PC list's time for a conversation: "回覆中", "等你回答・5 分鐘前", "3 小時前".
+    public static func latestTime(_ session: SessionSummary, now: Date = Date()) -> String {
+        let when = relative(session.updatedAt, now: now) ?? ""
+        switch session.status {
         case "active": return "回覆中"
         case "needs-action": return when.isEmpty ? "等你回答" : "等你回答・\(when)"
         default: return when

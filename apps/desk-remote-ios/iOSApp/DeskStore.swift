@@ -10,8 +10,8 @@ final class DeskStore: ObservableObject {
     @Published private(set) var pcs: [DeskPC] = []
     /// The newest plan limits per account from any PC, so PCs on one plan show the same.
     @Published private(set) var usageBook = UsageBook()
-    /// Each PC's apps' last conversation, as the PC last reported it ("<pc id>/<app>").
-    @Published private(set) var latest: [String: HelperState.Latest] = [:]
+    /// Each PC's newest conversations, as the PC last reported them.
+    @Published private(set) var recent: [UUID: [HelperState.Recent]] = [:]
     /// When the user last looked at each PC's app (RFC 3339), so newer conversations are marked.
     @Published private(set) var seen: [String: String] = [:]
     /// Conversations opened since the app started: their dot in the list goes.
@@ -133,31 +133,34 @@ final class DeskStore: ObservableObject {
 
     /// Remembers the plan limits a PC reported (every place that reads a PC's state calls this).
     func note(_ state: HelperState, pcID: UUID) {
+        let links = state.recentLinks
+        if recent[pcID] != links { recent[pcID] = links }
         for app in DeskApp.allCases {
             let key = "\(pcID.uuidString)/\(app.rawValue)"
-            let last = state.latest(app)
-            if latest[key] != last { latest[key] = last }
             // The first report from a PC is the starting point, not news.
-            if let last, seen[key] == nil { markSeen(key, at: uiSeenBefore ?? last.updatedAt) }
+            if let newest = newest(pcID, app), seen[key] == nil { markSeen(key, at: uiSeenBefore ?? newest) }
         }
         guard let name = pc(pcID)?.name, usageBook.record(state, pc: name) else { return }
         if let data = try? JSONEncoder().encode(usageBook) { defaults.set(data, forKey: Self.usageKey) }
     }
 
-    func latest(_ pcID: UUID, _ app: DeskApp) -> HelperState.Latest? { latest["\(pcID.uuidString)/\(app.rawValue)"] }
-
-    /// The app's last conversation was written after the user last opened its list or a chat in it.
-    func isNew(_ pcID: UUID, _ app: DeskApp) -> Bool {
-        let key = "\(pcID.uuidString)/\(app.rawValue)"
-        guard let last = latest[key], last.status != "active" else { return false }
-        return DeskText.isNewer(last.updatedAt, than: seen[key])
+    /// When the PC last wrote to any of the app's conversations it listed.
+    private func newest(_ pcID: UUID, _ app: DeskApp) -> String? {
+        (recent[pcID] ?? []).filter { $0.app == app }.compactMap(\.session.updatedAt).max()
     }
 
-    /// Called on entering and leaving an app's list or chat: what was written until now is seen.
+    /// The conversation was written after the user last looked at its app here, and is not open
+    /// or being written now.
+    func isNew(_ pcID: UUID, _ link: HelperState.Recent) -> Bool {
+        guard let app = link.app, link.session.status != "active", !opened.contains(link.session.id) else { return false }
+        return DeskText.isNewer(link.session.updatedAt ?? "", than: seen["\(pcID.uuidString)/\(app.rawValue)"])
+    }
+
+    /// Called on entering and leaving an app's list: what was written until now is seen.
     func markSeen(_ pcID: UUID, _ app: DeskApp) {
         let key = "\(pcID.uuidString)/\(app.rawValue)"
         let now = ISO8601DateFormatter().string(from: Date())
-        let last = latest[key]?.updatedAt
+        let last = newest(pcID, app)
         markSeen(key, at: last.map { DeskText.isNewer($0, than: now) ? $0 : now } ?? now)
     }
 

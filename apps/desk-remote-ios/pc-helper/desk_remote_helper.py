@@ -855,6 +855,29 @@ class CodexSource:
         self.recorded_cache = {}
         self.imports = (None, {})
 
+    def fast(self):
+        """Whether fast mode (the lightning toggle) is on: the desktop app writes its pick to
+        config.toml as service_tier ("default" when off, read from the app 10/29), under the
+        active profile when there is one. None when the file cannot be read."""
+        try:
+            text = (self.home / 'config.toml').read_text(encoding='utf-8')
+        except OSError:
+            return None
+        section, values = '', {}
+        for line in text.splitlines():
+            line = line.strip()
+            heading = re.fullmatch(r'\[([^\]]+)\]', line)
+            if heading:
+                section = heading.group(1).strip()
+                continue
+            found = re.fullmatch(r'(profile|service_tier)\s*=\s*"([^"]*)"\s*(#.*)?', line)
+            if found:
+                values[(section, found.group(1))] = found.group(2)
+        profile = values.get(('', 'profile'))
+        tier = values.get((f'profiles.{profile}', 'service_tier')) if profile else None
+        tier = tier or values.get(('', 'service_tier'))
+        return tier not in (None, '', 'default', 'standard')
+
     def account(self):
         """The signed-in ChatGPT account (only its id is read from auth.json), as a mark."""
         try:
@@ -1346,30 +1369,34 @@ class Hub:
             return {app: list(self.strings[app][key]) for app in APPS
                     if capability in self.capabilities and (self.strings.get(app) or {}).get(key)}
         stop = [app for app in APPS if 'stop' in self.capabilities and (self.strings.get(app) or {}).get('stop')]
+        fast = {app: source.fast() for app, source in self.sources.items()
+                if 'fast' in self.capabilities and (self.strings.get(app) or {}).get('fast_on') and hasattr(source, 'fast')}
         extra = (['elevate'] if self.elevate is not None else []) + (['screen'] if self.screen is not None else [])
         return {'ok': True, 'pc': {'name': self.pc_name, 'helperVersion': VERSION},
                 'capabilities': self.capabilities + extra,
                 'apps': apps, 'presence': {'idleSeconds': presence.get('idleSeconds'), 'locked': presence.get('locked')},
                 'warnings': warnings, 'elevate': elevate, 'usage': self.usage(), 'models': choices('model', 'models'),
                 'efforts': choices('effort', 'efforts'), 'modes': choices('mode', 'modes'), 'stop': stop,
-                'popups': self.popups(), 'latest': self.latest()}
+                'popups': self.popups(), 'recent': self.recent(), 'fast': fast}
 
-    def latest(self):
-        """Each app's most recently written conversation, for the phone's PC list (read at most
-        every 10 seconds); None for an app with none."""
+    def recent(self, per_app=3):
+        """Each app's few most recently written conversations, newest first, for the phone's PC
+        list to link straight into (read at most every 10 seconds). Every app gets its share, so
+        a quiet one still shows when it was last used."""
         now = time.monotonic()
         stamp, cached = self.latest_cache
         if cached is not None and now - stamp < 10:
             return cached
-        out = {}
+        out = []
         for app, source in self.sources.items():
             try:
                 rows = [row for row in source.list_sessions(10) if row.get('updatedAt')]
             except (OSError, ValueError, sqlite3.Error):
-                logging.exception('latest conversation of %s failed', app)
+                logging.exception('recent conversations of %s failed', app)
                 rows = []
-            row = max(rows, key=lambda r: r['updatedAt'], default=None)
-            out[app] = row and {key: row[key] for key in ('id', 'title', 'updatedAt', 'status')}
+            rows.sort(key=lambda r: r['updatedAt'], reverse=True)
+            out += [dict(row, app=app) for row in rows[:per_app]]
+        out.sort(key=lambda r: r['updatedAt'], reverse=True)
         self.latest_cache = (now, out)
         return out
 
@@ -1694,6 +1721,10 @@ class WindowsDriver:
 
     def set_mode(self, app, doc, label):
         return self.ask(app, cmd='mode', doc=doc, mode=label).get('how')
+
+    def set_fast(self, app, doc, on):
+        """Codex's fast mode switch in the model menu; 'already' when it was that way."""
+        return self.ask(app, cmd='fast', doc=doc, on=bool(on)).get('how')
 
     def stop(self, app, doc):
         return self.ask(app, cmd='stop', doc=doc).get('how')
@@ -2153,8 +2184,13 @@ class ActionRunner:
                 return 400, error('bad-request', f'沒有這個{what}')
         if kind == 'stop' and not strings.get('stop'):
             return 400, error('not-supported', '這個 App 還不能從手機停止')
+        if kind == 'fast':
+            if not strings.get('fast_on'):
+                return 400, error('not-supported', '這個 App 沒有快速模式')
+            if not isinstance(payload.get('fast'), bool):
+                return 400, error('bad-request', '要說開或關')
         info = None
-        if kind in ('send', 'open', 'permission', 'answer', 'model', 'effort', 'mode', 'stop'):
+        if kind in ('send', 'open', 'permission', 'answer', 'model', 'effort', 'mode', 'stop', 'fast'):
             info = self.hub.info(app, session_id)
             if info is None:
                 return 404, error('not-found', '找不到這個對話')
@@ -2170,7 +2206,7 @@ class ActionRunner:
             if not current or current['promptId'] != payload.get('promptId'):
                 return 409, error('prompt-changed', '電腦上的權限詢問已經不一樣了，請重新整理')
             needs_front = app == 'claude' and decision == 'allow_once'
-        elif kind in ('stop', 'popup') or (app == 'codex' and kind in ('model', 'mode')):
+        elif kind in ('stop', 'popup', 'fast') or (app == 'codex' and kind in ('model', 'mode')):
             # Pressed through UI Automation alone; opening another conversation still checks.
             needs_front = False
         else:
@@ -2191,6 +2227,7 @@ class ActionRunner:
                       'questionId': payload.get('questionId'), 'answers': payload.get('answers'),
                       'project': payload.get('project'), 'model': payload.get('model'), 'effort': payload.get('effort'),
                       'mode': payload.get('mode'), 'images': images, 'button': payload.get('button'),
+                      'fast': payload.get('fast'),
                       'needsFront': needs_front, 'force': force, 'state': 'queued', 'message': '排隊中',
                       'error': None, 'verified': None, 'created': self.clock()}
             self.actions[action['id']] = action
@@ -2276,7 +2313,7 @@ class ActionRunner:
         handler = {'send': self.do_send, 'permission': self.do_permission, 'new': self.do_new,
                    'open': self.do_open, 'answer': self.do_answer, 'model': self.do_model,
                    'effort': self.do_effort, 'mode': self.do_mode, 'stop': self.do_stop,
-                   'launch': self.do_launch, 'popup': self.do_popup}[action['kind']]
+                   'launch': self.do_launch, 'popup': self.do_popup, 'fast': self.do_fast}[action['kind']]
         try:
             handler(action)
         except ActionError as exc:
@@ -2303,7 +2340,7 @@ class ActionRunner:
             return
         verb = {'send': '送出訊息', 'permission': '回覆權限', 'new': '開新對話', 'open': '打開對話',
                 'answer': '回答選項題', 'model': '切換模型', 'effort': '切換推理強度', 'mode': '切換權限模式',
-                'stop': '停止', 'popup': '按電腦上的視窗'}[action['kind']]
+                'stop': '停止', 'popup': '按電腦上的視窗', 'fast': '切換快速模式'}[action['kind']]
         title = (action.get('info') or {}).get('title') or action.get('title') or ''
         head = f"⚠️ 手機{verb}失敗" + (f"：{APP_NAMES[action['app']]}" if action['app'] in APP_NAMES else '')
         body = f"{self.pc_name}・「{title}」：{action['message']}"
@@ -2642,6 +2679,28 @@ class ActionRunner:
         else:
             self.update(action, state='done', verified=True, message=f'權限模式已切換為 {label}')
 
+    def do_fast(self, action):
+        """Codex's fast mode switch; config.toml then has to say the same."""
+        app, info, on = action['app'], action['info'], action['fast']
+        self.open_conversation(action)
+        self.recheck(action, action['needsFront'])
+        self.presence.begin_own()
+        how = self.driver.set_fast(app, info['doc'], on)
+        self.presence.end_own()
+        logging.info('fast %s %s by %s', app, on, how)
+        name = '快速模式' if on else '標準模式'
+        if how == 'already':
+            self.update(action, state='done', verified=True, message=f'本來就是{name}')
+            return
+        deadline = self.clock() + self.verify_seconds
+        while self.hub.sources[app].fast() != on:
+            if self.clock() >= deadline:
+                self.update(action, state='done', verified=False,
+                            message=f'畫面上已切到{name}，但設定檔 {self.verify_seconds} 秒內還沒更新')
+                return
+            time.sleep(0.5)
+        self.update(action, state='done', verified=True, message=f'已切換為{name}')
+
     def do_stop(self, action):
         """Presses the stop button of the running turn; done once the turn is no longer running."""
         app, info = action['app'], action['info']
@@ -2972,7 +3031,7 @@ def handler_for(hub, gate, networks, runner=None):
                 if len(parts) == 2:
                     return self.send_json(*runner.submit('new', app, None, body))
                 kinds = {'messages': 'send', 'permission': 'permission', 'open': 'open', 'answer': 'answer',
-                         'model': 'model', 'effort': 'effort', 'mode': 'mode', 'stop': 'stop'}
+                         'model': 'model', 'effort': 'effort', 'mode': 'mode', 'stop': 'stop', 'fast': 'fast'}
                 if len(parts) == 4 and parts[3] in kinds and hub.sources[app].id_pattern.match(parts[2]):
                     return self.send_json(*runner.submit(kinds[parts[3]], app, parts[2], body))
             return self.send_json(404, error('not-found', '沒有這個路徑'))
@@ -3109,6 +3168,7 @@ class FakeSetup:
 
     def build_codex_database(self):
         home = self.root / 'pc' / 'codex'
+        (home / 'config.toml').write_text('service_tier = "default"\n', encoding='utf-8')  # fast mode off
         threads = json.loads((home / 'threads.json').read_text(encoding='utf-8'))
         connection = sqlite3.connect(home / 'state_5.sqlite')
         connection.execute('CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT, title TEXT, name TEXT, '
@@ -3257,6 +3317,18 @@ class FakeDriver:
         data['effort'] = ids.get(label, label.lower())
         with self.lock:
             path.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8')
+        return 'fake'
+
+    def set_fast(self, app, doc, on):
+        """Writes service_tier to the fake Codex's config.toml, as the desktop app does."""
+        self.calls.append(('set_fast', app, on))
+        if self.open_doc.get(app) != doc:
+            raise ActionError('title-mismatch', '')
+        source = self.hub.sources[app]
+        if source.fast() == on:
+            return 'already'
+        with self.lock:
+            (source.home / 'config.toml').write_text(f'service_tier = "{"fast" if on else "default"}"\n', encoding='utf-8')
         return 'fake'
 
     def set_mode(self, app, doc, label):
@@ -3476,7 +3548,7 @@ def build_driving(hub, driver, notify, pc_name, cfg, interval, verify_seconds, m
     runner = ActionRunner(hub, driver, hub.presence, watcher, notify, pc_name, hub.strings,
                           idle_seconds=int(cfg.get('idle_seconds', 60)), verify_seconds=verify_seconds)
     hub.capabilities = ['read', 'send', 'permission', 'new', 'open', 'question', 'model', 'effort', 'mode', 'stop',
-                        'photo', 'launch', 'photos', 'popups']
+                        'photo', 'launch', 'photos', 'popups', 'fast']
     hub.alerts = dict(hub.alerts, **(cfg.get('alerts') or {}))
     threading.Thread(target=watcher.run_forever, daemon=True).start()
     threading.Thread(target=runner.run_forever, daemon=True).start()

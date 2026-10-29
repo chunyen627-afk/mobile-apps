@@ -640,24 +640,25 @@ final class DeskRemoteUITests: XCTestCase {
         XCTAssertTrue(text("• 先改設定").exists, "the list has no bullets")
     }
 
-    func test35FirstScreenShowsEachAppsLastConversation() throws {
+    func test35FirstScreenLinksToEachPCsNewestConversations() throws {
         // As if the user had last looked long ago: the conversations are all new.
         try launchWithHelper(environment: ["DESK_UI_SEEN_BEFORE": "2000-01-01T00:00:00Z"])
-        let claude = element("pc-latest-示範電腦-claude")
-        let codex = element("pc-latest-示範電腦-codex")
-        XCTAssertTrue(codex.waitForExistence(timeout: 15), "the Codex line is not on the first screen")
-        XCTAssertTrue(claude.exists, "the Claude line is not on the first screen")
-        XCTAssertTrue(claude.label.contains("Claude") && codex.label.contains("Codex"), "\(said(claude)) / \(said(codex))")
-        // One being written now shows "回覆中" instead of a dot, so whichever is idle is checked.
-        let marked = poll(timeout: 10) { [claude, codex].contains { ($0.value as? String) == "有新訊息" } }
-        snapshot("35-latest")
-        XCTAssertTrue(marked, "nothing is marked new: \(said(claude)) / \(said(codex))")
-        let row = (codex.value as? String) == "有新訊息" ? codex : claude
-        row.tap()
-        XCTAssertTrue(element("new-session").waitForExistence(timeout: 10), "the line did not open the conversation list")
+        let codex = element("pc-recent-示範電腦-\(codexY)")
+        XCTAssertTrue(codex.waitForExistence(timeout: 15), "Codex's conversation is not on the first screen")
+        let links = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'pc-recent-示範電腦-'"))
+        let labels = links.allElementsBoundByIndex.map(\.label)
+        XCTAssertTrue(labels.contains { $0.contains("Claude") } && labels.contains { $0.contains("Codex") }, "\(labels)")
+        XCTAssertLessThanOrEqual(labels.count, 6, "at most three per app")
+        // Codex's older conversation (5 hours ago) is idle, so it carries the dot.
+        let marked = poll(timeout: 10) { (codex.value as? String) == "有新訊息" }
+        snapshot("35-recent")
+        XCTAssertTrue(marked, "not marked new: \(said(codex)) \(String(describing: codex.value))")
+        codex.tap()
+        XCTAssertTrue(element("chat-input").waitForExistence(timeout: 10), "the link did not open the conversation")
+        XCTAssertTrue(text("建議先做模擬器版本").waitForExistence(timeout: 10), "a different conversation opened")
         app.navigationBars.buttons.element(boundBy: 0).tap()
-        XCTAssertTrue(row.waitForExistence(timeout: 10), "back on the first screen")
-        XCTAssertTrue(poll(timeout: 5) { (row.value as? String) != "有新訊息" }, "still marked new after looking")
+        XCTAssertTrue(codex.waitForExistence(timeout: 10), "back on the first screen")
+        XCTAssertTrue(poll(timeout: 5) { (codex.value as? String) != "有新訊息" }, "still marked new after opening it")
     }
 
     func test36LongConversationOpensAtItsNewestAndJumpsBothWays() throws {
@@ -687,6 +688,32 @@ final class DeskRemoteUITests: XCTestCase {
         snapshot("36-top")
         element("chat-to-bottom").tap()
         XCTAssertTrue(poll(timeout: 6) { newest.exists && newest.isHittable }, "the bottom button did not reach the newest message")
+    }
+
+    func test37CodexFastModeSwitch() throws {
+        try launchWithHelper()
+        openChat("codex", codexX)
+        let bar = element("chat-meta")
+        XCTAssertTrue(bar.waitForExistence(timeout: 10), "meta bar missing")
+        bar.tap()
+        let toggle = app.switches["fast-toggle"]
+        XCTAssertTrue(revealInSheet(toggle), "no fast mode switch for Codex")
+        XCTAssertTrue(poll(timeout: 5) { toggle.isEnabled }, "the switch stays disabled")
+        XCTAssertEqual(toggle.value as? String, "0", "fast mode starts off")
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
+        let note = element("fast-busy")
+        XCTAssertTrue(waitFor(note, labelContains: "已切換為快速模式", timeout: 20), "did not finish: \(said(note))")
+        XCTAssertTrue(poll(timeout: 5) { toggle.value as? String == "1" }, "the switch went back off")
+        snapshot("37-fast-on")
+        element("meta-done").tap()
+        XCTAssertTrue(waitFor(bar, labelContains: "⚡", timeout: 15), "the chat's top line has no lightning: \(said(bar))")
+        // Off again, for the tests after this one.
+        bar.tap()
+        XCTAssertTrue(revealInSheet(toggle), "the switch is gone")
+        XCTAssertTrue(poll(timeout: 5) { toggle.isEnabled && toggle.value as? String == "1" }, "the sheet shows it off")
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
+        XCTAssertTrue(waitFor(note, labelContains: "已切換為標準模式", timeout: 20), "did not switch back: \(said(note))")
+        element("meta-done").tap()
     }
 
     // MARK: - Helpers

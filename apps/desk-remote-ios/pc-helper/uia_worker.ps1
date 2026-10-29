@@ -631,6 +631,71 @@ function Set-CodexModel($w, $page, $s, $label) {
   }
 }
 
+# Codex's fast mode (the lightning toggle in the model menu, read from the app's own strings
+# 10/29): the menu shows "enable fast mode" while it is off and "enable standard mode" while it
+# is on, so the label that is there tells the state and pressing it switches. Of any control type.
+function Set-CodexFast($w, $page, $s, $on) {
+  if (-not $s.fast_on -or -not $s.fast_off) { Fail 'not-supported' 'no fast mode labels' }
+  $button = Prefixed-Button $page $s.model_prefix
+  if (-not $button) { $button = Prefixed-Button $w $s.model_prefix }
+  if (-not $button) { Fail 'not-found' 'no model button on screen' }
+  $p = $null
+  if (-not $button.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$p)) { Fail 'not-invokable' 'the model button does not expand' }
+  $want = if ($on) { $s.fast_off } else { $s.fast_on }
+  $press = if ($on) { $s.fast_on } else { $s.fast_off }
+  try {
+    $p.Expand()
+    $hit = $null
+    for ($i = 0; $i -lt 12 -and -not $hit; $i++) {
+      Start-Sleep -Milliseconds 250
+      if (Find-AnyInApp $w $want) { return 'already' }
+      $hit = Find-AnyInApp $w $press
+    }
+    if (-not $hit) { Fail 'fast-failed' ("no fast mode switch in the model menu; buttons: " + ((Button-Names $w) -join ' | ')) }
+    if (-not (Invoke-Element $hit)) {
+      $t = $null
+      if ($hit.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern, [ref]$t)) { $t.Toggle() }
+      else { Fail 'not-invokable' 'the fast mode switch could not be pressed' }
+    }
+    for ($i = 0; $i -lt 12; $i++) {
+      Start-Sleep -Milliseconds 250
+      if (Find-AnyInApp $w $want) { return 'invoke' }
+    }
+    # Some menus close on a pick: open it again to read the switch.
+    if (-not (Find-AnyInApp $w $press)) {
+      $p.Expand()
+      for ($i = 0; $i -lt 8; $i++) {
+        Start-Sleep -Milliseconds 250
+        if (Find-AnyInApp $w $want) { return 'invoke' }
+      }
+    }
+    Fail 'fast-failed' 'the switch does not show the new state'
+  } finally {
+    Start-Sleep -Milliseconds 300
+    $again = Prefixed-Button $w $s.model_prefix
+    if ($again) { $q = $null; if ($again.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$q) -and ("" + $q.Current.ExpandCollapseState) -eq 'Expanded') { $q.Collapse() } }
+  }
+}
+
+function Button-Names($w) {
+  return @($w.FindAll($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Button))) |
+    ForEach-Object { $_.Current.Name } | Where-Object { $_ } | Select-Object -First 40)
+}
+
+# An element of any type named $name in the app's windows.
+function Find-AnyInApp($w, $name) {
+  $cond = New-Object System.Windows.Automation.PropertyCondition($AE::NameProperty, $name)
+  $hit = $w.FindFirst($Tree::Descendants, $cond)
+  if ($hit) { return $hit }
+  foreach ($other in $AE::RootElement.FindAll($Tree::Children, [System.Windows.Automation.Condition]::TrueCondition)) {
+    if ($other.Current.ProcessId -eq $w.Current.ProcessId -and -not (Same-Element $other $w)) {
+      $hit = $other.FindFirst($Tree::Descendants, $cond)
+      if ($hit) { return $hit }
+    }
+  }
+  return $null
+}
+
 # Elements named $name in the app's window or in its other top-level windows (menus may open in
 # a popup window of their own).
 function Find-InApp($w, $type, $name) {
@@ -1030,6 +1095,11 @@ function Run-Command($c) {
       $page = Need-Doc $w $c.doc
       if ($c.app -eq 'codex') { return @{ ok = $true; how = (Set-CodexMode $w $page $s $c.mode) } }
       return @{ ok = $true; how = (Set-ClaudeMode $w $page $s $c.mode) }
+    }
+    'fast' {
+      $w = Need-Window $c.app
+      $page = Need-Doc $w $c.doc
+      return @{ ok = $true; how = (Set-CodexFast $w $page $s ([bool]$c.on)) }
     }
     'stop' {
       $w = Need-Window $c.app

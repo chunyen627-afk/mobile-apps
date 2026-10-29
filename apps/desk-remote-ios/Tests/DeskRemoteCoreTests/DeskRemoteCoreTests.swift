@@ -362,22 +362,22 @@ final class MetaAndUsageTests: XCTestCase {
         XCTAssertEqual(press as? [String: String], ["button": "允許"])
     }
 
-    func testLatestConversationPerAppAndWhetherItIsNew() throws {
+    func testRecentConversationsAndWhetherTheyAreNew() throws {
         let state = try HelperClient.decode(HelperState.self, status: 200, data: data("""
         {"ok":true,"pc":{"name":"P","helperVersion":"0.5.12"},"capabilities":["read"],"apps":{},
          "presence":{"idleSeconds":1,"locked":false},"warnings":[],
-         "latest":{"claude":{"id":"a","title":"整理 README","updatedAt":"2026-10-29T10:00:00Z","status":"needs-action"},
-                   "codex":null}}
+         "recent":[{"app":"claude","id":"a","title":"整理 README","folder":"demo","updatedAt":"2026-10-29T10:00:00Z",
+                    "status":"needs-action","permission":null,"hasTranscript":true},
+                   {"app":"codex","id":"b","title":"回覆 A1","folder":null,"updatedAt":"2026-10-29T10:05:00Z",
+                    "status":"active","permission":null,"hasTranscript":true},
+                   {"app":"gemini","id":"c","title":"以後的 App","folder":null,"updatedAt":"2026-10-29T07:00:00Z",
+                    "status":"idle","permission":null,"hasTranscript":true}]}
         """))
-        let claude = try XCTUnwrap(state.latest(.claude))
-        XCTAssertEqual(claude.title, "整理 README")
-        XCTAssertNil(state.latest(.codex))
+        XCTAssertEqual(state.recentLinks.map(\.app), [.claude, .codex], "an app the phone does not know is skipped")
         let now = DeskText.parse("2026-10-29T10:05:00Z")!
-        XCTAssertEqual(DeskText.latestTime(claude, now: now), "等你回答・5 分鐘前")
-        let active = HelperState.Latest(id: "a", title: "t", updatedAt: "2026-10-29T10:05:00Z", status: "active")
-        XCTAssertEqual(DeskText.latestTime(active, now: now), "回覆中")
-        let idle = HelperState.Latest(id: "a", title: "t", updatedAt: "2026-10-29T07:00:00Z", status: "idle")
-        XCTAssertEqual(DeskText.latestTime(idle, now: now), "3 小時前")
+        XCTAssertEqual(DeskText.latestTime(state.recentLinks[0].session, now: now), "等你回答・5 分鐘前")
+        XCTAssertEqual(DeskText.latestTime(state.recentLinks[1].session, now: now), "回覆中")
+        XCTAssertEqual(DeskText.latestTime(state.recent![2].session, now: now), "3 小時前")
         XCTAssertTrue(DeskText.isNewer("2026-10-29T10:00:00Z", than: "2026-10-29T09:59:59Z"))
         XCTAssertFalse(DeskText.isNewer("2026-10-29T10:00:00Z", than: "2026-10-29T10:00:00Z"))
         XCTAssertFalse(DeskText.isNewer("2026-10-29T10:00:00Z", than: nil), "never looked is not news")
@@ -385,7 +385,17 @@ final class MetaAndUsageTests: XCTestCase {
         {"ok":true,"pc":{"name":"P","helperVersion":"0.5.11"},"capabilities":["read"],"apps":{},
          "presence":{"idleSeconds":1,"locked":false},"warnings":[]}
         """))
-        XCTAssertNil(old.latest(.claude), "older helpers say nothing")
+        XCTAssertEqual(old.recentLinks, [], "older helpers say nothing")
+        XCTAssertFalse(old.hasFast(.codex))
+        let fast = try HelperClient.decode(HelperState.self, status: 200, data: data("""
+        {"ok":true,"pc":{"name":"P","helperVersion":"0.5.12"},"capabilities":["read","fast"],"apps":{},
+         "presence":{"idleSeconds":1,"locked":false},"warnings":[],"fast":{"codex":true}}
+        """))
+        XCTAssertTrue(fast.hasFast(.codex))
+        XCTAssertFalse(fast.hasFast(.claude), "Claude has no fast mode")
+        XCTAssertEqual(fast.fastOn(.codex), true)
+        let request = try JSONSerialization.jsonObject(with: JSONEncoder().encode(ActionRequest(fast: false))) as? [String: Any]
+        XCTAssertEqual(request?["fast"] as? Bool, false)
     }
 
     func testMetaAndUsageText() {

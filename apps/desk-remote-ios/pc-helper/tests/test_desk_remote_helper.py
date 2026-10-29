@@ -1106,24 +1106,63 @@ class MoreControlsTests(FakeEnvironment):
         self.assertEqual(runner.submit('send', 'claude', A, {'images': photos[:1] + ['bad']})[0], 400)
 
 
-class LatestTests(FakeEnvironment):
-    """The phone's PC list shows each app's last conversation time (10/29)."""
+class FastModeTests(FakeEnvironment):
+    """Codex's lightning switch (asked 10/29): read from config.toml, pressed in the model menu."""
+
+    def test_config_says_whether_fast_mode_is_on(self):
+        source = self.sources['codex']
+        config = source.home / 'config.toml'
+        self.assertFalse(source.fast(), 'the fake setup starts with it off')
+        config.unlink()
+        self.assertIsNone(source.fast(), 'no config file')
+        config.write_text('model = "gpt-6.1-sol"\nservice_tier = "default"\n[profiles.quick]\nservice_tier = "fast"\n',
+                          encoding='utf-8')
+        self.assertFalse(source.fast())
+        config.write_text('profile = "quick"\nservice_tier = "default"\n[profiles.quick]\nservice_tier = "fast"\n',
+                          encoding='utf-8')
+        self.assertTrue(source.fast(), 'the active profile wins')
+        config.write_text('service_tier = "ultrafast"  # set from the app\n', encoding='utf-8')
+        self.assertTrue(source.fast())
+
+    def test_the_phone_switches_it_and_the_state_shows_it(self):
+        hub, driver, _, runner = drive(self.fake)
+        (self.sources['codex'].home / 'config.toml').write_text('service_tier = "default"\n', encoding='utf-8')
+        self.assertEqual(hub.state()['fast'], {}, 'only once windows can be driven')
+        hub.capabilities = hub.capabilities + ['fast']  # as build_driving sets it
+        self.assertEqual(hub.state()['fast'], {'codex': False})
+        code, body = runner.submit('fast', 'codex', X, {'fast': True})
+        self.assertEqual(code, 202, body)
+        run_all(runner)
+        status = runner.status(body['id'])
+        self.assertEqual((status['state'], status['verified'], status['message']), ('done', True, '已切換為快速模式'), status)
+        self.assertEqual(hub.state()['fast'], {'codex': True})
+        body = runner.submit('fast', 'codex', X, {'fast': True})[1]
+        run_all(runner)
+        self.assertEqual(runner.status(body['id'])['message'], '本來就是快速模式')
+        self.assertEqual(runner.submit('fast', 'claude', A, {'fast': True})[0], 400, 'Claude has no fast mode')
+        self.assertEqual(runner.submit('fast', 'codex', X, {'fast': 'yes'})[0], 400)
+
+
+class RecentTests(FakeEnvironment):
+    """The phone's PC list links straight to each PC's newest conversations (10/29)."""
 
     def test_a_rollout_written_after_its_index_time_counts_and_leads_the_list(self):
         hub = drive(self.fake)[0]
         written = time.time() + 120
         os.utime(self.sources['codex'].transcript_path(Y), (written, written))
         self.assertEqual({r['id']: r['updatedAt'] for r in self.sources['codex'].list_sessions(50)}[Y], h.iso(written))
-        latest = hub.state()['latest']
-        self.assertEqual(latest['codex'], {'id': Y, 'title': '評估 iPhone App 的做法', 'updatedAt': h.iso(written),
-                                           'status': 'active'})  # written within the last minute
-        self.assertEqual(latest['claude']['updatedAt'],
-                         max(r['updatedAt'] for r in self.sources['claude'].list_sessions(50)))
+        recent = hub.state()['recent']
+        self.assertEqual((recent[0]['app'], recent[0]['id'], recent[0]['updatedAt']), ('codex', Y, h.iso(written)))
+        self.assertEqual(recent[0]['status'], 'active')  # written within the last minute
+        self.assertEqual(recent[0]['title'], '評估 iPhone App 的做法')
+        self.assertEqual([r['updatedAt'] for r in recent], sorted((r['updatedAt'] for r in recent), reverse=True))
+        self.assertEqual(sum(r['app'] == 'claude' for r in recent), 3, 'three per app')
+        self.assertEqual(sum(r['app'] == 'codex' for r in recent), 2, 'Codex has two listed conversations')
 
-    def test_an_app_without_conversations_is_none(self):
+    def test_an_app_without_conversations_is_left_out(self):
         hub = drive(self.fake)[0]
         hub.sources['codex'].list_sessions = lambda limit, now=None: []
-        self.assertIsNone(hub.state()['latest']['codex'])
+        self.assertEqual({r['app'] for r in hub.state()['recent']}, {'claude'})
 
 
 class PopupTests(FakeEnvironment):

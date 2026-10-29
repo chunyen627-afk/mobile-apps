@@ -121,7 +121,7 @@ struct DeskChatView: View {
         .safeAreaInset(edge: .top, spacing: 0) {
             VStack(spacing: 0) {
                 if let line = DeskText.metaLine(log.meta) {
-                    DeskMetaBar(line: line) { showingMeta = true }
+                    DeskMetaBar(line: (pcState?.fastOn(app) == true ? "⚡ " : "") + line) { showingMeta = true }
                 }
                 if let failure {
                     DeskNotice(text: failure, tint: .red)

@@ -29,15 +29,16 @@ struct DeskPCListView: View {
                         Button(role: .destructive) { store.delete(pc.id) } label: { Label("移除", systemImage: "trash") }
                         Button { editing = .edit(pc) } label: { Label("編輯", systemImage: "pencil") }
                     }
-                    // Each desktop app's last conversation, straight into its list (asked 10/29:
-                    // see from the first screen which of the four was written to).
-                    ForEach(DeskApp.allCases, id: \.self) { app in
-                        if let latest = store.latest(pc.id, app) {
-                            NavigationLink(value: DeskRoute.sessions(pc.id, app)) {
-                                DeskLatestRow(app: app, latest: latest, new: store.isNew(pc.id, app))
+                    // The PC's newest conversations, straight into each (asked 10/29: see from the
+                    // first screen which desktop was written to, and go there in one tap).
+                    ForEach(store.recent[pc.id] ?? []) { link in
+                        if let app = link.app {
+                            NavigationLink(value: DeskRoute.chat(pc.id, app, link.session)) {
+                                DeskLatestRow(app: app, session: link.session, new: store.isNew(pc.id, link))
                             }
-                            .accessibilityIdentifier("pc-latest-\(pc.name)-\(app.rawValue)")
-                            .accessibilityValue(store.isNew(pc.id, app) ? "有新訊息" : "")
+                            .disabled(!link.session.hasTranscript)
+                            .accessibilityIdentifier("pc-recent-\(pc.name)-\(link.session.id)")
+                            .accessibilityValue(store.isNew(pc.id, link) ? "有新訊息" : "")
                         }
                     }
                 }
@@ -110,11 +111,11 @@ struct DeskPCRow: View {
     }
 }
 
-/// One app's last conversation: a blue dot when it was written after the user last looked,
-/// then the app, its time ("回覆中", "5 分鐘前") and the conversation's title.
+/// One of a PC's newest conversations: a blue dot when it was written after the user last
+/// looked, then the app, its time ("回覆中", "5 分鐘前") and the conversation's title.
 struct DeskLatestRow: View {
     let app: DeskApp
-    let latest: HelperState.Latest
+    let session: SessionSummary
     let new: Bool
 
     var body: some View {
@@ -129,12 +130,12 @@ struct DeskLatestRow: View {
                     Spacer()
                     // "5 分鐘前" keeps counting while the PC reports nothing new.
                     TimelineView(.periodic(from: .now, by: 30)) { context in
-                        Text(DeskText.latestTime(latest, now: context.date))
+                        Text(DeskText.latestTime(session, now: context.date))
                             .font(.footnote)
-                            .foregroundStyle(latest.status == "needs-action" ? Color.orange : latest.status == "active" ? Color.green : Color.secondary)
+                            .foregroundStyle(session.status == "needs-action" ? Color.orange : session.status == "active" ? Color.green : Color.secondary)
                     }
                 }
-                Text(latest.title)
+                Text(session.title)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)

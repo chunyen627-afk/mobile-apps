@@ -64,6 +64,9 @@ struct DeskModelSheet: View {
     @State private var busy: [DeskPick: String] = [:]
     @State private var working = false
     @State private var confirm: DeskConfirm?
+    /// The switch as the user flipped it, until the PC's setting says the same.
+    @State private var fastShown: Bool?
+    @State private var fastNote: String?
 
     var body: some View {
         NavigationStack {
@@ -105,6 +108,27 @@ struct DeskModelSheet: View {
                         ProgressView()
                     } else {
                         Text("電腦端沒有這個 App 的額度資料").font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
+                // Codex's lightning switch in its model menu (asked 10/29).
+                if let state, state.hasFast(app) {
+                    Section {
+                        Toggle(isOn: Binding(get: { fastShown ?? state.fastOn(app) ?? false },
+                                             set: { on in Task { await setFast(on, force: false) } })) {
+                            Label("快速模式", systemImage: "bolt.fill")
+                        }
+                        .disabled(working || state.fastOn(app) == nil)
+                        .accessibilityIdentifier("fast-toggle")
+                        if let note = fastNote {
+                            Text(note).font(.caption).foregroundStyle(.secondary)
+                                .accessibilityIdentifier("fast-busy")
+                        }
+                    } header: {
+                        Text("閃電加速")
+                    } footer: {
+                        Text(state.fastOn(app) == nil
+                             ? "讀不到電腦上 Codex 的設定，現在不能切換。"
+                             : "回覆比較快，但用量較高；這是 Codex 的整體設定，會套用到所有對話。")
                     }
                 }
                 ForEach(DeskPick.allCases, id: \.self) { kind in
@@ -166,6 +190,33 @@ struct DeskModelSheet: View {
         } catch {
             failure = DeskText.failure(.unreachable)
         }
+    }
+
+    private func setFast(_ on: Bool, force: Bool) async {
+        guard let client = store.client(pcID) else { return }
+        fastShown = on
+        fastNote = on ? "正在電腦上開啟快速模式…" : "正在電腦上改回標準模式…"
+        working = true
+        defer { working = false }
+        do {
+            let start = try await client.setFast(app, session: session.id, on: on, force: force)
+            let end = try await client.follow(start, timeout: 60) { status in fastNote = status.message }
+            fastNote = end.state == "failed" ? "沒有成功：\(end.message)" : end.message
+        } catch HelperFailure.busyUser(let seconds) {
+            fastNote = nil
+            confirm = DeskConfirm(
+                title: "電腦有人在用",
+                message: "\(seconds.map { "\($0) 秒前" } ?? "剛剛")有人操作過這台電腦。切換會打開電腦上 Codex 的模型選單。",
+                confirmLabel: "仍要切換",
+                run: { await setFast(on, force: true) },
+                cancel: { fastShown = nil })
+        } catch let error as HelperFailure {
+            fastNote = "沒有成功：\(DeskText.failure(error))"
+        } catch {
+            fastNote = "沒有成功：\(DeskText.failure(.unreachable))"
+        }
+        await load()
+        fastShown = nil
     }
 
     private func pick(_ kind: DeskPick, _ option: String, force: Bool) async {

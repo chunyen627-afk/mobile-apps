@@ -55,22 +55,26 @@ public struct HelperState: Decodable, Equatable, Sendable {
     public let stop: [String]?
     /// Windows that popped up on the PC and wait for an answer (helper 0.5.11).
     public let popups: [Popup]?
-    /// Each app's most recently written conversation, nil per app with none (helper 0.5.12).
-    public let latest: [String: Latest?]?
+    /// Each app's few newest conversations, newest first (helper 0.5.12).
+    public let recent: [Recent]?
+    /// Codex's fast mode (the lightning switch), nil while its setting cannot be read (helper 0.5.12).
+    public let fast: [String: Bool?]?
 
-    /// What the PC list shows per app: the last conversation and when it was written.
-    public struct Latest: Decodable, Equatable, Hashable, Sendable {
-        public let id: String
-        public let title: String
-        public let updatedAt: String
-        /// "active" (being written now), "needs-action" or "idle".
-        public let status: String
+    /// One of the PC list's links: a conversation and the desktop app it is in.
+    public struct Recent: Decodable, Equatable, Hashable, Identifiable, Sendable {
+        /// Text, so an app this phone does not know yet does not spoil the whole state.
+        public let appName: String
+        public let session: SessionSummary
 
-        public init(id: String, title: String, updatedAt: String, status: String) {
-            self.id = id
-            self.title = title
-            self.updatedAt = updatedAt
-            self.status = status
+        public var app: DeskApp? { DeskApp(rawValue: appName) }
+        public var id: String { "\(appName)/\(session.id)" }
+
+        private enum Keys: String, CodingKey { case app }
+
+        /// The helper sends the conversation's own fields with `app` beside them.
+        public init(from decoder: Decoder) throws {
+            appName = try decoder.container(keyedBy: Keys.self).decode(String.self, forKey: .app)
+            session = try SessionSummary(from: decoder)
         }
     }
 
@@ -92,11 +96,15 @@ public struct HelperState: Decodable, Equatable, Sendable {
     public var photoLimit: Int { can("photos") ? 10 : 1 }
 
     public func app(_ app: DeskApp) -> AppState? { apps[app.rawValue] }
-    public func latest(_ app: DeskApp) -> Latest? { latest?[app.rawValue] ?? nil }
+    /// Links for the PC list; an app the phone does not know (a newer helper) is skipped.
+    public var recentLinks: [Recent] { (recent ?? []).filter { $0.app != nil } }
     public func usage(_ app: DeskApp) -> PlanUsage? { usage?[app.rawValue] ?? nil }
     public func models(_ app: DeskApp) -> [String] { can("model") ? models?[app.rawValue] ?? [] : [] }
     public func efforts(_ app: DeskApp) -> [String] { can("effort") ? efforts?[app.rawValue] ?? [] : [] }
     public func modes(_ app: DeskApp) -> [String] { can("mode") ? modes?[app.rawValue] ?? [] : [] }
+    /// The app has a fast mode the phone can switch.
+    public func hasFast(_ app: DeskApp) -> Bool { can("fast") && fast?.keys.contains(app.rawValue) == true }
+    public func fastOn(_ app: DeskApp) -> Bool? { fast?[app.rawValue] ?? nil }
     public func canStop(_ app: DeskApp) -> Bool { can("stop") && (stop ?? []).contains(app.rawValue) }
 
     /// "read", "send", "permission", "new", "open".
@@ -187,6 +195,8 @@ struct ActionRequest: Encodable {
     var images: [String]?
     /// The button to press in a window that popped up on the PC.
     var button: String?
+    /// Codex's fast mode on or off (helper 0.5.12, capability "fast").
+    var fast: Bool?
     var force: Bool?
 }
 
