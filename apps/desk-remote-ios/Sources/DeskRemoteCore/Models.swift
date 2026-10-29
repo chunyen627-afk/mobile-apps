@@ -53,6 +53,25 @@ public struct HelperState: Decodable, Equatable, Sendable {
     public let modes: [String: [String]]?
     /// Apps whose running turn the phone can stop.
     public let stop: [String]?
+    /// Windows that popped up on the PC and wait for an answer (helper 0.5.11).
+    public let popups: [Popup]?
+
+    /// A window on the PC's desktop waiting for a button (a firewall question, a message box);
+    /// while it is there the desktop apps cannot come to the front, so nothing can be sent.
+    public struct Popup: Decodable, Equatable, Hashable, Identifiable, Sendable {
+        public let id: String
+        public let title: String
+        /// The program that showed it, e.g. "SecurityHealthHost".
+        public let process: String
+        public let text: String
+        public let buttons: [String]
+
+        public var name: String { title.isEmpty ? process : title }
+    }
+
+    public var shownPopups: [Popup] { can("popups") ? popups ?? [] : [] }
+    /// How many photos one message may carry: helpers before 0.5.11 take one.
+    public var photoLimit: Int { can("photos") ? 10 : 1 }
 
     public func app(_ app: DeskApp) -> AppState? { apps[app.rawValue] }
     public func usage(_ app: DeskApp) -> PlanUsage? { usage?[app.rawValue] ?? nil }
@@ -145,6 +164,10 @@ struct ActionRequest: Encodable {
     var mode: String?
     /// A photo (JPEG, base64) pasted into the conversation before the text.
     var image: String?
+    /// Several photos, pasted in this order (helper 0.5.11, capability "photos").
+    var images: [String]?
+    /// The button to press in a window that popped up on the PC.
+    var button: String?
     var force: Bool?
 }
 

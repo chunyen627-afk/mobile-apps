@@ -316,6 +316,7 @@ def drive(fake, presence=None, driver_class=None, notify=None):
     watcher = h.UiWatcher(hub, driver, notify, '示範電腦')
     hub.prompts = watcher.prompt_for
     hub.ui = watcher.current
+    hub.popups = watcher.popup_list
     runner = h.ActionRunner(hub, driver, hub.presence, watcher, notify, '示範電腦', hub.strings,
                             verify_seconds=3, doc_wait=1, settle_seconds=0)
     watcher.tick()
@@ -1076,7 +1077,7 @@ class MoreControlsTests(FakeEnvironment):
         self.assertEqual((status['state'], status['verified']), ('done', True), status)
         self.assertIn(('send', 'claude', hub.info('claude', A)['doc'], ('image', len(JPEG))), driver.calls)
         self.assertEqual(set(glob_photos()), before, 'the photo file was left behind')
-        self.assertIsNone(runner.actions[body['id']]['image'], 'the photo stayed in memory')
+        self.assertEqual(runner.actions[body['id']]['images'], [], 'the photo stayed in memory')
         # A photo alone (no text) also counts once the transcript shows it.
         body = runner.submit('send', 'codex', X, {'image': base64.b64encode(JPEG).decode()})[1]
         run_all(runner)
@@ -1084,6 +1085,112 @@ class MoreControlsTests(FakeEnvironment):
         bad = runner.submit('send', 'claude', A, {'text': 'x', 'image': base64.b64encode(b'GIF89a...').decode()})
         self.assertEqual(bad[0], 400)
         self.assertEqual(runner.submit('send', 'claude', A, {'text': 'x', 'image': 'not base64!'})[0], 400)
+
+    def test_several_photos_go_in_one_message(self):
+        import base64
+        hub, driver, _, runner = drive(self.fake)
+        before = set(glob_photos())
+        photos = [base64.b64encode(JPEG + bytes([n])).decode() for n in range(3)]
+        code, body = runner.submit('send', 'claude', A, {'text': '三張', 'images': photos})
+        self.assertEqual(code, 202, body)
+        run_all(runner)
+        self.assertEqual(runner.status(body['id'])['verified'], True)
+        self.assertIn(('send', 'claude', hub.info('claude', A)['doc']) + (('image', len(JPEG) + 1),) * 3, driver.calls)
+        self.assertEqual(set(glob_photos()), before, 'a photo file was left behind')
+        events = hub.events('claude', A, 0, '', 0)['events']
+        self.assertEqual([e['text'] for e in events if e['kind'] == 'user'][-4:], ['[圖片]'] * 3 + ['三張'])
+        # Photos alone, at most ten, every one a JPEG or PNG.
+        self.assertEqual(runner.submit('send', 'codex', X, {'images': photos[:2]})[0], 202)
+        self.assertEqual(runner.submit('send', 'claude', A, {'images': photos * 4})[0], 400)
+        self.assertEqual(runner.submit('send', 'claude', A, {'images': []})[0], 400)
+        self.assertEqual(runner.submit('send', 'claude', A, {'images': photos[:1] + ['bad']})[0], 400)
+
+
+class PopupTests(FakeEnvironment):
+    """A window that pops up on the desktop (a firewall question blocked sending, 10/29)."""
+
+    def popup_setup(self, presence=None):
+        sent = []
+        hub, driver, watcher, runner = drive(self.fake, presence, notify=lambda *a: sent.append(a))
+        driver.fake_popups = [dict(h.FAKE_POPUP)]
+        sent.clear()
+        watcher.tick()
+        return hub, driver, watcher, runner, sent
+
+    def test_a_popup_is_told_once_and_listed_for_the_phone(self):
+        hub, driver, watcher, _, sent = self.popup_setup()
+        self.assertEqual(len(sent), 1, sent)
+        title, message = sent[0][0], sent[0][1]
+        self.assertIn('Windows 安全性', title)
+        self.assertIn('是否要允許', message)
+        watcher.tick()
+        self.assertEqual(len(sent), 1, 'told again about the same window')
+        popups = hub.state()['popups']
+        self.assertEqual([(p['title'], p['buttons']) for p in popups], [('Windows 安全性', ['允許', '取消'])])
+        self.assertNotIn('hwnd', popups[0])
+        driver.fake_popups = []
+        watcher.tick()
+        self.assertEqual(hub.state()['popups'], [])
+
+    def test_the_phone_presses_one_of_its_buttons(self):
+        hub, driver, watcher, runner, sent = self.popup_setup()
+        popup = hub.state()['popups'][0]
+        self.assertEqual(runner.submit('popup', None, popup['id'], {'button': '刪除'})[0], 400)
+        self.assertEqual(runner.submit('popup', None, 'ffffffffffff', {'button': '允許'})[0], 404)
+        code, body = runner.submit('popup', None, popup['id'], {'button': '允許'})
+        self.assertEqual(code, 202, body)
+        run_all(runner)
+        status = runner.status(body['id'])
+        self.assertEqual((status['state'], status['verified']), ('done', True), status)
+        self.assertIn('已在電腦上按「允許」', status['message'])
+        self.assertIn(('press_popup', 'Windows 安全性', '允許'), driver.calls)
+        self.assertEqual(hub.state()['popups'], [])
+        self.assertEqual(len(sent), 1, 'a press the phone asked for was notified')
+
+    def test_pressing_needs_no_idle_pc_and_a_gone_window_fails(self):
+        presence = dict(self.fake.cfg['presence'], idleSeconds=3)
+        hub, driver, watcher, runner, sent = self.popup_setup(presence)
+        popup = hub.state()['popups'][0]
+        body = runner.submit('popup', None, popup['id'], {'button': '取消'})[1]
+        driver.fake_popups = []
+        watcher.tick()
+        run_all(runner)
+        status = runner.status(body['id'])
+        self.assertEqual((status['state'], status['error']), ('failed', 'popup-gone'), status)
+        self.assertIn('⚠️ 手機按電腦上的視窗失敗', sent[-1][0])
+
+    def test_a_send_blocked_by_a_popup_says_so(self):
+        class BlockedDriver(h.FakeDriver):
+            def send(self, app, doc, text, images=None):
+                raise h.ActionError('focus-failed', 'could not bring the window to the front; in front: SecurityHealthHost')
+        hub, driver, watcher, runner = drive(self.fake, driver_class=BlockedDriver)
+        driver.fake_popups = [dict(h.FAKE_POPUP)]
+        watcher.tick()
+        body = runner.submit('send', 'claude', A, {'text': 'hello'})[1]
+        run_all(runner)
+        self.assertIn('電腦上有跳出的視窗擋著', runner.status(body['id'])['message'])
+
+    def test_the_route_takes_a_press(self):
+        hub, driver, watcher, runner, _ = self.popup_setup()
+        popup = hub.state()['popups'][0]
+        server = ThreadingHTTPServer(('127.0.0.1', 0), h.handler_for(hub, h.AuthGate(TOKEN), [ipaddress.ip_network('127.0.0.0/8')], runner))
+        server.daemon_threads = True
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+
+        def post(path):
+            request = urllib.request.Request(f'http://127.0.0.1:{server.server_address[1]}{path}', method='POST',
+                                             data=json.dumps({'button': '允許'}).encode('utf-8'),
+                                             headers={'Authorization': f'Bearer {TOKEN}'})
+            try:
+                with urllib.request.urlopen(request, timeout=10) as response:
+                    return response.status, json.loads(response.read())
+            except urllib.error.HTTPError as exc:
+                return exc.code, json.loads(exc.read())
+        code, body = post(f'/v1/popups/{popup["id"]}/press')
+        self.assertEqual((code, body['kind'], body['app']), (202, 'popup', ''), body)
+        self.assertEqual(post('/v1/popups/nothex/press')[0], 404)
 
     def test_effort_and_mode_switch_and_show_in_meta(self):
         hub, driver, watcher, runner = drive(self.fake)

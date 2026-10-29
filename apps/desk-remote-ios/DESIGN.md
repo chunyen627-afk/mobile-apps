@@ -228,6 +228,7 @@ iPhone App ──HTTP（只走 ZeroTier，Bearer token）──▶ 小幫手 des
 | `POST /v1/{app}/sessions/{id}/permission` | `{promptId, decision: allow_once\|deny}` |
 | `POST /v1/{app}/sessions` | 新對話 `{text, project?}` |
 | `POST /v1/{app}/launch` | 叫出桌面版視窗（沒開就啟動、縮在系統匣就叫回）`{force?}`；能力 `launch` |
+| `POST /v1/popups/{id}/press` | 按下電腦上跳出視窗的按鈕 `{button}`；能力 `popups`。視窗列在 `state.popups`：頂層、看得到、不能縮到最小（或標準對話框 `#32770`）且有按鈕的視窗，排除殼層與通知；標準對話框的按鈕用 Win32 子視窗讀與按（受管理的 UI Automation 只看到無名窗格），其他用 UI Automation Invoke。按之前確認標題沒變；以系統管理員身分執行的視窗可能按不到（UIPI） |
 | `GET /v1/actions/{actionId}` | 動作結果：`queued\|running\|done\|failed`＋原因 |
 | `GET /v1/elevate` | 待核准清單（含內容、nonce、到期） |
 | `POST /v1/elevate/{nonce}` | `{decision, hmac}` |

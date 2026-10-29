@@ -11,9 +11,17 @@ struct DeskPCView: View {
     @State private var unreachable = false
     @State private var editing: DeskPCEditTarget?
     @StateObject private var elevate = DeskElevateModel()
+    @StateObject private var presser = DeskPopupPresser()
 
     var body: some View {
         List {
+            if let state, !state.shownPopups.isEmpty || presser.result != nil {
+                Section("電腦跳出的視窗") {
+                    DeskPopupList(popups: state.shownPopups, presser: presser) { popup, button in
+                        Task { await presser.press(popup, button, client: store.client(pcID)) { await refresh() } }
+                    }
+                }
+            }
             Section {
                 if let failure {
                     DeskNotice(text: failure, tint: .red)
@@ -79,7 +87,8 @@ struct DeskPCView: View {
             }
         }
         .sheet(item: $editing) { DeskPCEditView(store: store, target: $0) }
-        .deskForegroundLoop(every: 15, failing: { unreachable }) { await refresh() }
+        // A window waiting on the PC is looked at more often, so its card goes once it is answered.
+        .deskForegroundLoop(every: 15, failing: { unreachable || state?.shownPopups.isEmpty == false }) { await refresh() }
         .refreshable { await refresh() }
     }
 

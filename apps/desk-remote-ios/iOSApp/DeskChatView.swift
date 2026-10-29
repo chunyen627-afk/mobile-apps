@@ -28,8 +28,11 @@ struct DeskChatView: View {
     @State private var sawPrompt = false
     @State private var showingMeta = false
     @State private var stopState: String?
-    /// A photo picked for the next message, already made small enough to send.
-    @State private var photo: Data?
+    /// Photos picked for the next message, in order, already made small enough to send.
+    @State private var photos: [Data] = []
+    /// The PC's state, for the windows that popped up on it and how many photos it takes.
+    @State private var pcState: HelperState?
+    @StateObject private var presser = DeskPopupPresser()
     @FocusState private var inputFocused: Bool
 
     var body: some View {
@@ -118,8 +121,17 @@ struct DeskChatView: View {
                         .background(Color(.systemBackground))
                         .accessibilityIdentifier("chat-error")
                 }
+                // A window waiting on the PC keeps messages from going through: answer it here.
+                if let popups = pcState?.shownPopups, !popups.isEmpty || presser.result != nil {
+                    DeskPopupList(popups: popups, presser: presser, compact: true) { popup, button in
+                        Task { await presser.press(popup, button, client: store.client(pcID)) { await refreshPC() } }
+                    }
+                    .padding(8)
+                    .background(Color(.systemBackground))
+                }
             }
         }
+        .deskForegroundLoop(every: 10) { await refreshPC() }
         .sheet(isPresented: $showingMeta) {
             DeskModelSheet(store: store, pcID: pcID, app: app, session: session, meta: log.meta)
         }
@@ -128,7 +140,8 @@ struct DeskChatView: View {
                 if let suggestions = log.suggestions, pending.isEmpty, log.question == nil, log.prompt == nil {
                     DeskQuickReplies(suggestions: suggestions) { reply in submit(reply.message) }
                 }
-                DeskInputBar(text: $draft, photo: $photo, focused: $inputFocused) { submitDraft() }
+                DeskInputBar(text: $draft, photos: $photos, limit: pcState?.photoLimit ?? 1,
+                             focused: $inputFocused) { submitDraft() }
             }
         }
         .alert(confirm?.title ?? "", isPresented: Binding(get: { confirm != nil }, set: { if !$0 { confirm = nil } }),
@@ -211,16 +224,16 @@ struct DeskChatView: View {
 
     private func submitDraft() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty || photo != nil else { return }
+        guard !text.isEmpty || !photos.isEmpty else { return }
         draft = ""
-        submit(text, photo: photo)
-        photo = nil
+        submit(text, photos: photos)
+        photos = []
     }
 
-    /// Sends typed text (with the picked photo) or a quick reply's message the same way.
-    private func submit(_ text: String, photo: Data? = nil) {
+    /// Sends typed text (with the picked photos) or a quick reply's message the same way.
+    private func submit(_ text: String, photos: [Data] = []) {
         stopState = nil
-        let item = DeskPending(text: text, mark: log.events.last?.seq ?? 0, photo: photo)
+        let item = DeskPending(text: text, mark: log.events.last?.seq ?? 0, photos: photos)
         pending.append(item)
         Task { await send(item, force: false) }
     }
@@ -247,7 +260,7 @@ struct DeskChatView: View {
         setPending(item.id) { $0.status = "送出中…"; $0.failed = false }
         do {
             let start = try await client.send(app, session: session.id, text: item.text,
-                                              clientMsgId: item.id.uuidString, image: item.photo, force: force)
+                                              clientMsgId: item.id.uuidString, images: item.photos, force: force)
             setPending(item.id) { $0.status = start.message }
             let end = try await client.follow(start) { status in setPending(item.id) { $0.status = status.message } }
             setPending(item.id) {
@@ -268,6 +281,13 @@ struct DeskChatView: View {
         } catch {
             setPending(item.id) { $0.status = "沒有送出：\(DeskText.failure(.unreachable))"; $0.failed = true }
         }
+        if pending.first(where: { $0.id == item.id })?.failed == true { await refreshPC() }
+    }
+
+    /// The PC's state: windows that popped up on it, and how many photos one message may carry.
+    private func refreshPC() async {
+        guard let client = store.client(pcID), let fresh = try? await client.state() else { return }
+        pcState = fresh
     }
 
     // MARK: - Permission and opening on the PC
@@ -345,7 +365,7 @@ struct DeskPending: Identifiable, Equatable {
     let text: String
     /// The newest event seq when it was sent; the transcript must show it after this.
     let mark: Int?
-    var photo: Data?
+    var photos: [Data] = []
     var status = "排隊中"
     var failed = false
 }
@@ -369,15 +389,31 @@ struct DeskPendingBubble: View {
         HStack {
             Spacer(minLength: 40)
             VStack(alignment: .trailing, spacing: 4) {
-                if let photo = item.photo, let image = UIImage(data: photo) {
+                if item.photos.count == 1, let image = UIImage(data: item.photos[0]) {
                     Image(uiImage: image)
                         .resizable()
                         .scaledToFit()
                         .frame(maxWidth: 160, maxHeight: 160)
                         .clipShape(RoundedRectangle(cornerRadius: 10))
                         .accessibilityLabel("照片")
+                } else if item.photos.count > 1 {
+                    LazyVGrid(columns: Array(repeating: GridItem(.fixed(64), spacing: 4), count: min(3, item.photos.count)),
+                              alignment: .trailing, spacing: 4) {
+                        ForEach(item.photos.indices, id: \.self) { index in
+                            if let image = UIImage(data: item.photos[index]) {
+                                Image(uiImage: image)
+                                    .resizable()
+                                    .scaledToFill()
+                                    .frame(width: 64, height: 64)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                            }
+                        }
+                    }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("\(item.photos.count) 張照片")
+                    .accessibilityIdentifier("pending-photos")
                 }
-                Text(item.text.isEmpty ? "（只有照片）" : item.text)
+                Text(item.text.isEmpty ? (item.photos.count > 1 ? "（只有 \(item.photos.count) 張照片）" : "（只有照片）") : item.text)
                     .padding(10)
                     .background(Color.accentColor.opacity(item.failed ? 0.08 : 0.12), in: RoundedRectangle(cornerRadius: 12))
                     .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.accentColor.opacity(0.35),
@@ -687,10 +723,12 @@ struct DeskOpenOnPC: View {
 /// The native input bar: multi-line, the iOS keyboard and dictation; sends on the button.
 struct DeskInputBar: View {
     @Binding var text: String
-    @Binding var photo: Data?
+    /// In the order they go out; up to `limit` (1 for helpers before 0.5.11, which take one).
+    @Binding var photos: [Data]
+    let limit: Int
     var focused: FocusState<Bool>.Binding
     let send: () -> Void
-    @State private var picked: PhotosPickerItem?
+    @State private var picked: [PhotosPickerItem] = []
     @State private var preparing = false
     @State private var shooting = false
     @StateObject private var dictation = DeskDictation()
@@ -698,24 +736,23 @@ struct DeskInputBar: View {
     private static let uiTest = ProcessInfo.processInfo.environment["DESK_UI_TEST"] == "1"
     private var canShoot: Bool { Self.uiTest || UIImagePickerController.isSourceTypeAvailable(.camera) }
 
-    private var empty: Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && photo == nil }
+    private var empty: Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && photos.isEmpty }
+    /// With room for one photo only, a new pick replaces the one there.
+    private var room: Int { limit <= 1 ? 1 : max(0, limit - photos.count) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if let photo, let image = UIImage(data: photo) {
-                HStack(alignment: .top, spacing: 6) {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(width: 64, height: 64)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                        .accessibilityIdentifier("chat-photo-preview")
-                    Button { self.photo = nil } label: { Image(systemName: "xmark.circle.fill") }
-                        .foregroundStyle(.secondary)
-                        .accessibilityLabel("移除照片")
-                        .accessibilityIdentifier("chat-photo-remove")
-                    Text("會先貼上照片，再送出文字").font(.caption2).foregroundStyle(.secondary)
+            if !photos.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(alignment: .top, spacing: 6) {
+                        ForEach(photos.indices, id: \.self) { index in
+                            thumbnail(index)
+                        }
+                    }
                 }
+                Text(photos.count > 1 ? "會先依序貼上 \(photos.count) 張照片，再送出文字" : "會先貼上照片，再送出文字")
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("chat-photo-count")
             }
             if let failure = dictation.failure {
                 Text(failure).font(.caption2).foregroundStyle(.red).accessibilityIdentifier("chat-mic-failure")
@@ -726,22 +763,54 @@ struct DeskInputBar: View {
         .padding(.vertical, 8)
         .background(.bar)
         .onChange(of: picked) {
-            guard let item = picked else { return }
+            let items = picked
+            guard !items.isEmpty else { return }
             preparing = true
             Task {
-                let data = try? await item.loadTransferable(type: Data.self)
-                photo = data.flatMap { DeskPhoto.prepare($0) }
+                var ready: [Data] = []
+                for item in items {
+                    if let data = try? await item.loadTransferable(type: Data.self), let photo = DeskPhoto.prepare(data) {
+                        ready.append(photo)
+                    }
+                }
+                add(ready)
                 preparing = false
-                picked = nil
+                picked = []
             }
         }
         .onDisappear { dictation.cancel() }
         .fullScreenCover(isPresented: $shooting) {
             DeskCamera { image in
                 shooting = false
-                photo = image.flatMap { $0.jpegData(compressionQuality: 0.9) }.flatMap { DeskPhoto.prepare($0) }
+                add([image.flatMap { $0.jpegData(compressionQuality: 0.9) }.flatMap { DeskPhoto.prepare($0) }].compactMap { $0 })
             }
             .ignoresSafeArea()
+        }
+    }
+
+    private func add(_ ready: [Data]) {
+        guard !ready.isEmpty else { return }
+        photos = limit <= 1 ? [ready[0]] : Array((photos + ready).prefix(limit))
+    }
+
+    private func thumbnail(_ index: Int) -> some View {
+        ZStack(alignment: .topTrailing) {
+            if let image = UIImage(data: photos[index]) {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 64, height: 64)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .accessibilityIdentifier("chat-photo-preview")
+            }
+            Button { photos.remove(at: index) } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(.white, .black.opacity(0.6))
+            }
+            .padding(2)
+            .accessibilityLabel("移除第 \(index + 1) 張照片")
+            .accessibilityIdentifier("chat-photo-remove")
         }
     }
 
@@ -758,11 +827,12 @@ struct DeskInputBar: View {
 
     private func shoot() {
         if Self.uiTest {
+            let colors: [UIColor] = [.systemTeal, .systemOrange, .systemPurple]
             let shot = UIGraphicsImageRenderer(size: CGSize(width: 400, height: 300)).image { context in
-                UIColor.systemTeal.setFill()
+                colors[photos.count % colors.count].setFill()
                 context.fill(CGRect(x: 0, y: 0, width: 400, height: 300))
             }
-            photo = shot.jpegData(compressionQuality: 0.9).flatMap { DeskPhoto.prepare($0) }
+            add([shot.jpegData(compressionQuality: 0.9).flatMap { DeskPhoto.prepare($0) }].compactMap { $0 })
         } else {
             shooting = true
         }
@@ -770,14 +840,15 @@ struct DeskInputBar: View {
 
     private var row: some View {
         HStack(alignment: .bottom, spacing: 8) {
-            PhotosPicker(selection: $picked, matching: .images) {
+            PhotosPicker(selection: $picked, maxSelectionCount: max(1, room), selectionBehavior: .ordered, matching: .images) {
                 Image(systemName: preparing ? "hourglass" : "photo").font(.title3)
             }
-            .accessibilityLabel("加入照片")
+            .disabled(room == 0 || preparing)
+            .accessibilityLabel(limit > 1 ? "加入照片（最多 \(limit) 張）" : "加入照片")
             .accessibilityIdentifier("chat-photo")
             if canShoot {
                 Button(action: shoot) { Image(systemName: "camera").font(.title3) }
-                    .disabled(preparing)
+                    .disabled(preparing || room == 0)
                     .accessibilityLabel("拍照")
                     .accessibilityIdentifier("chat-camera")
             }

@@ -558,7 +558,85 @@ final class DeskRemoteUITests: XCTestCase {
         snapshot("31-dictated-sent")
     }
 
+    /// A window that pops up on the PC (a firewall question kept messages from going through,
+    /// 10/29) shows on the PC page and above the chat, and its button is pressed from the phone.
+    func test32APopupOnThePCIsAnsweredFromThePhone() throws {
+        let helper = try helperSettings()
+        let port = try XCTUnwrap(ProcessInfo.processInfo.environment["DESK_POPUP_PORT"], "DESK_POPUP_PORT not set")
+        launch(pc: "示範電腦|\(helper.host)|\(port)|\(helper.token)")
+        openPC()
+        let card = element("popup-card")
+        XCTAssertTrue(card.waitForExistence(timeout: 10), "the pop-up is not on the PC page")
+        XCTAssertTrue(text("電腦跳出視窗：Windows 安全性").exists, "the pop-up has no title")
+        snapshot("32a-popup-on-pc-page")
+        let row = element("app-row-claude")
+        XCTAssertTrue(reveal(row), "Claude row missing")
+        row.tap()
+        let session = element("session-row-\(claudeA)")
+        XCTAssertTrue(session.waitForExistence(timeout: 10), "conversation missing")
+        session.tap()
+        XCTAssertTrue(element("popup-card").waitForExistence(timeout: 15), "the pop-up is not above the chat")
+        let allow = element("popup-button-允許")
+        XCTAssertTrue(allow.waitForExistence(timeout: 5), "the pop-up's button is missing")
+        allow.tap()
+        let confirm = app.buttons["按「允許」"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), "pressing was not confirmed first")
+        snapshot("32b-popup-confirm")
+        confirm.tap()
+        XCTAssertTrue(waitFor(element("popup-result"), labelContains: "已在電腦上按「允許」", timeout: 25),
+                      "result says \(said(element("popup-result")))")
+        XCTAssertTrue(poll(timeout: 15) { !self.element("popup-card").exists }, "the answered pop-up is still shown")
+        snapshot("32-popup-answered")
+    }
+
+    /// Several photos (three made-up camera shots) go out in one message, in order.
+    func test33SeveralPhotosGoInOneMessage() throws {
+        let helper = try helperSettings()
+        try launchWithHelper()
+        openChat("claude", claudeA)
+        XCTAssertTrue(text("整理好了，安裝段落改成三步").waitForExistence(timeout: 10), "chat did not load")
+        let before = try XCTUnwrap(userPhotos(helper, session: claudeA), "could not read the transcript")
+        let camera = element("chat-camera")
+        XCTAssertTrue(camera.waitForExistence(timeout: 5), "camera button missing")
+        // The PC's state (how many photos it takes) arrives just after the chat opens.
+        XCTAssertTrue(poll(timeout: 10) {
+            camera.tap()
+            return self.app.descendants(matching: .any).matching(identifier: "chat-photo-preview").count >= 2
+        }, "a second shot replaced the first")
+        camera.tap()
+        XCTAssertTrue(poll(timeout: 5) {
+            self.app.descendants(matching: .any).matching(identifier: "chat-photo-preview").count == 3
+        }, "previews: \(app.descendants(matching: .any).matching(identifier: "chat-photo-preview").count)")
+        XCTAssertTrue(waitFor(element("chat-photo-count"), labelContains: "3 張照片", timeout: 5), "count line missing")
+        let input = element("chat-input")
+        input.tap()
+        input.typeText("three shots")
+        snapshot("33a-three-photos")
+        app.buttons["chat-send"].tap()
+        XCTAssertTrue(text("（示範）收到：three shots").waitForExistence(timeout: 30), "the photos were not sent")
+        XCTAssertEqual(userPhotos(helper, session: claudeA), before + 3, "the PC did not get three photos")
+        snapshot("33-three-photos-sent")
+    }
+
     // MARK: - Helpers
+
+    /// How many photos the fake helper's transcript of `session` holds from the user.
+    private func userPhotos(_ helper: Helper, session: String) -> Int? {
+        guard let url = URL(string: "http://\(helper.host):\(helper.port)/v1/claude/sessions/\(session)/events?after=0") else { return nil }
+        var request = URLRequest(url: url, timeoutInterval: 5)
+        request.setValue("Bearer \(helper.token)", forHTTPHeaderField: "Authorization")
+        var count: Int?
+        let done = DispatchSemaphore(value: 0)
+        URLSession.shared.dataTask(with: request) { data, _, _ in
+            let page = data.flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any]
+            count = (page?["events"] as? [[String: Any]])?.filter {
+                $0["kind"] as? String == "user" && $0["text"] as? String == "[圖片]"
+            }.count
+            done.signal()
+        }.resume()
+        _ = done.wait(timeout: .now() + 6)
+        return count
+    }
 
     private struct Helper {
         let host: String

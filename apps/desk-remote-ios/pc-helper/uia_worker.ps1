@@ -44,6 +44,31 @@ public static class DeskWin {
     }, IntPtr.Zero);
     return found;
   }
+  // A standard dialog's (#32770) buttons and texts are child windows that managed UI Automation
+  // reports only as unnamed panes (a message box, 10/29): read them as windows instead.
+  [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr parent, EnumProc proc, IntPtr lParam);
+  [DllImport("user32.dll")] public static extern bool IsWindowEnabled(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern int GetDlgCtrlID(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern IntPtr GetParent(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr w, IntPtr l);
+  public static System.Collections.Generic.List<IntPtr> Children(IntPtr parent, string cls) {
+    var found = new System.Collections.Generic.List<IntPtr>();
+    EnumChildWindows(parent, (h, l) => {
+      var c = new System.Text.StringBuilder(64); GetClassName(h, c, 64);
+      if (c.ToString() == cls && IsWindowVisible(h)) found.Add(h);
+      return true;
+    }, IntPtr.Zero);
+    return found;
+  }
+  public static string Text(IntPtr hWnd) {
+    var t = new System.Text.StringBuilder(1024); GetWindowText(hWnd, t, 1024);
+    return t.ToString().Replace("&", "").Trim();
+  }
+  // What a click on the dialog's button sends to the dialog: WM_COMMAND with BN_CLICKED.
+  public static void Press(IntPtr button) {
+    SendMessage(GetParent(button), 0x0111, (IntPtr)(GetDlgCtrlID(button) & 0xFFFF), button);
+  }
 }
 "@
 $AE = [System.Windows.Automation.AutomationElement]
@@ -227,7 +252,7 @@ function Set-PrivateText($text) {
 # Pastes into the message box of $scope (the expected page) and presses Enter only after the box
 # reads back the pasted text, when it can be read at all. A box found elsewhere in the window
 # (a page still being replaced after a switch) is never used.
-function Paste-Send($w, $scope, $editName, $text, $imagePath = $null) {
+function Paste-Send($w, $scope, $editName, $text, $imagePaths = @()) {
   $edit = Find-ByName $scope $CT::Edit $editName
   if (-not $edit) { Fail 'no-prompt-box' 'the message box is not on screen (a question may be pending)' }
   $saved = Save-Clipboard
@@ -244,14 +269,17 @@ function Paste-Send($w, $scope, $editName, $text, $imagePath = $null) {
     if ($already -and $already.Trim() -and $already.Trim() -ne $editName.Trim()) {
       Fail 'box-not-empty' 'the message box already holds unsent text'
     }
-    if ($imagePath) {
-      # A photo from the phone: pasted as a bitmap first; the app attaches it to the message.
+    $imagePaths = @($imagePaths | Where-Object { $_ })
+    if ($imagePaths) {
+      # Photos from the phone: each pasted as a bitmap first; the app attaches them to the message.
       Add-Type -AssemblyName System.Drawing
-      $image = [System.Drawing.Image]::FromFile($imagePath)
-      try { Set-PrivateImage $image } finally { $image.Dispose() }
-      [System.Windows.Forms.SendKeys]::SendWait('^v')
-      Start-Sleep -Milliseconds 1500
-      if ([DeskWin]::GetForegroundWindow() -ne [IntPtr]$w.Current.NativeWindowHandle) { Fail 'focus-failed' 'focus moved after pasting the image' }
+      foreach ($imagePath in $imagePaths) {
+        $image = [System.Drawing.Image]::FromFile($imagePath)
+        try { Set-PrivateImage $image } finally { $image.Dispose() }
+        [System.Windows.Forms.SendKeys]::SendWait('^v')
+        Start-Sleep -Milliseconds 1500
+        if ([DeskWin]::GetForegroundWindow() -ne [IntPtr]$w.Current.NativeWindowHandle) { Fail 'focus-failed' 'focus moved after pasting the image' }
+      }
       if (-not $text.Trim()) {
         [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
         Start-Sleep -Milliseconds 300
@@ -865,6 +893,92 @@ function Read-UsageCard($w, $s) {
   }
 }
 
+# Windows that pop up and wait for an answer (a firewall question, a message box) and keep the
+# desktop apps from coming to the front: shown, cannot be minimized (or a standard dialog), and
+# have buttons. Main windows, the shell's own pop-ups and notifications are not listed.
+$PopupSkip = @('ShellExperienceHost', 'StartMenuExperienceHost', 'SearchHost', 'TextInputHost', 'LockApp', 'cua-driver')
+
+function Popup-Buttons($win) {
+  $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+  $out = @()
+  foreach ($b in $win.FindAll($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Button)))) {
+    $name = "$($b.Current.Name)".Trim()
+    if (-not $name -or -not $b.Current.IsEnabled -or $b.Current.IsOffscreen) { continue }
+    $parent = $walker.GetParent($b)
+    if ($parent -and $parent.Current.ControlType -eq $CT::TitleBar) { continue }  # minimize, close
+    $out += $b
+  }
+  return $out
+}
+
+function Dialog-Buttons($hwnd) {
+  return @([DeskWin]::Children($hwnd, 'Button') | Where-Object { [DeskWin]::IsWindowEnabled($_) -and [DeskWin]::Text($_) })
+}
+
+function Find-Popups {
+  $found = @()
+  foreach ($w in $AE::RootElement.FindAll($Tree::Children, [System.Windows.Automation.Condition]::TrueCondition)) {
+    try {
+      $cur = $w.Current
+      if ($cur.IsOffscreen) { continue }
+      $pattern = $null
+      if (-not $w.TryGetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern, [ref]$pattern)) { continue }
+      $proc = 'unknown'
+      try { $proc = (Get-Process -Id $cur.ProcessId -ErrorAction Stop).ProcessName } catch { }
+      $dialog = $cur.ClassName -eq '#32770'
+      if ($PopupSkip -contains $proc) { continue }
+      if ($proc -eq 'explorer' -and -not $dialog) { continue }
+      if ($pattern.Current.CanMinimize -and -not $dialog) { continue }
+      $hwnd = [IntPtr]$cur.NativeWindowHandle
+      $buttons = @(Popup-Buttons $w | ForEach-Object { $_.Current.Name.Trim() } | Select-Object -Unique)
+      $texts = @($w.FindAll($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Text))) |
+        ForEach-Object { "$($_.Current.Name)".Trim() } | Where-Object { $_ } | Select-Object -Unique)
+      if (-not $buttons -and $dialog) {
+        $buttons = @(Dialog-Buttons $hwnd | ForEach-Object { [DeskWin]::Text($_) } | Select-Object -Unique)
+        $texts = @([DeskWin]::Children($hwnd, 'Static') | ForEach-Object { [DeskWin]::Text($_) } | Where-Object { $_ })
+      }
+      if (-not $buttons) { continue }
+      $text = $texts -join "`n"
+      if ($text.Length -gt 600) { $text = $text.Substring(0, 600) }
+      $found += @{ hwnd = [int64]$cur.NativeWindowHandle; title = "$($cur.Name)"; process = $proc; text = $text; buttons = $buttons }
+    } catch { continue }  # it closed while being read
+  }
+  return $found
+}
+
+# Presses the button named $c.button in the pop-up $c.hwnd, only while that window still has
+# the title it was listed with. True when the window has closed within 3 s.
+function Press-Popup($c) {
+  $w = $null
+  try { $w = $AE::FromHandle([IntPtr][int64]$c.hwnd) } catch { }
+  if (-not $w) { Fail 'popup-gone' 'the window is gone' }
+  try { $title = "$($w.Current.Name)" } catch { Fail 'popup-gone' 'the window is gone' }
+  if ($title -ne $c.title) { Fail 'popup-gone' 'the window is gone' }
+  $button = @(Popup-Buttons $w | Where-Object { $_.Current.Name.Trim() -eq $c.button }) | Select-Object -First 1
+  if (-not $button) {
+    $child = @(Dialog-Buttons ([IntPtr][int64]$c.hwnd) | Where-Object { [DeskWin]::Text($_) -eq $c.button }) | Select-Object -First 1
+    if (-not $child) { Fail 'not-found' 'no such button in the window' }
+    [DeskWin]::Press($child)
+  }
+  try {
+    if ($button -and -not (Invoke-Element $button)) {
+      Bring-Front $w
+      Click-Element $w $button 'the button'
+    }
+  } catch {
+    # A window of an administrator process refuses this user's UI Automation (UIPI).
+    $m = "$($_.Exception.Message)"
+    if ($m -match '^DESK:') { throw }
+    Fail 'press-failed' "pressing failed: $m"
+  }
+  $hwnd = [IntPtr][int64]$c.hwnd
+  for ($i = 0; $i -lt 12; $i++) {
+    Start-Sleep -Milliseconds 250
+    if (-not [DeskWin]::IsWindow($hwnd) -or -not [DeskWin]::IsWindowVisible($hwnd)) { return $true }
+  }
+  return $false
+}
+
 function Run-Command($c) {
   $s = $c.strings
   switch ($c.cmd) {
@@ -957,9 +1071,11 @@ function Run-Command($c) {
     'send' {
       $w = Need-Window $c.app
       $page = Need-Doc $w $c.doc
-      Paste-Send $w $page $s.edit $c.text $c.image
+      Paste-Send $w $page $s.edit $c.text @($c.images)
       return @{ ok = $true }
     }
+    'popups' { return @{ ok = $true; popups = @(Find-Popups) } }
+    'press_popup' { return @{ ok = $true; gone = (Press-Popup $c) } }
     'new_send' {
       $w = Need-Window $c.app
       $before = @(Get-Docs $w)

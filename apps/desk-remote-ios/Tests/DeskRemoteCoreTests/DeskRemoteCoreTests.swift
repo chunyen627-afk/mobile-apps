@@ -338,6 +338,30 @@ final class MetaAndUsageTests: XCTestCase {
         XCTAssertEqual(page.meta?.context?.percent, 18)
     }
 
+    func testDecodesPopupsAndHowManyPhotosAPCTakes() throws {
+        let state = try HelperClient.decode(HelperState.self, status: 200, data: data("""
+        {"ok":true,"pc":{"name":"P","helperVersion":"0.5.11"},"capabilities":["read","send","photos","popups"],"apps":{},
+         "presence":{"idleSeconds":1,"locked":false},"warnings":[],
+         "popups":[{"id":"0123456789ab","title":"","process":"SecurityHealthHost","text":"是否要允許？","buttons":["允許","取消"]}]}
+        """))
+        XCTAssertEqual(state.shownPopups.map(\.name), ["SecurityHealthHost"], "an untitled window goes by its program")
+        XCTAssertEqual(state.shownPopups.first?.buttons, ["允許", "取消"])
+        XCTAssertEqual(state.photoLimit, 10)
+        let old = try HelperClient.decode(HelperState.self, status: 200, data: data("""
+        {"ok":true,"pc":{"name":"P","helperVersion":"0.5.10"},"capabilities":["read","send","photo"],"apps":{},
+         "presence":{"idleSeconds":1,"locked":false},"warnings":[]}
+        """))
+        XCTAssertEqual(old.shownPopups, [])
+        XCTAssertEqual(old.photoLimit, 1, "older helpers take one photo")
+        // One photo still goes as `image`, which every helper takes; several as `images`.
+        let several = try JSONSerialization.jsonObject(with: JSONEncoder().encode(
+            ActionRequest(text: "", images: ["a", "b"]))) as? [String: Any]
+        XCTAssertEqual(several?["images"] as? [String], ["a", "b"])
+        XCTAssertNil(several?["image"])
+        let press = try JSONSerialization.jsonObject(with: JSONEncoder().encode(ActionRequest(button: "允許"))) as? [String: Any]
+        XCTAssertEqual(press as? [String: String], ["button": "允許"])
+    }
+
     func testMetaAndUsageText() {
         let full = ConversationMeta(model: "Opus 5.5", effort: "高",
                                     context: ConversationMeta.Context(used: 183_203, window: 1_000_000, percent: 18))

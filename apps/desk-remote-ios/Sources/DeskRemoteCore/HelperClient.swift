@@ -120,11 +120,19 @@ public struct HelperClient: Sendable {
 
     /// Pastes `text` into the conversation on the PC and presses Enter. `clientMsgId` makes a
     /// retry safe: the helper sends one message per id.
-    public func send(_ app: DeskApp, session id: String, text: String, clientMsgId: String, image: Data? = nil,
+    /// Photos go first, in order: one as `image` (every helper takes it), several as `images`.
+    public func send(_ app: DeskApp, session id: String, text: String, clientMsgId: String, images: [Data] = [],
                      force: Bool = false) async throws -> ActionStatus {
-        try await post(["v1", app.rawValue, "sessions", id, "messages"],
-                       ActionRequest(text: text, clientMsgId: clientMsgId, image: image?.base64EncodedString(),
-                                     force: force ? true : nil), timeout: image == nil ? 20 : 60)
+        let encoded = images.map { $0.base64EncodedString() }
+        return try await post(["v1", app.rawValue, "sessions", id, "messages"],
+                              ActionRequest(text: text, clientMsgId: clientMsgId, image: encoded.count == 1 ? encoded[0] : nil,
+                                            images: encoded.count > 1 ? encoded : nil, force: force ? true : nil),
+                              timeout: images.isEmpty ? 20 : 30 + 15 * TimeInterval(images.count))
+    }
+
+    /// Presses `button` in a window that popped up on the PC (one of `HelperState.shownPopups`).
+    public func pressPopup(_ id: String, button: String) async throws -> ActionStatus {
+        try await post(["v1", "popups", id, "press"], ActionRequest(button: button))
     }
 
     /// Picks a reasoning effort (one of `HelperState.efforts(app)`) in the conversation's menu.

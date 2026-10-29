@@ -36,7 +36,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.10'
+VERSION = '0.5.11'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -1309,6 +1309,7 @@ class Hub:
         self.capabilities = ['read']      # plus send, permission, new and open once windows can be driven
         self.elevate = None               # ElevateRelay once the elevated companion is installed
         self.ui = lambda app: {}          # what the watcher last read on each app's screen
+        self.popups = lambda: []          # windows on the desktop waiting for an answer
         self.strings = {}                 # ui_strings.json, once windows can be driven
         self.usage_cache = (0.0, None)
         self.screen = None                # () -> JPEG bytes of the PC's screen, when it can be read
@@ -1339,7 +1340,8 @@ class Hub:
                 'capabilities': self.capabilities + extra,
                 'apps': apps, 'presence': {'idleSeconds': presence.get('idleSeconds'), 'locked': presence.get('locked')},
                 'warnings': warnings, 'elevate': elevate, 'usage': self.usage(), 'models': choices('model', 'models'),
-                'efforts': choices('effort', 'efforts'), 'modes': choices('mode', 'modes'), 'stop': stop}
+                'efforts': choices('effort', 'efforts'), 'modes': choices('mode', 'modes'), 'stop': stop,
+                'popups': self.popups()}
 
     def usage(self):
         """Each app's plan limits (percent used per window), read at most every 30 seconds.
@@ -1623,12 +1625,22 @@ class WindowsDriver:
         """The one sidebar button named `title` or `title` plus a note (not its menu buttons)."""
         self.ask(app, cmd='invoke_title', title=title)
 
-    def send(self, app, doc, text, image=None):
-        """Pastes `image` (a file path) first when given, then `text`, then Enter."""
-        self.ask(app, cmd='send', doc=doc, text=text, image=image)
+    def send(self, app, doc, text, images=None):
+        """Pastes each of `images` (file paths) first, then `text`, then Enter."""
+        self.ask(app, cmd='send', doc=doc, text=text, images=list(images or []))
 
     def new_send(self, app, button, text):
         self.ask(app, cmd='new_send', name=button, text=text)
+
+    def popups(self):
+        """Windows on the desktop waiting for an answer: [{hwnd, title, process, text, buttons}]."""
+        found = self.worker.request({'cmd': 'popups'}).get('popups') or []
+        return [found] if isinstance(found, dict) else found
+
+    def press_popup(self, popup, button):
+        """Presses `button` in `popup` while it still has its title; True once it has closed."""
+        return bool(self.worker.request({'cmd': 'press_popup', 'hwnd': popup['hwnd'], 'title': popup['title'],
+                                         'button': button}).get('gone'))
 
     def answer(self, app, doc, decision, expect):
         return self.ask(app, cmd='answer', doc=doc, decision=decision, expect=expect).get('how')
@@ -1810,6 +1822,7 @@ class UiWatcher:
         self.questions = {}     # (app, id) -> option question waiting at the last look
         self.checked_once = False
         self.context_alerted, self.usage_alerted = set(), set()
+        self.popups = []        # pop-up windows on the desktop at the last look, each with an id
         self.last_usage_check = 0.0
         self.usage_checked_once = False
         self.last_turn_check = 0.0
@@ -1879,6 +1892,44 @@ class UiWatcher:
                 self.state.setdefault(app, {}).update(card=rows, cardAt=time.time())
                 if self.memory:
                     self.remember_usage()
+
+    def check_popups(self):
+        """A window that pops up and waits for an answer (a firewall question, found 10/29) keeps
+        the desktop apps from coming to the front, so messages cannot be sent: tell the phone once
+        per window, and let it press one of the window's buttons."""
+        if not hasattr(self.driver, 'popups'):
+            return
+        try:
+            found = self.driver.popups()
+        except ActionError:
+            return
+        listed = []
+        for raw in found:
+            if not isinstance(raw, dict) or not raw.get('buttons'):
+                continue
+            key = f"{raw.get('hwnd')}\n{raw.get('title')}\n{raw.get('process')}"
+            listed.append({'id': hashlib.sha256(key.encode('utf-8')).hexdigest()[:12], 'hwnd': raw.get('hwnd'),
+                           'title': str(raw.get('title') or ''), 'process': str(raw.get('process') or ''),
+                           'text': str(raw.get('text') or '')[:600],
+                           'buttons': [str(b) for b in raw['buttons']][:8]})
+        with self.lock:
+            known = {p['id'] for p in self.popups}
+            self.popups = listed
+        for popup in listed:
+            if popup['id'] not in known:
+                name = popup['title'] or popup['process']
+                detail = popup['text'].replace('\n', ' ')[:100] or popup['process']
+                self.send(f'🪟 電腦跳出視窗：{name}', f'{self.pc_name}・{detail}；打開桌面遙控選要按的按鈕', 4, ['window'],
+                          open_link(self.pc_name))
+
+    def popup_list(self):
+        """The pop-ups for the phone (without the window handle)."""
+        with self.lock:
+            return [{k: p[k] for k in ('id', 'title', 'process', 'text', 'buttons')} for p in self.popups]
+
+    def popup(self, popup_id):
+        with self.lock:
+            return next((dict(p) for p in self.popups if p['id'] == popup_id), None)
 
     def remember_usage(self):
         """Saves each app's last usage button and card readings (called with the lock held)."""
@@ -1960,6 +2011,7 @@ class UiWatcher:
     def tick(self):
         for app in APPS:
             self.look(app)
+        self.check_popups()
         self.check_card()
         if time.monotonic() - self.last_turn_check > 15:
             self.last_turn_check = time.monotonic()
@@ -2010,6 +2062,7 @@ class ActionRunner:
     MAX_QUEUED = 5
     MAX_TEXT = 20000
     MAX_IMAGE = 8 * 1024 * 1024   # a photo from the phone, after decoding
+    MAX_IMAGES = 10               # photos in one message
 
     def __init__(self, hub, driver, presence, watcher, notify=None, pc_name='', strings=None,
                  idle_seconds=60, verify_seconds=20, doc_wait=15, settle_seconds=2.0, clock=time.monotonic):
@@ -2039,14 +2092,24 @@ class ActionRunner:
     def submit(self, kind, app, session_id, payload):
         force = bool(payload.get('force'))
         text = payload.get('text')
-        image = None
-        if kind == 'send' and payload.get('image') is not None:
-            image = decode_image(payload.get('image'))
-            if image is None:
-                return 400, error('bad-request', f'照片要是 JPEG 或 PNG，最大 {self.MAX_IMAGE // 1048576} MB')
+        images = []
+        if kind == 'send' and (payload.get('image') is not None or payload.get('images') is not None):
+            # One photo as `image` (App 0.5.5 and earlier), several as `images` (asked on 10/29).
+            raw = payload.get('images') if payload.get('images') is not None else [payload.get('image')]
+            if not isinstance(raw, list) or not 1 <= len(raw) <= self.MAX_IMAGES:
+                return 400, error('bad-request', f'一次最多 {self.MAX_IMAGES} 張照片')
+            images = [decode_image(value) for value in raw]
+            if any(image is None for image in images):
+                return 400, error('bad-request', f'照片要是 JPEG 或 PNG，每張最大 {self.MAX_IMAGE // 1048576} MB')
             text = text or ''
+        if kind == 'popup':
+            popup = self.watcher.popup(session_id)
+            if popup is None:
+                return 404, error('popup-gone', '這個視窗已經關掉了，請重新整理')
+            if payload.get('button') not in popup['buttons']:
+                return 400, error('bad-request', '這個視窗沒有這個按鈕')
         if kind in ('send', 'new'):
-            if not isinstance(text, str) or (not text.strip() and image is None):
+            if not isinstance(text, str) or (not text.strip() and not images):
                 return 400, error('bad-request', '訊息是空的')
             if len(text) > self.MAX_TEXT:
                 return 400, error('bad-request', f'訊息太長（上限 {self.MAX_TEXT} 字）')
@@ -2077,7 +2140,7 @@ class ActionRunner:
             if not current or current['promptId'] != payload.get('promptId'):
                 return 409, error('prompt-changed', '電腦上的權限詢問已經不一樣了，請重新整理')
             needs_front = app == 'claude' and decision == 'allow_once'
-        elif kind == 'stop' or (app == 'codex' and kind in ('model', 'mode')):
+        elif kind in ('stop', 'popup') or (app == 'codex' and kind in ('model', 'mode')):
             # Pressed through UI Automation alone; opening another conversation still checks.
             needs_front = False
         else:
@@ -2097,7 +2160,8 @@ class ActionRunner:
                       'text': text, 'decision': payload.get('decision'), 'promptId': payload.get('promptId'),
                       'questionId': payload.get('questionId'), 'answers': payload.get('answers'),
                       'project': payload.get('project'), 'model': payload.get('model'), 'effort': payload.get('effort'),
-                      'mode': payload.get('mode'), 'image': image, 'needsFront': needs_front, 'force': force, 'state': 'queued', 'message': '排隊中',
+                      'mode': payload.get('mode'), 'images': images, 'button': payload.get('button'),
+                      'needsFront': needs_front, 'force': force, 'state': 'queued', 'message': '排隊中',
                       'error': None, 'verified': None, 'created': self.clock()}
             self.actions[action['id']] = action
             if isinstance(client_id, str) and len(client_id) <= 100:
@@ -2149,6 +2213,7 @@ class ActionRunner:
     def public(action):
         keys = ('id', 'kind', 'app', 'sessionId', 'state', 'message', 'error', 'verified')
         out = {k: action[k] for k in keys}
+        out['app'] = out['app'] or ''  # a pop-up belongs to no app; the phone reads a string
         out['ok'] = action['state'] != 'failed'
         if action.get('title'):
             out['title'] = action['title']
@@ -2181,12 +2246,15 @@ class ActionRunner:
         handler = {'send': self.do_send, 'permission': self.do_permission, 'new': self.do_new,
                    'open': self.do_open, 'answer': self.do_answer, 'model': self.do_model,
                    'effort': self.do_effort, 'mode': self.do_mode, 'stop': self.do_stop,
-                   'launch': self.do_launch}[action['kind']]
+                   'launch': self.do_launch, 'popup': self.do_popup}[action['kind']]
         try:
             handler(action)
         except ActionError as exc:
             logging.warning('%s %s failed: %s %s', action['kind'], action['app'], exc.code, exc.message)
-            self.update(action, state='failed', error=exc.code, message=failure_text(exc.code, exc.message))
+            message = failure_text(exc.code, exc.message)
+            if exc.code in ('focus-failed', 'paste-failed', 'no-prompt-box') and self.watcher.popup_list():
+                message += '；電腦上有跳出的視窗擋著，可在電腦頁按掉後再送'
+            self.update(action, state='failed', error=exc.code, message=message)
             self.tell(action, failed=True)
         except Exception:
             logging.exception('action failed')
@@ -2205,9 +2273,9 @@ class ActionRunner:
             return
         verb = {'send': '送出訊息', 'permission': '回覆權限', 'new': '開新對話', 'open': '打開對話',
                 'answer': '回答選項題', 'model': '切換模型', 'effort': '切換推理強度', 'mode': '切換權限模式',
-                'stop': '停止'}[action['kind']]
+                'stop': '停止', 'popup': '按電腦上的視窗'}[action['kind']]
         title = (action.get('info') or {}).get('title') or action.get('title') or ''
-        head = f"⚠️ 手機{verb}失敗：{APP_NAMES[action['app']]}"
+        head = f"⚠️ 手機{verb}失敗" + (f"：{APP_NAMES[action['app']]}" if action['app'] in APP_NAMES else '')
         body = f"{self.pc_name}・「{title}」：{action['message']}"
         session_id = action.get('sessionId')
         try:
@@ -2367,28 +2435,48 @@ class ActionRunner:
         mark = transcript.seq if transcript is not None else 0
         self.open_conversation(action)
         self.recheck(action)
-        image_path = None
-        if action.get('image'):
-            # The worker pastes the photo from a file only this user can read; removed right after.
-            handle, image_path = tempfile.mkstemp(prefix='desk-remote-photo-', suffix='.img')
-            with os.fdopen(handle, 'wb') as out:
-                out.write(action['image'])
+        paths = []
         try:
+            # The worker pastes each photo from a file only this user can read; removed right after.
+            for image in action.get('images') or []:
+                handle, path = tempfile.mkstemp(prefix='desk-remote-photo-', suffix='.img')
+                paths.append(path)
+                with os.fdopen(handle, 'wb') as out:
+                    out.write(image)
             self.presence.begin_own()
-            self.driver.send(app, info['doc'], text, image_path)
+            self.driver.send(app, info['doc'], text, paths)
         finally:
             self.presence.end_own()
-            if image_path:
+            for path in paths:
                 try:
-                    os.remove(image_path)
+                    os.remove(path)
                 except OSError:
                     logging.warning('could not remove the photo file')
-            action['image'] = None
+            action['images'] = []
         self.update(action, message='已送出，確認中')
         verified = self.verify(transcript, mark, text if text.strip() else '[圖片]')
         message = {True: '已送出', 'queued': '已送出，排在等待中的權限詢問之後'}.get(
             verified, f'已送出，但 {self.verify_seconds} 秒內還沒在對話紀錄看到')
         self.update(action, state='done', verified=bool(verified), message=message)
+
+    def do_popup(self, action):
+        """Presses the phone's pick in a window that popped up on the desktop."""
+        popup = self.watcher.popup(action['sessionId'])
+        if popup is None:
+            raise ActionError('popup-gone', '')
+        button = action['button']
+        self.update(action, title=popup['title'] or popup['process'])
+        self.presence.begin_own()  # a window without UI Automation buttons is clicked
+        gone = self.driver.press_popup(popup, button)
+        self.watcher.check_popups()
+        if self.presence.snapshot().get('locked'):
+            # A secure-desktop prompt (UAC) reads as locked; nothing on it can be pressed from here.
+            message = f'已按「{button}」，接著跳出系統管理員確認（UAC），手機無法代按，請到電腦上按'
+        elif gone:
+            message = f'已在電腦上按「{button}」，視窗已關閉'
+        else:
+            message = f'已按「{button}」，但視窗還在（可能要管理員權限，或還有下一步）'
+        self.update(action, state='done', verified=bool(gone), message=message)
 
     def verify(self, transcript, mark, text):
         """True when the transcript has the message, 'queued' when Claude accepted it into its
@@ -2677,6 +2765,8 @@ FAILURE_TEXT = {
     'not-invokable': '按鈕按不下去',
     'timeout': '畫面操作逾時',
     'worker-error': '畫面操作程式出錯',
+    'popup-gone': '這個視窗已經關掉了',
+    'press-failed': '按不下去（這個視窗可能要以管理員身分才能按）',
 }
 
 # What the worker found in front when it could not take the foreground ("in front: <process>").
@@ -2706,7 +2796,7 @@ def failure_text(code, message):
 
 
 MAX_BODY = 64 * 1024
-PHOTO_BODY = 12 * 1024 * 1024      # a message with a photo (base64) from the phone
+PHOTO_BODY = 40 * 1024 * 1024      # a message with up to 10 photos (base64) from the phone
 
 
 def capture_screen(timeout=20):
@@ -2845,6 +2935,8 @@ def handler_for(hub, gate, networks, runner=None):
                 return None
             if parts[1:] == ['launch'] and parts[0] in APPS:
                 return self.send_json(*runner.submit('launch', parts[0], None, body))
+            if len(parts) == 3 and parts[0] == 'popups' and parts[2] == 'press' and re.fullmatch(r'[0-9a-f]{12}', parts[1]):
+                return self.send_json(*runner.submit('popup', None, parts[1], body))
             if len(parts) >= 2 and parts[0] in APPS and parts[1] == 'sessions':
                 app = parts[0]
                 if len(parts) == 2:
@@ -3080,6 +3172,7 @@ class FakeDriver:
         self.codex_models = {}  # page title -> model picked on the phone
         self.running = set()    # page titles whose turn is running (a stop button shows)
         self.page_titles = {}   # id -> the title its page shows, where tests make it differ
+        self.fake_popups = []   # windows that popped up on the desktop (--fake-popup)
         for key in setup.prompts_data:
             app, session_id = key.split('/', 1)
             info = hub.info(app, session_id)
@@ -3223,14 +3316,22 @@ class FakeDriver:
                 return
         raise ActionError('not-found', '')
 
-    def send(self, app, doc, text, image=None):
-        self.calls.append(('send', app, doc) + (('image', Path(image).stat().st_size),) if image else ('send', app, doc))
+    def popups(self):
+        return [dict(p) for p in self.fake_popups]
+
+    def press_popup(self, popup, button):
+        self.calls.append(('press_popup', popup['title'], button))
+        self.fake_popups = [p for p in self.fake_popups if p['hwnd'] != popup['hwnd']]
+        return True
+
+    def send(self, app, doc, text, images=None):
+        self.calls.append(('send', app, doc) + tuple(('image', Path(path).stat().st_size) for path in images or []))
         if self.open_doc.get(app) != doc:
             raise ActionError('title-mismatch', '')
         session_id = self.session_for_doc(app, doc)
         path = self.hub.sources[app].transcript_path(session_id)
-        if image:
-            self.write(app, path, 'user-image', text)
+        if images:
+            self.write(app, path, 'user-image', text, len(images))
         else:
             self.write(app, path, 'user', text)
         # "長任務" keeps the turn running for a while, so the phone can stop it.
@@ -3281,10 +3382,10 @@ class FakeDriver:
             self.write(app, path, 'assistant', text)
         threading.Thread(target=reply, daemon=True).start()
 
-    def write(self, app, path, role, text):
+    def write(self, app, path, role, text, photos=1):
         ts = datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%S.000Z')
-        if role == 'user-image':  # a pasted photo and an optional caption, as each app records it
-            blocks = [{'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/jpeg', 'data': ''}}]
+        if role == 'user-image':  # pasted photos and an optional caption, as each app records them
+            blocks = [{'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/jpeg', 'data': ''}}] * photos
             if text.strip():
                 blocks.append({'type': 'text', 'text': text})
             if app == 'claude':
@@ -3292,7 +3393,7 @@ class FakeDriver:
             else:
                 lines = [{'timestamp': ts, 'type': 'event_msg', 'payload': {'type': 'task_started'}},
                          {'timestamp': ts, 'type': 'event_msg', 'payload': {'type': 'item_completed', 'item': {
-                             'type': 'UserMessage', 'content': [{'type': 'input_image'}] + blocks[1:]}}}]
+                             'type': 'UserMessage', 'content': [{'type': 'input_image'}] * photos + blocks[photos:]}}}]
         elif app == 'claude':
             if role == 'user':
                 lines = [{'type': 'user', 'timestamp': ts, 'message': {'role': 'user', 'content': text}}]
@@ -3337,15 +3438,22 @@ def build_driving(hub, driver, notify, pc_name, cfg, interval, verify_seconds, m
     watcher = UiWatcher(hub, driver, notify, pc_name, interval=interval, memory=memory)
     hub.prompts = watcher.prompt_for
     hub.ui = watcher.current
+    hub.popups = watcher.popup_list
     hub.strings = load_strings()
     runner = ActionRunner(hub, driver, hub.presence, watcher, notify, pc_name, hub.strings,
                           idle_seconds=int(cfg.get('idle_seconds', 60)), verify_seconds=verify_seconds)
     hub.capabilities = ['read', 'send', 'permission', 'new', 'open', 'question', 'model', 'effort', 'mode', 'stop',
-                        'photo', 'launch']
+                        'photo', 'launch', 'photos', 'popups']
     hub.alerts = dict(hub.alerts, **(cfg.get('alerts') or {}))
     threading.Thread(target=watcher.run_forever, daemon=True).start()
     threading.Thread(target=runner.run_forever, daemon=True).start()
     return runner
+
+
+# The window that blocked sending on 10/29, as fake mode shows it (a made-up program name).
+FAKE_POPUP = {'hwnd': 4242, 'title': 'Windows 安全性', 'process': 'SecurityHealthHost',
+              'text': '是否要允許公開和私人網路存取此應用程式?\nWindows 防火牆已封鎖所有公用和私人網路上 示範程式 的部分功能。\n示範程式',
+              'buttons': ['允許', '取消']}
 
 
 def fake_fresh_usage(read, app, percent):
@@ -3368,6 +3476,7 @@ def main(argv=None):
     parser.add_argument('--fake-idle', type=int, default=None, help='fake mode: report this many idle seconds')
     parser.add_argument('--fake-closed', default='', help='fake mode: these apps (comma-separated) start with no window')
     parser.add_argument('--fake-usage', default='', help='fake mode: app=percent, limits read just now')
+    parser.add_argument('--fake-popup', action='store_true', help='fake mode: a firewall question is waiting on the desktop')
     args = parser.parse_args(argv)
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
@@ -3388,7 +3497,10 @@ def main(argv=None):
         hub.strings = load_strings()  # FakeDriver reads the model button's prefix before build_driving
         if args.fake_usage:
             hub.usage = fake_fresh_usage(hub.usage, *args.fake_usage.split('=', 1))
-        runner = build_driving(hub, FakeDriver(fake, hub), None, cfg['pc_name'], cfg, interval=1, verify_seconds=10)
+        driver = FakeDriver(fake, hub)
+        if args.fake_popup:
+            driver.fake_popups = [dict(FAKE_POPUP)]
+        runner = build_driving(hub, driver, None, cfg['pc_name'], cfg, interval=1, verify_seconds=10)
         hub.elevate = fake.elevate_relay()
         hub.screen = lambda: (fake.fixtures / 'screen.jpg').read_bytes()
         gate = AuthGate(cfg['token'], None, cfg['pc_name'])
