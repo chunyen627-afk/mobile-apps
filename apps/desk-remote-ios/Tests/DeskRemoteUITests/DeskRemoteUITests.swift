@@ -628,15 +628,16 @@ final class DeskRemoteUITests: XCTestCase {
         input.tap()
         input.typeText("請用表格整理")
         app.buttons["chat-send"].tap()
+        XCTAssertTrue(text("（示範）收到：請用表格整理").waitForExistence(timeout: 25), "the reply did not arrive")
+        app.swipeUp()
+        snapshot("34-table")
         // The bubble reads as one element (its parts combined), so the table is checked by its text.
-        XCTAssertTrue(text("+15～25 TH/s").waitForExistence(timeout: 25), "the reply with the table did not arrive")
+        XCTAssertTrue(text("RTX 5080，192 TH/s、187 W").exists, "the table rows are not read as cells")
         XCTAssertFalse(text("| RTX 5080 |").exists, "the table is shown as rows of |")
         XCTAssertFalse(text("| --- |").exists, "the table's separator row is shown as text")
         XCTAssertFalse(text("**+15").exists, "a cell's bold marks are shown")
         XCTAssertFalse(text("## 各卡現況").exists, "the heading marks are shown")
         XCTAssertTrue(text("• 先改設定").exists, "the list has no bullets")
-        app.swipeUp()
-        snapshot("34-table")
     }
 
     // MARK: - Helpers

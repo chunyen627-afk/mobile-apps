@@ -523,7 +523,17 @@ struct DeskTable: View {
             }
             .padding(.vertical, 4)
         }
+        // One element read row by row, which the bubble's combined label then includes (a scroll
+        // view's contents were left out of it).
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(spoken)
         .accessibilityIdentifier("bubble-table")
+    }
+
+    private var spoken: String {
+        ([header] + rows).map { row in
+            row.map { String(DeskBubble.markdown($0).characters) }.joined(separator: "，")
+        }.joined(separator: "\n")
     }
 
     private func cell(_ text: String, width: CGFloat) -> some View {
