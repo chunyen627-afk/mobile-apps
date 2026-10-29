@@ -1106,6 +1106,26 @@ class MoreControlsTests(FakeEnvironment):
         self.assertEqual(runner.submit('send', 'claude', A, {'images': photos[:1] + ['bad']})[0], 400)
 
 
+class LatestTests(FakeEnvironment):
+    """The phone's PC list shows each app's last conversation time (10/29)."""
+
+    def test_a_rollout_written_after_its_index_time_counts_and_leads_the_list(self):
+        hub = drive(self.fake)[0]
+        written = time.time() + 120
+        os.utime(self.sources['codex'].transcript_path(Y), (written, written))
+        self.assertEqual({r['id']: r['updatedAt'] for r in self.sources['codex'].list_sessions(50)}[Y], h.iso(written))
+        latest = hub.state()['latest']
+        self.assertEqual(latest['codex'], {'id': Y, 'title': '評估 iPhone App 的做法', 'updatedAt': h.iso(written),
+                                           'status': 'active'})  # written within the last minute
+        self.assertEqual(latest['claude']['updatedAt'],
+                         max(r['updatedAt'] for r in self.sources['claude'].list_sessions(50)))
+
+    def test_an_app_without_conversations_is_none(self):
+        hub = drive(self.fake)[0]
+        hub.sources['codex'].list_sessions = lambda limit, now=None: []
+        self.assertIsNone(hub.state()['latest']['codex'])
+
+
 class PopupTests(FakeEnvironment):
     """A window that pops up on the desktop (a firewall question blocked sending, 10/29)."""
 

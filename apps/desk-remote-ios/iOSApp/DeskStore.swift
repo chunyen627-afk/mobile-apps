@@ -10,12 +10,20 @@ final class DeskStore: ObservableObject {
     @Published private(set) var pcs: [DeskPC] = []
     /// The newest plan limits per account from any PC, so PCs on one plan show the same.
     @Published private(set) var usageBook = UsageBook()
+    /// Each PC's apps' last conversation, as the PC last reported it ("<pc id>/<app>").
+    @Published private(set) var latest: [String: HelperState.Latest] = [:]
+    /// When the user last looked at each PC's app (RFC 3339), so newer conversations are marked.
+    @Published private(set) var seen: [String: String] = [:]
+    /// Conversations opened since the app started: their dot in the list goes.
+    @Published var opened: Set<String> = []
     private var othersAskedAt: Date?
     private let defaults: UserDefaults
     static let key = "deskremote.pcs"
     static let usageKey = "deskremote.usage-book"
+    static let seenKey = "deskremote.seen"
     /// Simulator UI tests: secrets in memory and no Face ID prompt (there is no enrolled face).
     private(set) var uiTest = false
+    private var uiSeenBefore: String?
 
     /// UI tests start from an empty list (`DESK_UI_TEST=1`) and may add PCs given as
     /// `DESK_UI_PC=name|host|port|token[|key]`, several separated by ";", with tokens kept in
@@ -25,9 +33,12 @@ final class DeskStore: ObservableObject {
         if environment["DESK_UI_TEST"] == "1" {
             defaults.removeObject(forKey: Self.key)
             defaults.removeObject(forKey: Self.usageKey)
+            defaults.removeObject(forKey: Self.seenKey)
             DeskSecret.useMemory()
             load()
             uiTest = true
+            // As if the user had last looked then, so the first screen shows what is new.
+            uiSeenBefore = environment["DESK_UI_SEEN_BEFORE"]
             for preset in (environment["DESK_UI_PC"] ?? "").components(separatedBy: ";") {
                 let parts = preset.components(separatedBy: "|")
                 if parts.count >= 4, let port = Int(parts[2]) {
@@ -45,6 +56,7 @@ final class DeskStore: ObservableObject {
         if let data = defaults.data(forKey: Self.usageKey), let book = try? JSONDecoder().decode(UsageBook.self, from: data) {
             usageBook = book
         }
+        seen = (defaults.dictionary(forKey: Self.seenKey) as? [String: String]) ?? [:]
         guard let data = defaults.data(forKey: Self.key),
               let saved = try? JSONDecoder().decode([DeskPC].self, from: data) else {
             pcs = []
@@ -121,8 +133,38 @@ final class DeskStore: ObservableObject {
 
     /// Remembers the plan limits a PC reported (every place that reads a PC's state calls this).
     func note(_ state: HelperState, pcID: UUID) {
+        for app in DeskApp.allCases {
+            let key = "\(pcID.uuidString)/\(app.rawValue)"
+            let last = state.latest(app)
+            if latest[key] != last { latest[key] = last }
+            // The first report from a PC is the starting point, not news.
+            if let last, seen[key] == nil { markSeen(key, at: uiSeenBefore ?? last.updatedAt) }
+        }
         guard let name = pc(pcID)?.name, usageBook.record(state, pc: name) else { return }
         if let data = try? JSONEncoder().encode(usageBook) { defaults.set(data, forKey: Self.usageKey) }
+    }
+
+    func latest(_ pcID: UUID, _ app: DeskApp) -> HelperState.Latest? { latest["\(pcID.uuidString)/\(app.rawValue)"] }
+
+    /// The app's last conversation was written after the user last opened its list or a chat in it.
+    func isNew(_ pcID: UUID, _ app: DeskApp) -> Bool {
+        let key = "\(pcID.uuidString)/\(app.rawValue)"
+        guard let last = latest[key], last.status != "active" else { return false }
+        return DeskText.isNewer(last.updatedAt, than: seen[key])
+    }
+
+    /// Called on entering and leaving an app's list or chat: what was written until now is seen.
+    func markSeen(_ pcID: UUID, _ app: DeskApp) {
+        let key = "\(pcID.uuidString)/\(app.rawValue)"
+        let now = ISO8601DateFormatter().string(from: Date())
+        let last = latest[key]?.updatedAt
+        markSeen(key, at: last.map { DeskText.isNewer($0, than: now) ? $0 : now } ?? now)
+    }
+
+    private func markSeen(_ key: String, at time: String) {
+        guard seen[key] != time else { return }
+        seen[key] = time
+        defaults.set(seen, forKey: Self.seenKey)
     }
 
     /// The PC's own limits for `app`, or newer ones another PC on the same account reported.

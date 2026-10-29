@@ -55,6 +55,24 @@ public struct HelperState: Decodable, Equatable, Sendable {
     public let stop: [String]?
     /// Windows that popped up on the PC and wait for an answer (helper 0.5.11).
     public let popups: [Popup]?
+    /// Each app's most recently written conversation, nil per app with none (helper 0.5.12).
+    public let latest: [String: Latest?]?
+
+    /// What the PC list shows per app: the last conversation and when it was written.
+    public struct Latest: Decodable, Equatable, Hashable, Sendable {
+        public let id: String
+        public let title: String
+        public let updatedAt: String
+        /// "active" (being written now), "needs-action" or "idle".
+        public let status: String
+
+        public init(id: String, title: String, updatedAt: String, status: String) {
+            self.id = id
+            self.title = title
+            self.updatedAt = updatedAt
+            self.status = status
+        }
+    }
 
     /// A window on the PC's desktop waiting for a button (a firewall question, a message box);
     /// while it is there the desktop apps cannot come to the front, so nothing can be sent.
@@ -74,6 +92,7 @@ public struct HelperState: Decodable, Equatable, Sendable {
     public var photoLimit: Int { can("photos") ? 10 : 1 }
 
     public func app(_ app: DeskApp) -> AppState? { apps[app.rawValue] }
+    public func latest(_ app: DeskApp) -> Latest? { latest?[app.rawValue] ?? nil }
     public func usage(_ app: DeskApp) -> PlanUsage? { usage?[app.rawValue] ?? nil }
     public func models(_ app: DeskApp) -> [String] { can("model") ? models?[app.rawValue] ?? [] : [] }
     public func efforts(_ app: DeskApp) -> [String] { can("effort") ? efforts?[app.rawValue] ?? [] : [] }

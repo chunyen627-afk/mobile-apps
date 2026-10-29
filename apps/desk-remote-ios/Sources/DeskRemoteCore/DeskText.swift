@@ -165,6 +165,23 @@ public enum DeskText {
         return text
     }
 
+    /// The PC list's time for an app's last conversation: "回覆中", "等你回答・5 分鐘前", "3 小時前".
+    public static func latestTime(_ latest: HelperState.Latest, now: Date = Date()) -> String {
+        let when = relative(latest.updatedAt, now: now) ?? ""
+        switch latest.status {
+        case "active": return "回覆中"
+        case "needs-action": return when.isEmpty ? "等你回答" : "等你回答・\(when)"
+        default: return when
+        }
+    }
+
+    /// The conversation was written after the user last looked (`seen`, RFC 3339). Never seen
+    /// counts as not new: the first look at a PC is not news.
+    public static func isNewer(_ updatedAt: String, than seen: String?) -> Bool {
+        guard let seen, let seenDate = parse(seen), let date = parse(updatedAt) else { return false }
+        return date > seenDate
+    }
+
     /// "剛剛", "5 分鐘前", "3 小時前", "2 天前"; nil for a missing or unreadable time.
     public static func relative(_ iso: String?, now: Date = Date()) -> String? {
         guard let iso, let date = parse(iso) else { return nil }

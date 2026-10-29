@@ -39,6 +39,7 @@ struct DeskChatView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
+                    Color.clear.frame(height: 1).id("top")
                     if log.earlier {
                         Text("更早的內容沒有載入（電腦端只送最近的部分）")
                             .font(.caption)
@@ -96,17 +97,25 @@ struct DeskChatView: View {
                 .padding(.vertical, 8)
             }
             .scrollDismissesKeyboard(.interactively)
-            .onChange(of: log.rows.last?.id) {
-                withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
-            }
-            .onChange(of: pending.count) {
-                withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
-            }
-            .onChange(of: log.prompt) {
-                withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
-            }
-            .onChange(of: log.question?.questionId) {
-                withAnimation { proxy.scrollTo("bottom", anchor: .bottom) }
+            .defaultScrollAnchor(.bottom)
+            // Opening a conversation lands on its newest message (it sometimes stopped short, 10/29).
+            .onChange(of: log.loaded) { if log.loaded { jump(proxy, to: "bottom", animated: false) } }
+            .onChange(of: log.rows.last?.id) { jump(proxy, to: "bottom") }
+            .onChange(of: pending.count) { jump(proxy, to: "bottom") }
+            .onChange(of: log.prompt) { jump(proxy, to: "bottom") }
+            .onChange(of: log.question?.questionId) { jump(proxy, to: "bottom") }
+            // A long conversation goes to its start or its end in one tap (asked 10/29).
+            .overlay(alignment: .bottomTrailing) {
+                if log.rows.count > 12 {
+                    VStack(spacing: 10) {
+                        DeskScrollButton(symbol: "chevron.up.2", label: "捲到最上面") { jump(proxy, to: "top", anchor: .top) }
+                            .accessibilityIdentifier("chat-to-top")
+                        DeskScrollButton(symbol: "chevron.down.2", label: "捲到最新") { jump(proxy, to: "bottom") }
+                            .accessibilityIdentifier("chat-to-bottom")
+                    }
+                    .padding(.trailing, 10)
+                    .padding(.bottom, 12)
+                }
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
@@ -155,6 +164,7 @@ struct DeskChatView: View {
         .navigationBarTitleDisplayMode(.inline)
         // A new network starts over at once instead of waiting out a long-poll on the old one.
         .task(id: [scenePhase == .active ? 1 : 0, network.changes]) { await follow() }
+        .onAppear { store.opened.insert(session.id) }
     }
 
     @ViewBuilder
@@ -172,6 +182,22 @@ struct DeskChatView: View {
                         fullText: result?.itemId.flatMap { fullTexts[$0] },
                         toggle: { toggle(row.id) },
                         loadFull: { itemId in Task { await loadItem(itemId) } })
+        }
+    }
+
+    /// Scrolls to "top" or "bottom", then again twice: the lazy stack guesses the height of rows
+    /// it has not drawn yet, so a single jump through a long conversation can stop short.
+    private func jump(_ proxy: ScrollViewProxy, to target: String, anchor: UnitPoint = .bottom, animated: Bool = true) {
+        if animated {
+            withAnimation { proxy.scrollTo(target, anchor: anchor) }
+        } else {
+            proxy.scrollTo(target, anchor: anchor)
+        }
+        Task { @MainActor in
+            for delay: UInt64 in [250, 600] {
+                try? await Task.sleep(nanoseconds: delay * 1_000_000)
+                proxy.scrollTo(target, anchor: anchor)
+            }
         }
     }
 
@@ -360,6 +386,25 @@ struct DeskChatView: View {
 }
 
 /// A message typed on the phone that the transcript does not show yet.
+/// A round button floating over the conversation's right edge.
+struct DeskScrollButton: View {
+    let symbol: String
+    let label: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.subheadline.weight(.semibold))
+                .frame(width: 40, height: 40)
+                .background(.regularMaterial, in: Circle())
+                .overlay(Circle().stroke(Color.secondary.opacity(0.25)))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+}
+
 struct DeskPending: Identifiable, Equatable {
     let id = UUID()
     let text: String

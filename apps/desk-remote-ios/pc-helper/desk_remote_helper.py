@@ -36,7 +36,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.11'
+VERSION = '0.5.12'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -832,7 +832,7 @@ class ClaudeSource:
                 status = 'active'
             mode = data.get('permissionMode')
             out.append({'id': data['sessionId'], 'title': (data.get('title') or '').strip() or '（未命名）',
-                        'folder': folder_name(data.get('cwd')), 'updatedAt': iso(data.get('lastActivityAt')),
+                        'folder': folder_name(data.get('cwd')), 'updatedAt': later_time(data.get('lastActivityAt'), path),
                         'status': status, 'permission': self.PERMISSION_LABELS.get(mode, mode),
                         'hasTranscript': path is not None})
         return out
@@ -1045,7 +1045,7 @@ class CodexSource:
             path = Path(row['rollout']) if row.get('rollout') and Path(row['rollout']).exists() else self.transcript_path(row['id'])
             status = 'active' if path is not None and now - _mtime(path) < ACTIVE_SECONDS else 'idle'
             out.append({'id': row['id'], 'title': (row['title'] or '').strip() or '（未命名）',
-                        'folder': folder_name(row.get('cwd')), 'updatedAt': iso(row['ms']), 'status': status,
+                        'folder': folder_name(row.get('cwd')), 'updatedAt': later_time(row['ms'], path), 'status': status,
                         'permission': None, 'hasTranscript': path is not None})
         return out
 
@@ -1077,6 +1077,16 @@ def _mtime(path):
         return os.path.getmtime(path)
     except OSError:
         return 0.0
+
+
+def later_time(value, path):
+    """The later of an index's time and the transcript's last write, as RFC 3339 text: Codex's
+    database lags its rollout by hours (10/29: 16:33 the day before, rollout written at 04:04)."""
+    text = iso(value)
+    written = _mtime(path) if path is not None else 0.0
+    if written and (text is None or written > datetime.fromisoformat(text.replace('Z', '+00:00')).timestamp()):
+        return iso(written)
+    return text
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1312,7 +1322,8 @@ class Hub:
         self.popups = lambda: []          # windows on the desktop waiting for an answer
         self.strings = {}                 # ui_strings.json, once windows can be driven
         self.usage_cache = (0.0, None)
-        self.screen = None                # () -> JPEG bytes of the PC's screen, when it can be read
+        self.latest_cache = (0.0, None)
+        self.screen = None               # () -> JPEG bytes of the PC's screen, when it can be read
         self.alerts = {'usage_percent': 80, 'context_percent': 80}
         self.chosen_modes = {}            # (app, id) -> (mode, when): a Codex pick its rollout shows only next turn
         self.page_names = {}              # (app, id) -> the page title last seen for it, when its files say otherwise
@@ -1341,7 +1352,26 @@ class Hub:
                 'apps': apps, 'presence': {'idleSeconds': presence.get('idleSeconds'), 'locked': presence.get('locked')},
                 'warnings': warnings, 'elevate': elevate, 'usage': self.usage(), 'models': choices('model', 'models'),
                 'efforts': choices('effort', 'efforts'), 'modes': choices('mode', 'modes'), 'stop': stop,
-                'popups': self.popups()}
+                'popups': self.popups(), 'latest': self.latest()}
+
+    def latest(self):
+        """Each app's most recently written conversation, for the phone's PC list (read at most
+        every 10 seconds); None for an app with none."""
+        now = time.monotonic()
+        stamp, cached = self.latest_cache
+        if cached is not None and now - stamp < 10:
+            return cached
+        out = {}
+        for app, source in self.sources.items():
+            try:
+                rows = [row for row in source.list_sessions(10) if row.get('updatedAt')]
+            except (OSError, ValueError, sqlite3.Error):
+                logging.exception('latest conversation of %s failed', app)
+                rows = []
+            row = max(rows, key=lambda r: r['updatedAt'], default=None)
+            out[app] = row and {key: row[key] for key in ('id', 'title', 'updatedAt', 'status')}
+        self.latest_cache = (now, out)
+        return out
 
     def usage(self):
         """Each app's plan limits (percent used per window), read at most every 30 seconds.

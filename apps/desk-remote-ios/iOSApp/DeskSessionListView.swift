@@ -16,6 +16,9 @@ struct DeskSessionListView: View {
     @State private var unreachable = false
     @State private var composing = false
     @State private var launchTried = false
+    /// When the user had last looked before this visit: conversations written since get a dot.
+    @State private var seenBefore: String?
+    @State private var visited = false
 
     var body: some View {
         List {
@@ -33,7 +36,8 @@ struct DeskSessionListView: View {
                 }
                 ForEach(list.sessions) { session in
                     NavigationLink(value: DeskRoute.chat(pcID, app, session)) {
-                        DeskSessionRow(session: session)
+                        DeskSessionRow(session: session,
+                                       new: session.status != "active" && !store.opened.contains(session.id) && DeskText.isNewer(session.updatedAt ?? "", than: seenBefore))
                     }
                     .disabled(!session.hasTranscript)
                     .accessibilityIdentifier("session-row-\(session.id)")
@@ -59,6 +63,14 @@ struct DeskSessionListView: View {
         .deskForegroundLoop(every: 10, failing: { unreachable }) { await refresh() }
         .refreshable { await refresh() }
         .task { await launchIfClosed() }
+        .onAppear {
+            if !visited {
+                visited = true
+                seenBefore = store.seen["\(pcID.uuidString)/\(app.rawValue)"]
+            }
+            store.markSeen(pcID, app)
+        }
+        .onDisappear { store.markSeen(pcID, app) }
     }
 
     /// Once per visit: only when the helper can open it and says it has no window.
@@ -88,10 +100,15 @@ struct DeskSessionListView: View {
 
 struct DeskSessionRow: View {
     let session: SessionSummary
+    var new = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline) {
+                if new {
+                    Circle().fill(Color.blue).frame(width: 8, height: 8)
+                        .accessibilityLabel("新")
+                }
                 Text(session.title)
                     .font(.headline)
                     .lineLimit(2)

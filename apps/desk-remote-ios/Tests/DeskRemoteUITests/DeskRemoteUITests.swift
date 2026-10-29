@@ -640,6 +640,55 @@ final class DeskRemoteUITests: XCTestCase {
         XCTAssertTrue(text("• 先改設定").exists, "the list has no bullets")
     }
 
+    func test35FirstScreenShowsEachAppsLastConversation() throws {
+        // As if the user had last looked long ago: the conversations are all new.
+        try launchWithHelper(environment: ["DESK_UI_SEEN_BEFORE": "2000-01-01T00:00:00Z"])
+        let claude = element("pc-latest-示範電腦-claude")
+        let codex = element("pc-latest-示範電腦-codex")
+        XCTAssertTrue(codex.waitForExistence(timeout: 15), "the Codex line is not on the first screen")
+        XCTAssertTrue(claude.exists, "the Claude line is not on the first screen")
+        XCTAssertTrue(claude.label.contains("Claude") && codex.label.contains("Codex"), "\(said(claude)) / \(said(codex))")
+        // One being written now shows "回覆中" instead of a dot, so whichever is idle is checked.
+        let marked = poll(timeout: 10) { [claude, codex].contains { ($0.value as? String) == "有新訊息" } }
+        snapshot("35-latest")
+        XCTAssertTrue(marked, "nothing is marked new: \(said(claude)) / \(said(codex))")
+        let row = (codex.value as? String) == "有新訊息" ? codex : claude
+        row.tap()
+        XCTAssertTrue(element("new-session").waitForExistence(timeout: 10), "the line did not open the conversation list")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "back on the first screen")
+        XCTAssertTrue(poll(timeout: 5) { (row.value as? String) != "有新訊息" }, "still marked new after looking")
+    }
+
+    func test36LongConversationOpensAtItsNewestAndJumpsBothWays() throws {
+        let helper = try helperSettings()
+        let path = "/v1/codex/sessions/\(codexY)"
+        func written(_ reply: String) -> Bool {
+            let events = ask(helper, "\(path)/events?after=0")?["events"] as? [[String: Any]] ?? []
+            return events.contains { $0["text"] as? String == reply }
+        }
+        for n in 1 ... 8 {
+            ask(helper, "\(path)/messages", body: ["text": "長對話第 \(n) 則", "clientMsgId": UUID().uuidString, "force": true])
+            XCTAssertTrue(poll(timeout: 30) { written("（示範）收到：長對話第 \(n) 則") }, "reply \(n) was not written")
+        }
+        try launchWithHelper()
+        openChat("codex", codexY)
+        let newest = text("（示範）收到：長對話第 8 則")
+        XCTAssertTrue(newest.waitForExistence(timeout: 15), "the conversation did not load")
+        let landed = poll(timeout: 5) { newest.isHittable }
+        snapshot("36-newest")
+        XCTAssertTrue(landed, "opening did not land on the newest message")
+        let top = element("chat-to-top")
+        XCTAssertTrue(top.waitForExistence(timeout: 5), "no button to the top")
+        top.tap()
+        let first = text("建議先做模擬器版本")
+        XCTAssertTrue(poll(timeout: 6) { first.exists && first.isHittable }, "the top button did not reach the first message")
+        XCTAssertFalse(newest.exists && newest.isHittable, "the newest message is still on screen after going to the top")
+        snapshot("36-top")
+        element("chat-to-bottom").tap()
+        XCTAssertTrue(poll(timeout: 6) { newest.exists && newest.isHittable }, "the bottom button did not reach the newest message")
+    }
+
     // MARK: - Helpers
 
     /// How many photos the fake helper's transcript of `session` holds from the user.
@@ -675,12 +724,34 @@ final class DeskRemoteUITests: XCTestCase {
                       token: try value("DESK_HELPER_TOKEN"))
     }
 
-    private func launch(pc: String?, openURL: String? = nil) {
+    private func launch(pc: String?, openURL: String? = nil, environment: [String: String] = [:]) {
         app = XCUIApplication()
         app.launchEnvironment["DESK_UI_TEST"] = "1"
         if let pc { app.launchEnvironment["DESK_UI_PC"] = pc }
         if let openURL { app.launchEnvironment["DESK_UI_OPEN_URL"] = openURL }
+        app.launchEnvironment.merge(environment) { $1 }
         app.launch()
+    }
+
+    /// Asks the fake helper directly (not through the app), e.g. to write to a conversation.
+    @discardableResult
+    private func ask(_ helper: Helper, _ path: String, body: [String: Any]? = nil) -> [String: Any]? {
+        guard let url = URL(string: "http://\(helper.host):\(helper.port)\(path)") else { return nil }
+        var request = URLRequest(url: url, timeoutInterval: 10)
+        request.setValue("Bearer \(helper.token)", forHTTPHeaderField: "Authorization")
+        if let body {
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        }
+        var out: [String: Any]?
+        let done = DispatchSemaphore(value: 0)
+        URLSession.shared.dataTask(with: request) { data, _, _ in
+            out = data.flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any]
+            done.signal()
+        }.resume()
+        _ = done.wait(timeout: .now() + 12)
+        return out
     }
 
     /// What the fake helper on `port` says about Codex's window, asked directly.
@@ -700,9 +771,9 @@ final class DeskRemoteUITests: XCTestCase {
         return running
     }
 
-    private func launchWithHelper(openURL: String? = nil) throws {
+    private func launchWithHelper(openURL: String? = nil, environment: [String: String] = [:]) throws {
         let helper = try helperSettings()
-        launch(pc: "示範電腦|\(helper.host)|\(helper.port)|\(helper.token)", openURL: openURL)
+        launch(pc: "示範電腦|\(helper.host)|\(helper.port)|\(helper.token)", openURL: openURL, environment: environment)
     }
 
     /// An element's label for a failure message; reading a missing element's label fails the test.

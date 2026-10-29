@@ -362,6 +362,32 @@ final class MetaAndUsageTests: XCTestCase {
         XCTAssertEqual(press as? [String: String], ["button": "允許"])
     }
 
+    func testLatestConversationPerAppAndWhetherItIsNew() throws {
+        let state = try HelperClient.decode(HelperState.self, status: 200, data: data("""
+        {"ok":true,"pc":{"name":"P","helperVersion":"0.5.12"},"capabilities":["read"],"apps":{},
+         "presence":{"idleSeconds":1,"locked":false},"warnings":[],
+         "latest":{"claude":{"id":"a","title":"整理 README","updatedAt":"2026-10-29T10:00:00Z","status":"needs-action"},
+                   "codex":null}}
+        """))
+        let claude = try XCTUnwrap(state.latest(.claude))
+        XCTAssertEqual(claude.title, "整理 README")
+        XCTAssertNil(state.latest(.codex))
+        let now = DeskText.parse("2026-10-29T10:05:00Z")!
+        XCTAssertEqual(DeskText.latestTime(claude, now: now), "等你回答・5 分鐘前")
+        let active = HelperState.Latest(id: "a", title: "t", updatedAt: "2026-10-29T10:05:00Z", status: "active")
+        XCTAssertEqual(DeskText.latestTime(active, now: now), "回覆中")
+        let idle = HelperState.Latest(id: "a", title: "t", updatedAt: "2026-10-29T07:00:00Z", status: "idle")
+        XCTAssertEqual(DeskText.latestTime(idle, now: now), "3 小時前")
+        XCTAssertTrue(DeskText.isNewer("2026-10-29T10:00:00Z", than: "2026-10-29T09:59:59Z"))
+        XCTAssertFalse(DeskText.isNewer("2026-10-29T10:00:00Z", than: "2026-10-29T10:00:00Z"))
+        XCTAssertFalse(DeskText.isNewer("2026-10-29T10:00:00Z", than: nil), "never looked is not news")
+        let old = try HelperClient.decode(HelperState.self, status: 200, data: data("""
+        {"ok":true,"pc":{"name":"P","helperVersion":"0.5.11"},"capabilities":["read"],"apps":{},
+         "presence":{"idleSeconds":1,"locked":false},"warnings":[]}
+        """))
+        XCTAssertNil(old.latest(.claude), "older helpers say nothing")
+    }
+
     func testMetaAndUsageText() {
         let full = ConversationMeta(model: "Opus 5.5", effort: "高",
                                     context: ConversationMeta.Context(used: 183_203, window: 1_000_000, percent: 18))
