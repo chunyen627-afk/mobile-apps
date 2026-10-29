@@ -1204,7 +1204,7 @@ class VersionTests(FakeEnvironment):
         self.assertEqual(sent, [], 'a restart that worked is not news')
         watcher.check_versions(now=1061)
         self.assertEqual(hub.state()['versions']['codex'],
-                         {'installed': '26.1023.6123.0', 'running': '26.1023.6123.0', 'update': False})
+                         {'installed': '26.1023.6123.0', 'running': '26.1023.6123.0', 'update': False, 'pending': None})
         watcher.check_versions(now=1400)
         self.assertEqual(driver.calls.count(('restart', 'codex')), 1)
 
@@ -1243,8 +1243,46 @@ class VersionTests(FakeEnvironment):
         self.assertNotIn(('restart', 'claude'), driver.calls)
         self.assertEqual(len(sent), 1, sent)
         self.assertIn('4.30.0.0', sent[0][1])
-        self.assertIn('不自動重開', sent[0][1])
+        self.assertIn('不自動按', sent[0][1])
         self.assertTrue(hub.state()['versions']['claude']['update'])
+
+    def test_claudes_update_button_is_told_and_pressed_only_from_the_phone(self):
+        hub, driver, watcher, sent, _ = self.version_setup(claude=('3.6556.2.0', '3.6556.2.0'))
+        driver.fake_update = {'claude': '重新啟動以更新 v4.29.0'}
+        watcher.look('claude')
+        watcher.check_versions(now=1000)
+        watcher.check_versions(now=1100)
+        self.assertNotIn('press_update', [c[0] for c in driver.calls], 'never pressed on its own')
+        self.assertEqual(len(sent), 1, sent)
+        self.assertIn('4.29.0', sent[0][1])
+        shown = hub.state()['versions']['claude']
+        self.assertEqual((shown['update'], shown['pending']), (True, '4.29.0'))
+        runner = h.ActionRunner(hub, driver, hub.presence, watcher, None, '示範電腦', hub.strings,
+                                verify_seconds=3, doc_wait=1, settle_seconds=0)
+        self.assertEqual(runner.submit('update', 'codex', None, {})[0], 400, 'Codex updates itself')
+        code, body = runner.submit('update', 'claude', None, {})
+        self.assertEqual(code, 202, body)
+        run_all(runner)
+        status = runner.status(body['id'])
+        self.assertEqual((status['state'], status['verified']), ('done', True), status)
+        self.assertIn('4.29.0', status['message'])
+        self.assertIn(('press_update', 'claude', '重新啟動以更新 v4.29.0', None), driver.calls)
+        watcher.look('claude')
+        self.assertEqual(runner.submit('update', 'claude', None, {})[1]['error'], 'no-update')
+
+    def test_codexs_own_update_button_is_pressed_when_idle(self):
+        _, driver, watcher, _, presence = self.version_setup(idle=30, codex=('26.1021.3705.0', '26.1021.3705.0'))
+        driver.fake_update = {'codex': '更新'}
+        watcher.look('codex')
+        watcher.check_versions(now=1000)
+        self.assertEqual([c for c in driver.calls if c[0] == 'press_update'], [], 'someone is at the PC')
+        presence['idleSeconds'] = 900
+        watcher.check_versions(now=1061)
+        self.assertIn(('press_update', 'codex', '更新', '更新'), driver.calls, 'pressed and confirmed')
+        driver.fake_update = {'codex': '更新'}
+        watcher.look('codex')
+        watcher.check_versions(now=1200)
+        self.assertEqual(len([c for c in driver.calls if c[0] == 'press_update']), 1, 'not again within the hour')
 
     def test_versions_read_from_package_paths(self):
         path = r'C:\Program Files\WindowsApps\OpenAI.Codex_26.1016.6573.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe'

@@ -631,6 +631,14 @@ function Set-CodexModel($w, $page, $s, $label) {
   }
 }
 
+# The app's own update button: Claude's starts with update_prefix and names the version
+# ("restart to update v4.29.0"); Codex's is exactly update_prefix (update_exact).
+function Is-UpdateButton($s, $n) {
+  if (-not $s.update_prefix -or -not $n) { return $false }
+  if ($s.update_exact) { return $n -eq $s.update_prefix }
+  return $n.StartsWith($s.update_prefix)
+}
+
 # Codex's fast mode (the lightning toggle in the model menu, read from the app's own strings
 # 10/29): the menu shows "enable fast mode" while it is off and "enable standard mode" while it
 # is on, so the label that is there tells the state and pressing it switches. Of any control type.
@@ -1051,33 +1059,36 @@ function Run-Command($c) {
     'inspect' {
       $w = Find-Window $c.app
       if (-not $w) {
-        $usage = $null
-        $hidden = if ($s.usage_prefix) { Find-HiddenWindow $c.app } else { $null }
+        $usage = $null; $update = $null
+        $hidden = if ($s.usage_prefix -or $s.update_prefix) { Find-HiddenWindow $c.app } else { $null }
         if ($hidden) {
           $buttons = $hidden.FindAll($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Button)))
           foreach ($b in $buttons) {
             $n = $b.Current.Name
-            if ($n -and $n.StartsWith($s.usage_prefix)) { $usage = $n; break }
+            if (-not $n) { continue }
+            if (-not $usage -and $s.usage_prefix -and $n.StartsWith($s.usage_prefix)) { $usage = $n }
+            if (-not $update -and (Is-UpdateButton $s $n)) { $update = $n }
           }
         }
-        return @{ ok = $true; window = $false; usage = $usage }
+        return @{ ok = $true; window = $false; usage = $usage; update = $update }
       }
       $prompt = Get-Prompt $w $s
       $edit = Find-ByName $w $CT::Edit $s.edit
       # The composer's model and usage buttons, in one pass over the buttons (Claude only).
-      $model = $null; $usage = $null; $mode = $null; $running = $false
-      if ($s.model_prefix -or $s.usage_prefix -or $s.modes -or $s.stop) {
+      $model = $null; $usage = $null; $mode = $null; $running = $false; $update = $null
+      if ($s.model_prefix -or $s.usage_prefix -or $s.modes -or $s.stop -or $s.update_prefix) {
         $buttons = $w.FindAll($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Button)))
         foreach ($b in $buttons) {
           $n = $b.Current.Name
           if (-not $model -and $s.model_prefix -and $n.StartsWith($s.model_prefix)) { $model = $n }
           if (-not $usage -and $s.usage_prefix -and $n.StartsWith($s.usage_prefix)) { $usage = $n }
+          if (-not $update -and (Is-UpdateButton $s $n)) { $update = $n }
           if (-not $mode -and $s.modes -and -not $s.permission_button -and (@($s.modes) -contains $n)) { $mode = $n }
           if ($s.stop -and $n -eq $s.stop) { $running = $true }
         }
       }
       return @{ ok = $true; window = $true; docs = @(Get-Docs $w); edit = [bool]$edit; prompt = $prompt
-        model = $model; usage = $usage; mode = $mode; running = $running }
+        model = $model; usage = $usage; mode = $mode; running = $running; update = $update }
     }
     'model' {
       $w = Need-Window $c.app
@@ -1095,6 +1106,31 @@ function Run-Command($c) {
       $page = Need-Doc $w $c.doc
       if ($c.app -eq 'codex') { return @{ ok = $true; how = (Set-CodexMode $w $page $s $c.mode) } }
       return @{ ok = $true; how = (Set-ClaudeMode $w $page $s $c.mode) }
+    }
+    'press_update' {
+      # The app's own update button (Claude "restart to update", Codex "update"), in its window
+      # or its hidden one; Codex then asks again in a dialog whose button has the same name.
+      $w = Find-Window $c.app
+      if (-not $w) { $w = Find-HiddenWindow $c.app }
+      if (-not $w) { Fail 'app-not-running' 'window not found' }
+      $b = Find-InApp $w $CT::Button $c.name
+      if (-not $b) { Fail 'not-found' 'no update button' }
+      if (-not (Invoke-Element $b)) { Fail 'not-invokable' 'the update button has no invoke pattern' }
+      if (-not $c.confirm) { return @{ ok = $true; how = 'invoke' } }
+      for ($i = 0; $i -lt 16; $i++) {
+        Start-Sleep -Milliseconds 250
+        $cond = New-Object System.Windows.Automation.AndCondition(
+          (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Button)),
+          (New-Object System.Windows.Automation.PropertyCondition($AE::NameProperty, $c.confirm)))
+        $roots = @($w) + @($AE::RootElement.FindAll($Tree::Children, [System.Windows.Automation.Condition]::TrueCondition) |
+          Where-Object { $_.Current.ProcessId -eq $w.Current.ProcessId -and -not (Same-Element $_ $w) })
+        foreach ($root in $roots) {
+          foreach ($e in $root.FindAll($Tree::Descendants, $cond)) {
+            if (-not (Same-Element $e $b) -and (Invoke-Element $e)) { return @{ ok = $true; how = 'confirmed' } }
+          }
+        }
+      }
+      Fail 'update-failed' 'the update was not confirmed'
     }
     'fast' {
       $w = Need-Window $c.app

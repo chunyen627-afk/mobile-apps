@@ -6,9 +6,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 # Includes 3 Windows-only tests (the real PowerShell companion twice, a real screen capture),
 # which are skipped (and counted) on macOS.
-EXPECTED_HELPER_TESTS="${EXPECTED_HELPER_TESTS:-128}"
+EXPECTED_HELPER_TESTS="${EXPECTED_HELPER_TESTS:-130}"
 EXPECTED_TESTS="${EXPECTED_TESTS:-41}"
-EXPECTED_UI_TESTS="${EXPECTED_UI_TESTS:-37}"
+EXPECTED_UI_TESTS="${EXPECTED_UI_TESTS:-38}"
 FIXTURES=fixtures/fake-helper
 HELPER_PORT=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["port"])' "$FIXTURES/fake-config.json")
 # A second fake helper that reports someone at the keyboard (5 s idle), for "send anyway".
@@ -108,7 +108,7 @@ BUSY_PID=$!
 python3 -I pc-helper/desk_remote_helper.py --fake "$FIXTURES" --fake-port "$CLOSED_PORT" --fake-closed codex --fake-usage codex=37 \
   > build/fake-helper-closed.log 2>&1 &
 CLOSED_PID=$!
-python3 -I pc-helper/desk_remote_helper.py --fake "$FIXTURES" --fake-port "$POPUP_PORT" --fake-popup \
+python3 -I pc-helper/desk_remote_helper.py --fake "$FIXTURES" --fake-port "$POPUP_PORT" --fake-popup --fake-update\
   > build/fake-helper-popup.log 2>&1 &
 POPUP_PID=$!
 for port in "$HELPER_PORT" "$BUSY_PORT" "$CLOSED_PORT" "$POPUP_PORT"; do

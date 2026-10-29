@@ -1778,6 +1778,10 @@ class WindowsDriver:
     def set_mode(self, app, doc, label):
         return self.ask(app, cmd='mode', doc=doc, mode=label).get('how')
 
+    def press_update(self, app, name, confirm=None):
+        """Presses the app's own update button `name` (and `confirm` in the dialog that follows)."""
+        return self.ask(app, cmd='press_update', name=name, confirm=confirm).get('how')
+
     def set_fast(self, app, doc, on):
         """Codex's fast mode switch in the model menu; 'already' when it was that way."""
         return self.ask(app, cmd='fast', doc=doc, on=bool(on)).get('how')
@@ -1925,6 +1929,12 @@ def package_version(path, package):
     return found.group(1) if found else None
 
 
+def pending_version(button):
+    """'4.29.0' from Claude's button "重新啟動以更新 v4.29.0"; the whole label if it has no version."""
+    found = re.search(r'v?(\d+(?:\.\d+)+)\s*$', button)
+    return found.group(1) if found else button
+
+
 def version_key(text):
     return tuple(int(part) for part in str(text).split('.') if part.isdigit())
 
@@ -2034,7 +2044,8 @@ class UiWatcher:
             self.state[app] = {'docs': docs, 'prompt': prompt, 'window': answer.get('window'),
                                'model': answer.get('model'), 'usage': usage, 'usageAt': usage_at,
                                'card': before.get('card'), 'cardAt': before.get('cardAt'),
-                               'mode': answer.get('mode'), 'running': answer.get('running')}
+                               'mode': answer.get('mode'), 'running': answer.get('running'),
+                               'update': answer.get('update')}
             if self.memory and answer.get('usage') and answer['usage'] != before.get('usage'):
                 self.remember_usage()
         if prompt and (not old or old['promptId'] != prompt['promptId']):
@@ -2210,15 +2221,35 @@ class UiWatcher:
             found = self.driver.versions()
         except (ActionError, OSError):
             return
+        # Claude downloads its own updates and shows "重新啟動以更新 v4.29.0" (office 10/30: 3.6556
+        # running with 4.29 waiting): that button is the update, pressed only from the phone.
+        button = (self.current('claude') or {}).get('update')
+        if button:
+            found['claude'] = dict(found.get('claude') or {}, pending=pending_version(button))
         with self.lock:
             self.versions = found
         claude = found.get('claude') or {}
-        if claude.get('old') and ('claude', claude['installed']) not in self.update_told:
-            self.update_told.add(('claude', claude['installed']))
-            self.send('🆕 Claude 桌面版新版已裝好', f"{self.pc_name}・新版 {claude['installed']}，目前跑的是 {claude['running']}；"
-                      '重開 Claude 桌面版才會套用（會關掉裡面的 Claude Code 工作，所以不自動重開）', 3, ['new'],
+        new = claude.get('pending') or (claude['installed'] if claude.get('old') else None)
+        if new and ('claude', new) not in self.update_told:
+            self.update_told.add(('claude', new))
+            self.send('🆕 Claude 桌面版有新版', f"{self.pc_name}・新版 {new}，目前跑的是 {claude.get('running')}；"
+                      '要更新就在桌面遙控的電腦頁按「重新啟動以更新」（會關掉裡面的 Claude Code 工作，所以不自動按）', 3, ['new'],
                       open_link(self.pc_name))
         codex = found.get('codex') or {}
+        codex_button = (self.current('codex') or {}).get('update')
+        if codex_button and not codex.get('old'):
+            # Codex's own updater (its header "更新"), when the Store has not brought the new one
+            # yet: press it once nothing is lost; again at most once an hour while it stays.
+            tried = self.restart_tried.get('codex-button')
+            if (tried is None or now - tried > 3600) and self.codex_restartable():
+                self.restart_tried['codex-button'] = now
+                strings = self.hub.strings.get('codex') or {}
+                logging.info('codex shows its update button: pressing it')
+                try:
+                    self.driver.press_update('codex', codex_button, strings.get('update_confirm'))
+                except ActionError as exc:
+                    logging.warning('codex update button failed: %s %s', exc.code, exc.message)
+            return
         if not codex.get('old'):
             return
         version = codex['installed']
@@ -2254,7 +2285,8 @@ class UiWatcher:
 
     def version_list(self):
         with self.lock:
-            return {app: {'installed': info.get('installed'), 'running': info.get('running'), 'update': bool(info.get('old'))}
+            return {app: {'installed': info.get('installed'), 'running': info.get('running'),
+                          'update': bool(info.get('old') or info.get('pending')), 'pending': info.get('pending')}
                     for app, info in self.versions.items()}
 
     UAC_GRACE = 20  # seconds: someone at the PC answers their own UAC prompt before this
@@ -2275,9 +2307,9 @@ class UiWatcher:
 
     def tick(self):
         self.check_uac()
-        self.check_versions()
         for app in APPS:
             self.look(app)
+        self.check_versions()  # after the looks: Claude's update button is read there
         self.check_popups()
         self.check_card()
         if time.monotonic() - self.last_turn_check > 15:
@@ -2392,6 +2424,11 @@ class ActionRunner:
                 return 400, error('bad-request', f'沒有這個{what}')
         if kind == 'stop' and not strings.get('stop'):
             return 400, error('not-supported', '這個 App 還不能從手機停止')
+        if kind == 'update':
+            if app != 'claude':
+                return 400, error('not-supported', 'Codex 會在電腦閒置時自己更新')
+            if not self.watcher.current(app).get('update'):
+                return 409, error('no-update', 'Claude 桌面版沒有等著安裝的新版')
         if kind == 'fast':
             if not strings.get('fast_on'):
                 return 400, error('not-supported', '這個 App 沒有快速模式')
@@ -2414,7 +2451,7 @@ class ActionRunner:
             if not current or current['promptId'] != payload.get('promptId'):
                 return 409, error('prompt-changed', '電腦上的權限詢問已經不一樣了，請重新整理')
             needs_front = app == 'claude' and decision == 'allow_once'
-        elif kind in ('stop', 'popup', 'fast') or (app == 'codex' and kind in ('model', 'mode')):
+        elif kind in ('stop', 'popup', 'fast', 'update') or (app == 'codex' and kind in ('model', 'mode')):
             # Pressed through UI Automation alone; opening another conversation still checks.
             needs_front = False
         else:
@@ -2521,7 +2558,8 @@ class ActionRunner:
         handler = {'send': self.do_send, 'permission': self.do_permission, 'new': self.do_new,
                    'open': self.do_open, 'answer': self.do_answer, 'model': self.do_model,
                    'effort': self.do_effort, 'mode': self.do_mode, 'stop': self.do_stop,
-                   'launch': self.do_launch, 'popup': self.do_popup, 'fast': self.do_fast}[action['kind']]
+                   'launch': self.do_launch, 'popup': self.do_popup, 'fast': self.do_fast,
+                   'update': self.do_update}[action['kind']]
         try:
             handler(action)
         except ActionError as exc:
@@ -2550,7 +2588,7 @@ class ActionRunner:
             return
         verb = {'send': '送出訊息', 'permission': '回覆權限', 'new': '開新對話', 'open': '打開對話',
                 'answer': '回答選項題', 'model': '切換模型', 'effort': '切換推理強度', 'mode': '切換權限模式',
-                'stop': '停止', 'popup': '按電腦上的視窗', 'fast': '切換快速模式'}[action['kind']]
+                'stop': '停止', 'popup': '按電腦上的視窗', 'fast': '切換快速模式', 'update': '更新桌面版'}[action['kind']]
         title = (action.get('info') or {}).get('title') or action.get('title') or ''
         head = f"⚠️ 手機{verb}失敗" + (f"：{APP_NAMES[action['app']]}" if action['app'] in APP_NAMES else '')
         body = f"{self.pc_name}・「{title}」：{action['message']}"
@@ -2898,6 +2936,31 @@ class ActionRunner:
             self.update(action, state='done', verified=False, message=f'已選「{label}」（下一則回覆起生效）')
         else:
             self.update(action, state='done', verified=True, message=f'權限模式已切換為 {label}')
+
+    def do_update(self, action):
+        """Claude's "重新啟動以更新" pressed for the phone (asked 10/30: only when the user presses
+        it there, since it ends every Claude Code session in the app); done once the new one runs."""
+        app = action['app']
+        button = self.watcher.current(app).get('update')
+        if not button:
+            raise ActionError('no-update', 'no update waiting')
+        target = pending_version(button)
+        self.recheck(action, False)
+        self.update(action, message=f'正在按「{button}」…')
+        self.driver.press_update(app, button)
+        logging.info('update %s: pressed %s', app, button)
+        self.update(action, message='Claude 桌面版重新啟動中…')
+        deadline = self.clock() + 240
+        while True:
+            running = (self.driver.versions().get(app) or {}).get('running')
+            if running and version_key(running)[:3] >= version_key(target)[:3]:
+                self.update(action, state='done', verified=True, message=f'Claude 桌面版已更新為 {running}')
+                return
+            if self.clock() >= deadline:
+                self.update(action, state='done', verified=False,
+                            message=f'已按下更新，但 4 分鐘內還沒看到新版在跑（現在是 {running or "沒有在跑"}）')
+                return
+            time.sleep(2)
 
     def do_fast(self, action):
         """Codex's fast mode switch; config.toml then has to say the same."""
@@ -3247,6 +3310,8 @@ def handler_for(hub, gate, networks, runner=None):
                 return None
             if parts[1:] == ['launch'] and parts[0] in APPS:
                 return self.send_json(*runner.submit('launch', parts[0], None, body))
+            if parts[1:] == ['update'] and parts[0] in APPS:
+                return self.send_json(*runner.submit('update', parts[0], None, body))
             if len(parts) == 3 and parts[0] == 'popups' and parts[2] == 'press' and re.fullmatch(r'[0-9a-f]{12}', parts[1]):
                 return self.send_json(*runner.submit('popup', None, parts[1], body))
             if len(parts) >= 2 and parts[0] in APPS and parts[1] == 'sessions':
@@ -3527,6 +3592,7 @@ class FakeDriver:
             data = self.session_file(app, self.open_doc.get(app))[1] or {}
             answer['mode'] = ClaudeSource.PERMISSION_LABELS.get(data.get('permissionMode'), data.get('permissionMode'))
             answer['running'] = self.open_doc.get(app) in self.running
+        answer['update'] = (getattr(self, 'fake_update', None) or {}).get(app)
         return answer
 
     def set_effort(self, app, doc, label):
@@ -3622,6 +3688,19 @@ class FakeDriver:
         return {app: {'installed': installed, 'running': running,
                       'old': bool(running) and version_key(running) < version_key(installed)}
                 for app, (installed, running) in found.items()}
+
+    def press_update(self, app, name, confirm=None):
+        """Claude's button restarts it into the version it names; the button then goes."""
+        self.calls.append(('press_update', app, name, confirm))
+        updates = dict(getattr(self, 'fake_update', None) or {})
+        updates.pop(app, None)
+        self.fake_update = updates
+        versions = dict(getattr(self, 'fake_versions', None) or {})
+        if app in versions:
+            version = pending_version(name)
+            versions[app] = (version, version)
+            self.fake_versions = versions
+        return 'confirmed' if confirm else 'invoke'
 
     def restart_app(self, app):
         self.calls.append(('restart', app))
@@ -3790,7 +3869,7 @@ def build_driving(hub, driver, notify, pc_name, cfg, interval, verify_seconds, m
                           idle_seconds=int(cfg.get('idle_seconds', 60)), verify_seconds=verify_seconds)
     watcher.busy = lambda: bool(runner.queue)
     hub.capabilities = ['read', 'send', 'permission', 'new', 'open', 'question', 'model', 'effort', 'mode', 'stop',
-                        'photo', 'launch', 'photos', 'popups', 'fast']
+                        'photo', 'launch', 'photos', 'popups', 'fast', 'update']
     hub.alerts = dict(hub.alerts, **(cfg.get('alerts') or {}))
     threading.Thread(target=watcher.run_forever, daemon=True).start()
     threading.Thread(target=runner.run_forever, daemon=True).start()
@@ -3836,6 +3915,7 @@ def main(argv=None):
     parser.add_argument('--fake-closed', default='', help='fake mode: these apps (comma-separated) start with no window')
     parser.add_argument('--fake-usage', default='', help='fake mode: app=percent, limits read just now')
     parser.add_argument('--fake-popup', action='store_true', help='fake mode: a firewall question is waiting on the desktop')
+    parser.add_argument('--fake-update', action='store_true', help='fake mode: Claude has a downloaded update waiting')
     args = parser.parse_args(argv)
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
@@ -3859,6 +3939,9 @@ def main(argv=None):
         driver = FakeDriver(fake, hub)
         if args.fake_popup:
             driver.fake_popups = [dict(FAKE_POPUP)]
+        if args.fake_update:
+            driver.fake_update = {'claude': '重新啟動以更新 v4.30.0'}
+            driver.fake_versions = {'claude': ('3.6556.2.0', '3.6556.2.0'), 'codex': ('26.1023.6123.0', '26.1023.6123.0')}
         runner = build_driving(hub, driver, None, cfg['pc_name'], cfg, interval=1, verify_seconds=10)
         hub.elevate = fake.elevate_relay()
         hub.screen = lambda: (fake.fixtures / 'screen.jpg').read_bytes()

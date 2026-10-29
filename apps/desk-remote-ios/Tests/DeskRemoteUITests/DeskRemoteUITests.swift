@@ -716,6 +716,27 @@ final class DeskRemoteUITests: XCTestCase {
         element("meta-done").tap()
     }
 
+    func test38ClaudeUpdateIsPressedOnlyFromThePhone() throws {
+        let helper = try helperSettings()
+        let port = try XCTUnwrap(ProcessInfo.processInfo.environment["DESK_POPUP_PORT"], "DESK_POPUP_PORT not set")
+        launch(pc: "示範電腦|\(helper.host)|\(port)|\(helper.token)")
+        openPC()
+        let button = element("claude-update")
+        XCTAssertTrue(reveal(button), "no update button for Claude's downloaded version")
+        XCTAssertTrue(button.label.contains("4.30.0"), "the button does not name the version: \(said(button))")
+        XCTAssertTrue(element("app-row-claude").label.contains("已下載"), "the Claude row does not say: \(said(element("app-row-claude")))")
+        snapshot("38a-update-waiting")
+        button.tap()
+        let confirm = app.buttons["重新啟動以更新"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), "no confirmation before ending Claude Code sessions")
+        XCTAssertTrue(text("Claude Code 工作").exists, "the confirmation does not say what is lost")
+        confirm.tap()
+        let note = element("claude-update-note")
+        XCTAssertTrue(waitFor(note, labelContains: "已更新為", timeout: 30), "the update did not finish: \(said(note))")
+        snapshot("38b-updated")
+        XCTAssertTrue(poll(timeout: 90) { !element("claude-update").exists }, "the button stays after updating")
+    }
+
     // MARK: - Helpers
 
     /// How many photos the fake helper's transcript of `session` holds from the user.

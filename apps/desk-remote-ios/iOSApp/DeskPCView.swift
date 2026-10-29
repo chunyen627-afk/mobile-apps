@@ -12,6 +12,10 @@ struct DeskPCView: View {
     @State private var editing: DeskPCEditTarget?
     @StateObject private var elevate = DeskElevateModel()
     @StateObject private var presser = DeskPopupPresser()
+    /// The Claude version the user is asked to confirm restarting into.
+    @State private var confirmUpdate: String?
+    @State private var updating = false
+    @State private var updateNote: String?
 
     var body: some View {
         List {
@@ -59,6 +63,18 @@ struct DeskPCView: View {
                     }
                     .accessibilityIdentifier("app-row-\(app.rawValue)")
                 }
+                // Claude's own "restart to update", pressed only from here (asked 10/30).
+                if let state, state.can("update"), let pending = state.version(.claude)?.pending {
+                    Button { confirmUpdate = pending } label: {
+                        Label("重新啟動以更新 Claude（\(pending)）", systemImage: "arrow.triangle.2.circlepath")
+                    }
+                    .disabled(updating)
+                    .accessibilityIdentifier("claude-update")
+                }
+                if let updateNote {
+                    Text(updateNote).font(.footnote).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("claude-update-note")
+                }
                 if state?.can("screen") == true {
                     NavigationLink(value: DeskRoute.screen(pcID)) {
                         Label("看電腦畫面", systemImage: "display")
@@ -93,9 +109,35 @@ struct DeskPCView: View {
             }
         }
         .sheet(item: $editing) { DeskPCEditView(store: store, target: $0) }
+        .confirmationDialog("重新啟動 Claude 桌面版並更新？",
+                            isPresented: Binding(get: { confirmUpdate != nil }, set: { if !$0 { confirmUpdate = nil } }),
+                            titleVisibility: .visible, presenting: confirmUpdate) { _ in
+            Button("重新啟動以更新", role: .destructive) { Task { await runUpdate() } }
+                .accessibilityIdentifier("claude-update-confirm")
+            Button("取消", role: .cancel) {}
+        } message: { pending in
+            Text("電腦上的 Claude 桌面版會關掉再開成 \(pending)。裡面所有 Claude Code 工作（包括正在跑的）都會中斷；重開後對話都還在。")
+        }
         // A window waiting on the PC is looked at more often, so its card goes once it is answered.
         .deskForegroundLoop(every: 15, failing: { unreachable || state?.shownPopups.isEmpty == false }) { await refresh() }
         .refreshable { await refresh() }
+    }
+
+    private func runUpdate() async {
+        guard let client = store.client(pcID) else { return }
+        updating = true
+        defer { updating = false }
+        updateNote = "正在電腦上按「重新啟動以更新」…"
+        do {
+            let start = try await client.updateApp(.claude)
+            let end = try await client.follow(start, timeout: 300) { status in updateNote = status.message }
+            updateNote = end.state == "failed" ? "沒有成功：\(end.message)" : end.message
+        } catch let error as HelperFailure {
+            updateNote = "沒有成功：\(DeskText.failure(error))"
+        } catch {
+            updateNote = "沒有成功：\(DeskText.failure(.unreachable))"
+        }
+        await refresh()
     }
 
     private func refresh() async {

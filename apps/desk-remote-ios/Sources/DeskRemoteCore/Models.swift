@@ -74,8 +74,10 @@ public struct HelperState: Decodable, Equatable, Sendable {
         public let installed: String?
         /// nil while the app is not running.
         public let running: String?
-        /// A newer version is installed than the one running.
+        /// A newer version is installed than the one running, or (Claude) downloaded and waiting.
         public let update: Bool
+        /// Claude's downloaded version behind its "重新啟動以更新" button, which the phone may press.
+        public let pending: String?
     }
 
     /// One of the PC list's links: a conversation and the desktop app it is in.

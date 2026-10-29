@@ -147,6 +147,11 @@ public struct HelperClient: Sendable {
         try await post(["v1", app.rawValue, "sessions", id, "mode"], ActionRequest(mode: mode, force: force ? true : nil))
     }
 
+    /// Presses Claude's own "重新啟動以更新" on the PC; it restarts Claude, ending its Claude Code sessions.
+    public func updateApp(_ app: DeskApp, force: Bool = false) async throws -> ActionStatus {
+        try await post(["v1", app.rawValue, "update"], ActionRequest(force: force ? true : nil))
+    }
+
     /// Turns Codex's fast mode (the lightning switch) on or off, through the conversation's model menu.
     public func setFast(_ app: DeskApp, session id: String, on: Bool, force: Bool = false) async throws -> ActionStatus {
         try await post(["v1", app.rawValue, "sessions", id, "fast"], ActionRequest(fast: on, force: force ? true : nil))

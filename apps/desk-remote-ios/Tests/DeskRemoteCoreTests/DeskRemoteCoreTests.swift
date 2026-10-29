@@ -418,6 +418,11 @@ final class MetaAndUsageTests: XCTestCase {
         """))
         XCTAssertEqual(DeskText.versionLine(.codex, closed), "版本 26.1023.6123.0（沒有開著）")
         XCTAssertNil(DeskText.versionLine(.codex, nil), "older helpers say nothing")
+        let waiting = try JSONDecoder().decode(HelperState.AppVersion.self, from: data("""
+        {"installed":"3.6556.2.0","running":"3.6556.2.0","update":true,"pending":"4.29.0"}
+        """))
+        XCTAssertEqual(DeskText.versionLine(.claude, waiting),
+                       "跑的是 3.6556.2.0，新版 4.29.0 已下載：按下面的「重新啟動以更新」才會換")
     }
 
     func testAUACPromptIsNamedNotTakenForALock() throws {

@@ -1,5 +1,5 @@
 {
-  "_comment": "Names of the desktop apps' controls as UI Automation reports them (Traditional Chinese UI, Claude 3.6556, Codex 26.1016). Change these, not the code, when an app update renames a control. Claude 3.6556 shows allow_once as its own button; more_allow is the fallback for builds that keep it in the dropdown. The Claude composer's model button reads \"模型：Opus 5.5 高\" and its menu lists the models as radio buttons (models: the ones the phone may pick; read 10/27); its usage button reads \"使用量：每週 · 所有模型：46% 週日上午11:00 重設\" and expands to a card whose group usage_card lists each limit (\"工作階段限制\" with \"2 小時 56 分後重設\", \"每週 · 所有模型\") with a progress bar holding the percent (Claude 4.x, read 10/28). Codex's model button reads \"GPT-6.1 Sol 高\" (model_prefix finds it, model_strip is removed before comparing): its menu has the item model_menu_item, which opens the models as radio buttons, and the effort menu button effort_menu; all of it works through UI Automation alone, even while the window is minimized (read 10/27). Claude's effort submenu (effort_item inside the model menu) opens only when the cursor rests on it; its radio buttons read \"中 推薦\", \"最高 3.5× 或更多使用量\" (label first). Claude's permission mode button is named after the current mode and expands to radio buttons \"<mode> <description>\". Codex's permission_button expands to menu items \"<mode> <description>\" and does not show the current one. Codex's effort is a slider driven by arrow keys (needs the window in front), so it is not switched from the phone. stop: the button Claude shows while a turn runs (Codex's was not seen yet). Codex's new-conversation page names its box new_edit instead of edit; Codex's stop button is also stop. Claude's sidebar entry is \"<title>\" or \"<title> 由 Claude 從「…」啟動\", next to \"<title> 的更多選項\" (menu_suffix) — the fallback when Claude ignores its links.",
+  "_comment": "Names of the desktop apps' controls as UI Automation reports them (Traditional Chinese UI, Claude 3.6556, Codex 26.1016). Change these, not the code, when an app update renames a control. Claude 3.6556 shows allow_once as its own button; more_allow is the fallback for builds that keep it in the dropdown. The Claude composer's model button reads \"模型：Opus 5.5 高\" and its menu lists the models as radio buttons (models: the ones the phone may pick; read 10/27); its usage button reads \"使用量：每週 · 所有模型：46% 週日上午11:00 重設\" and expands to a card whose group usage_card lists each limit (\"工作階段限制\" with \"2 小時 56 分後重設\", \"每週 · 所有模型\") with a progress bar holding the percent (Claude 4.x, read 10/28). Codex's model button reads \"GPT-6.1 Sol 高\" (model_prefix finds it, model_strip is removed before comparing): its menu has the item model_menu_item, which opens the models as radio buttons, and the effort menu button effort_menu; all of it works through UI Automation alone, even while the window is minimized (read 10/27). Claude's effort submenu (effort_item inside the model menu) opens only when the cursor rests on it; its radio buttons read \"中 推薦\", \"最高 3.5× 或更多使用量\" (label first). Claude's permission mode button is named after the current mode and expands to radio buttons \"<mode> <description>\". Codex's permission_button expands to menu items \"<mode> <description>\" and does not show the current one. Codex's effort is a slider driven by arrow keys (needs the window in front), so it is not switched from the phone. stop: the button Claude shows while a turn runs (Codex's was not seen yet). Codex's new-conversation page names its box new_edit instead of edit; Codex's stop button is also stop. Claude's sidebar entry is \"<title>\" or \"<title> 由 Claude 從「…」啟動\", next to \"<title> 的更多選項\" (menu_suffix) — the fallback when Claude ignores its links. Claude shows a downloaded update as the button 「重新啟動以更新 v4.29.0」 (update_prefix, read 10/30); pressing it restarts Claude. Codex's own updater shows a header button named exactly 「更新」 (update_exact) and then asks 「立即更新 Codex？」 with a button of the same name (update_confirm); both read from its zh-TW strings 10/30, not yet seen on screen.",
   "claude": {
     "edit": "提示詞",
     "deny": "拒絕",
@@ -18,6 +18,7 @@
     "efforts": ["低", "中", "高", "超高", "最高", "Ultracode"],
     "modes": ["手動", "接受編輯", "計畫", "自動", "略過權限確認"],
     "stop": "停止",
+    "update_prefix": "重新啟動以更新",
     "menu_suffix": "^的更多選項$"
   },
   "codex": {
@@ -36,6 +37,9 @@
     "modes": ["要求核准", "代我核准"],
     "stop": "停止",
     "fast_on": "啟用快速模式",
-    "fast_off": "啟用標準模式"
+    "fast_off": "啟用標準模式",
+    "update_prefix": "更新",
+    "update_exact": true,
+    "update_confirm": "更新"
   }
 }

@@ -171,6 +171,9 @@ public enum DeskText {
     /// (Codex restarts itself when the PC is idle; Claude is left to the user, 10/30).
     public static func versionLine(_ app: DeskApp, _ version: HelperState.AppVersion?) -> String? {
         guard let version, let installed = version.installed ?? version.running else { return nil }
+        if app == .claude, let pending = version.pending {
+            return "跑的是 \(version.running ?? "?")，新版 \(pending) 已下載：按下面的「重新啟動以更新」才會換"
+        }
         guard version.update, let running = version.running else {
             return version.running == nil ? "版本 \(installed)（沒有開著）" : "版本 \(version.running ?? installed)"
         }
