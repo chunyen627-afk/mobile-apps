@@ -398,6 +398,23 @@ final class MetaAndUsageTests: XCTestCase {
         XCTAssertEqual(request?["fast"] as? Bool, false)
     }
 
+    func testAUACPromptIsNamedNotTakenForALock() throws {
+        let state = try HelperClient.decode(HelperState.self, status: 200, data: data("""
+        {"ok":true,"pc":{"name":"P","helperVersion":"0.5.12"},"capabilities":["read"],"apps":{},
+         "presence":{"idleSeconds":900,"locked":true,"uac":true},"warnings":[]}
+        """))
+        XCTAssertEqual(DeskText.presence(state.presence), "UAC 擋著（要到電腦前按）")
+        let locked = HelperState.Presence(idleSeconds: 900, locked: true, uac: nil)
+        XCTAssertEqual(DeskText.presence(locked), "已鎖定（需要先解鎖）", "older helpers say only locked")
+        XCTAssertThrowsError(try HelperClient.decode(HelperState.self, status: 423, data: data("""
+        {"ok":false,"error":"uac","message":"x"}
+        """))) { XCTAssertEqual($0 as? HelperFailure, .uac) }
+        XCTAssertThrowsError(try HelperClient.decode(HelperState.self, status: 423, data: data("""
+        {"ok":false,"error":"locked","message":"x"}
+        """))) { XCTAssertEqual($0 as? HelperFailure, .locked) }
+        XCTAssertTrue(DeskText.failure(.uac).contains("到電腦前按"))
+    }
+
     func testMetaAndUsageText() {
         let full = ConversationMeta(model: "Opus 5.5", effort: "高",
                                     context: ConversationMeta.Context(used: 183_203, window: 1_000_000, percent: 18))

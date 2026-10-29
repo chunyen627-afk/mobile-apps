@@ -45,6 +45,8 @@ public enum HelperFailure: Error, Equatable, Sendable {
     /// Someone used the PC this many seconds ago; the phone may confirm and send anyway.
     case busyUser(Int?)
     case locked
+    /// A UAC prompt waits on the PC; only someone at the PC can answer it (helper 0.5.12).
+    case uac
     case promptChanged
     case badRequest(String?)
     case queueFull
@@ -287,6 +289,7 @@ public struct HelperClient: Sendable {
         case (429, _): throw HelperFailure.queueFull
         case (409, "busy-user"): throw HelperFailure.busyUser(body?.idleSeconds)
         case (409, "prompt-changed"), (409, "question-changed"): throw HelperFailure.promptChanged
+        case (423, "uac"): throw HelperFailure.uac
         case (423, _): throw HelperFailure.locked
         case (403, "bad-signature"): throw HelperFailure.badSignature
         case (410, _): throw HelperFailure.notFound(body?.message ?? "這個請求已經逾時")

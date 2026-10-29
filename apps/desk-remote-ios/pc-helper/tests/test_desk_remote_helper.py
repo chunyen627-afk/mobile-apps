@@ -1180,6 +1180,49 @@ class RecentTests(FakeEnvironment):
         self.assertEqual({r['app'] for r in hub.state()['recent']}, {'claude'})
 
 
+class UacTests(FakeEnvironment):
+    """A UAC prompt left on the PC (asked 10/29): sending says so and the phone is told once."""
+
+    def uac_setup(self):
+        sent = []
+        presence = dict(self.fake.cfg['presence'], locked=True, uac=True)
+        hub, driver, watcher, runner = drive(self.fake, presence, notify=lambda *a: sent.append(a))
+        sent.clear()
+        watcher.uac_since = None  # drive()'s first look started the clock on the real time
+        return hub, watcher, runner, sent, presence
+
+    def test_sending_is_refused_naming_the_uac_prompt(self):
+        hub, _, runner, _, _ = self.uac_setup()
+        code, body = runner.submit('send', 'claude', A, {'text': 'hi', 'force': True})
+        self.assertEqual((code, body['error']), (423, 'uac'))
+        self.assertIn('UAC', body['message'])
+        self.assertIn('到電腦前按', body['message'])
+        self.assertTrue(hub.state()['presence']['uac'])
+
+    def test_the_phone_is_told_once_when_nobody_answers_it(self):
+        _, watcher, _, sent, presence = self.uac_setup()
+        watcher.check_uac(now=100)
+        watcher.check_uac(now=110)
+        self.assertEqual(sent, [], 'someone at the PC gets a moment to answer it')
+        watcher.check_uac(now=121)
+        watcher.check_uac(now=200)
+        self.assertEqual(len(sent), 1, sent)
+        self.assertIn('UAC', sent[0][0])
+        self.assertIn('到電腦前按', sent[0][1])
+        presence.update(locked=False, uac=False)
+        watcher.check_uac(now=210)
+        presence.update(locked=True, uac=True)
+        watcher.check_uac(now=220)
+        watcher.check_uac(now=241)
+        self.assertEqual(len(sent), 2, 'a new prompt is told again')
+
+    def test_a_plain_lock_stays_a_lock(self):
+        presence = dict(self.fake.cfg['presence'], locked=True, uac=False)
+        hub, _, _, runner = drive(self.fake, presence)
+        self.assertEqual(runner.submit('send', 'claude', A, {'text': 'hi', 'force': True})[1]['error'], 'locked')
+        self.assertFalse(hub.state()['presence']['uac'])
+
+
 class PopupTests(FakeEnvironment):
     """A window that pops up on the desktop (a firewall question blocked sending, 10/29)."""
 

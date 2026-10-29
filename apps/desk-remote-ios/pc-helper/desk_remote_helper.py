@@ -1214,7 +1214,10 @@ class WindowsPresence:
             except OSError:
                 windows = {'claude': None, 'codex': None}
             self.cache, self.cached_at = {'windows': windows}, now
-        return {'idleSeconds': self.idle_seconds(), 'locked': self.locked(), 'windows': self.cache['windows']}
+        locked = self.locked()
+        # A UAC prompt is on the secure desktop, which reads as locked; its consent.exe tells the two apart.
+        return {'idleSeconds': self.idle_seconds(), 'locked': locked, 'uac': locked and process_running('consent.exe'),
+                'windows': self.cache['windows']}
 
     def forget_windows(self):
         """The next snapshot looks at the windows again (one was just shown)."""
@@ -1374,7 +1377,8 @@ class Hub:
         extra = (['elevate'] if self.elevate is not None else []) + (['screen'] if self.screen is not None else [])
         return {'ok': True, 'pc': {'name': self.pc_name, 'helperVersion': VERSION},
                 'capabilities': self.capabilities + extra,
-                'apps': apps, 'presence': {'idleSeconds': presence.get('idleSeconds'), 'locked': presence.get('locked')},
+                'apps': apps, 'presence': {'idleSeconds': presence.get('idleSeconds'), 'locked': presence.get('locked'),
+                                           'uac': bool(presence.get('uac'))},
                 'warnings': warnings, 'elevate': elevate, 'usage': self.usage(), 'models': choices('model', 'models'),
                 'efforts': choices('effort', 'efforts'), 'modes': choices('mode', 'modes'), 'stop': stop,
                 'popups': self.popups(), 'recent': self.recent(), 'fast': fast}
@@ -1836,6 +1840,32 @@ def codex_package_exe():
     return str(exe) if exe and exe.exists() else None
 
 
+def process_running(name):
+    """A process named `name` runs, whoever owns it: the process snapshot lists names without
+    opening the process, so SYSTEM's consent.exe (the UAC prompt) shows too."""
+    class Entry(ctypes.Structure):
+        _fields_ = [('dwSize', ctypes.c_uint32), ('cntUsage', ctypes.c_uint32), ('th32ProcessID', ctypes.c_uint32),
+                    ('th32DefaultHeapID', ctypes.c_size_t), ('th32ModuleID', ctypes.c_uint32),
+                    ('cntThreads', ctypes.c_uint32), ('th32ParentProcessID', ctypes.c_uint32),
+                    ('pcPriClassBase', ctypes.c_long), ('dwFlags', ctypes.c_uint32), ('szExeFile', ctypes.c_wchar * 260)]
+    kernel32 = ctypes.windll.kernel32
+    kernel32.CreateToolhelp32Snapshot.restype = ctypes.c_void_p
+    snapshot = kernel32.CreateToolhelp32Snapshot(0x2, 0)  # TH32CS_SNAPPROCESS
+    if not snapshot or snapshot == ctypes.c_void_p(-1).value:
+        return False
+    try:
+        entry = Entry()
+        entry.dwSize = ctypes.sizeof(Entry)
+        more = kernel32.Process32FirstW(ctypes.c_void_p(snapshot), ctypes.byref(entry))
+        while more:
+            if entry.szExeFile.lower() == name.lower():
+                return True
+            more = kernel32.Process32NextW(ctypes.c_void_p(snapshot), ctypes.byref(entry))
+        return False
+    finally:
+        kernel32.CloseHandle(ctypes.c_void_p(snapshot))
+
+
 def running_images(name):
     """Full paths of running processes whose executable is `name` (case-insensitive)."""
     psapi, kernel32 = ctypes.windll.psapi, ctypes.windll.kernel32
@@ -1887,6 +1917,7 @@ class UiWatcher:
         self.checked_once = False
         self.context_alerted, self.usage_alerted = set(), set()
         self.popups = []        # pop-up windows on the desktop at the last look, each with an id
+        self.uac_since = self.uac_told = None  # when a UAC prompt was first seen; whether the phone was told
         self.last_usage_check = 0.0
         self.usage_checked_once = False
         self.last_turn_check = 0.0
@@ -2072,7 +2103,24 @@ class UiWatcher:
             except OSError:
                 logging.exception('notification failed')
 
+    UAC_GRACE = 20  # seconds: someone at the PC answers their own UAC prompt before this
+
+    def check_uac(self, now=None):
+        """A UAC prompt left waiting blocks everything and cannot be pressed from the phone: tell
+        the phone once per prompt, when nobody has answered it for UAC_GRACE seconds (asked 10/29)."""
+        now = time.monotonic() if now is None else now
+        if not self.hub.presence.snapshot().get('uac'):
+            self.uac_since = self.uac_told = None
+            return
+        if self.uac_since is None:
+            self.uac_since = now
+        if not self.uac_told and now - self.uac_since >= self.UAC_GRACE:
+            self.uac_told = True
+            self.send('🛡️ 電腦跳出系統管理員確認（UAC）', f'{self.pc_name}・手機無法代按，請到電腦前按（或用 Google 遠端桌面）；'
+                      '按掉之前訊息送不出去', 4, ['shield'], open_link(self.pc_name))
+
     def tick(self):
+        self.check_uac()
         for app in APPS:
             self.look(app)
         self.check_popups()
@@ -2144,6 +2192,8 @@ class ActionRunner:
     def gate(self, force, needs_front=True):
         """None when the PC may be driven now, else (status, body)."""
         presence = self.presence.snapshot()
+        if presence.get('uac'):
+            return 423, error('uac', UAC_TEXT)
         if presence.get('locked'):
             return 423, error('locked', '電腦已鎖定，請先解鎖（可用 Google 遠端桌面）')
         idle = presence.get('idleSeconds')
@@ -2322,7 +2372,9 @@ class ActionRunner:
         except ActionError as exc:
             logging.warning('%s %s failed: %s %s', action['kind'], action['app'], exc.code, exc.message)
             message = failure_text(exc.code, exc.message)
-            if exc.code in ('focus-failed', 'paste-failed', 'no-prompt-box') and self.watcher.popup_list():
+            if exc.code != 'uac' and self.presence.snapshot().get('uac'):
+                message += '；' + UAC_TEXT  # a prompt that came up while this ran
+            elif exc.code in ('focus-failed', 'paste-failed', 'no-prompt-box') and self.watcher.popup_list():
                 message += '；電腦上有跳出的視窗擋著，可在電腦頁按掉後再送'
             self.update(action, state='failed', error=exc.code, message=message)
             self.tell(action, failed=True)
@@ -2869,7 +2921,10 @@ FAILURE_TEXT = {
     'worker-error': '畫面操作程式出錯',
     'popup-gone': '這個視窗已經關掉了',
     'press-failed': '按不下去（這個視窗可能要以管理員身分才能按）',
+    'uac': '電腦跳出系統管理員確認（UAC）擋著，要到電腦前按',
 }
+
+UAC_TEXT = '電腦跳出系統管理員確認（UAC）擋著，手機無法代按；請到電腦前按（或用 Google 遠端桌面），按掉前訊息送不出去'
 
 # What the worker found in front when it could not take the foreground ("in front: <process>").
 FRONT_NAMES = {

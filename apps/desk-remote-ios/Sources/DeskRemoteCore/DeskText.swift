@@ -23,6 +23,7 @@ public enum DeskText {
         case .readOnly: return "這台電腦的小幫手只能讀取（舊版或未開啟操作）"
         case .busyUser(let seconds): return seconds.map { "電腦有人在用（\($0) 秒前有操作）" } ?? "電腦有人在用"
         case .locked: return "電腦已鎖定，請先解鎖（可用 Google 遠端桌面）"
+        case .uac: return "電腦跳出系統管理員確認（UAC）擋著，手機無法代按；請到電腦前按（或用 Google 遠端桌面）"
         case .promptChanged: return "電腦上的詢問已經不一樣了（可能已經回答過）"
         case .badRequest(let message): return message ?? "送出的內容不對"
         case .queueFull: return "電腦端還有動作在排隊，請稍後再試"
@@ -65,6 +66,7 @@ public enum DeskText {
 
     /// "閒置 7 分鐘", "有人在用電腦", "已鎖定".
     public static func presence(_ presence: HelperState.Presence) -> String {
+        if presence.uac == true { return "UAC 擋著（要到電腦前按）" }
         if presence.locked == true { return "已鎖定（需要先解鎖）" }
         guard let seconds = presence.idleSeconds else { return "閒置時間未知" }
         if seconds < idleThreshold { return "有人在用電腦" }

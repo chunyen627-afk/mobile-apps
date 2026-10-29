@@ -29,6 +29,14 @@ public struct HelperState: Decodable, Equatable, Sendable {
     public struct Presence: Decodable, Equatable, Sendable {
         public let idleSeconds: Int?
         public let locked: Bool?
+        /// A UAC prompt is up (it also reads as locked); helper 0.5.12.
+        public let uac: Bool?
+
+        init(idleSeconds: Int?, locked: Bool?, uac: Bool? = nil) {
+            self.idleSeconds = idleSeconds
+            self.locked = locked
+            self.uac = uac
+        }
     }
 
     public struct ElevateSummary: Decodable, Equatable, Sendable {
