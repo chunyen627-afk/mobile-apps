@@ -1748,7 +1748,18 @@ class WindowsDriver:
             if time.monotonic() >= deadline:
                 raise ActionError('restart-failed', 'the old Codex did not end')
             time.sleep(0.5)
-        self.launch(app)
+        # The Start menu entry can start nothing at all (office 10/30: Codex stayed closed after
+        # the first automatic restart): then the package's own exe.
+        for again in (False, True):
+            self.launch(app, again=again)
+            deadline = time.monotonic() + 20
+            while not package_processes(package, exe):
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(0.5)
+            else:
+                return
+        raise ActionError('restart-failed', 'Codex did not start again')
 
     def press_popup(self, popup, button):
         """Presses `button` in `popup` while it still has its title; True once it has closed."""
@@ -2261,6 +2272,9 @@ class UiWatcher:
                 self.driver.restart_app('codex')
             except ActionError as exc:
                 logging.warning('restarting codex failed: %s %s', exc.code, exc.message)
+                self.update_told.add(('codex', version))
+                self.send('⚠️ Codex 換新版時沒能重新開起來', f'{self.pc_name}・新版 {version}；請在電腦上打開 Codex'
+                          '（或在手機點進 Codex 的對話清單，會試著叫出來）', 4, ['warning'], open_link(self.pc_name))
         elif tried is not None and now - tried > 180 and ('codex', version) not in self.update_told:
             self.update_told.add(('codex', version))
             self.send('⚠️ Codex 沒能重開成新版', f"{self.pc_name}・新版 {version} 已裝好，但還在跑 {codex['running']}；"

@@ -1236,6 +1236,19 @@ class VersionTests(FakeEnvironment):
         self.assertIn('Codex', sent[0][0])
         self.assertEqual(driver.calls.count(('restart', 'codex')), 1, 'tried once per version')
 
+    def test_a_codex_that_does_not_start_again_is_told_at_once(self):
+        _, driver, watcher, sent, _ = self.version_setup(codex=('26.1023.6123.0', '26.1016.6573.0'))
+
+        def dead(app):
+            driver.calls.append(('restart', app))
+            raise h.ActionError('restart-failed', 'Codex did not start again')
+        driver.restart_app = dead
+        watcher.check_versions(now=1000)
+        self.assertEqual(len(sent), 1, sent)
+        self.assertIn('沒能重新開起來', sent[0][0])
+        watcher.check_versions(now=1300)
+        self.assertEqual(len(sent), 1, 'told once')
+
     def test_a_new_claude_is_told_once_and_never_restarted(self):
         hub, driver, watcher, sent, _ = self.version_setup(claude=('4.30.0.0', '4.29.0.0'))
         watcher.check_versions(now=1000)
