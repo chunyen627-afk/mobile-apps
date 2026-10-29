@@ -62,7 +62,7 @@ scripts/build.sh              Mac 建置：契約檢查、模擬器測試、啟�
 schema/                       JSON Schema（Draft 2020-12）
 fixtures/                     合成示範資料（全部標示 demo）
 tools/                        Windows 可執行的契約、語法、靜態設定檢查
-docs/                         架構、建置、狀態
+docs/                         架構、建置、狀態、顯卡礦機設定與重建（MINING-FLEET.md）
 ```
 
 ## Windows 上可執行的檢查
@@ -129,6 +129,10 @@ python -I tools\check_static_policy.py
 | App 沒開、手機鎖定 | 由電腦端唯讀服務判斷，經 ntfy 推播：停止持續 1 分鐘、失聯 3 分鐘、仍在跑但 20 分鐘份額沒增加；全部解除後發「已恢復」。App 本身沒有背景讀取 |
 
 電腦端關機或服務停止時不會有推播。
+
+## 顯卡礦機改用 SRBMiner（2026-10-29）
+
+電腦端的顯卡礦工從 krig 換成 SRBMiner-Multi 3.8.1，並調整顯存與時脈：四台顯卡機的 Pearl 算力合計約 474 TH/s（本機統計，各台換礦工前後的對照見下方連結；礦池份額全部接受、0 拒絕，礦池網頁的實際入帳待 2026-10-30 對帳）。溫度改成「熱了降頻繼續挖、涼了自動升回、失控才停機」。各台設定值、溫度規則、踩過的坑與新機器加入步驟見 [顯卡礦機設定與重建](docs/MINING-FLEET.md)。App 本身不需修改。
 
 ## FPGA 礦機（VCU118）長期設定
 
