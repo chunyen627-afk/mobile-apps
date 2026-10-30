@@ -695,11 +695,14 @@ final class DeskRemoteUITests: XCTestCase {
         let bar = element("chat-scrollbar"), thumb = element("chat-thumb")
         XCTAssertTrue(bar.exists && thumb.exists, "no scroll bar or thumb")
         XCTAssertGreaterThan(thumb.frame.midY, bar.frame.midY, "the thumb is not near the end of a conversation opened at its end: \(thumb.frame) in \(bar.frame)")
-        // Held just above the thumb for a moment: a page or two up, not the top (the fake
-        // conversation is short, about 27 rows).
-        let above = bar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        // Held on the track above the thumb for a moment: a page or two up, not the top (the fake
+        // conversation is short, about 27 rows, so the thumb is about half the track: press well
+        // above its top, or the press lands on the thumb and just holds it).
+        let thumbTop = (thumb.frame.minY - bar.frame.minY) / bar.frame.height
+        let above = bar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: max(0.12, thumbTop - 0.15)))
         above.press(forDuration: 0.6)
-        XCTAssertTrue(poll(timeout: 3) { !(newest.exists && newest.isHittable) }, "holding the track above the thumb did not scroll up")
+        XCTAssertTrue(poll(timeout: 3) { !(newest.exists && newest.isHittable) },
+                      "holding the track above the thumb did not scroll up: thumb top at \(thumbTop), bar \(bar.value ?? "-")")
         XCTAssertFalse(first.exists && first.isHittable, "a short hold on the track jumped to the top")
         snapshot("36-scrollbar")
         // The thumb dragged to the bottom of the track: back at the newest message.
