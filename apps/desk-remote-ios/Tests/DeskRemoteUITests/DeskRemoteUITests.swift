@@ -688,24 +688,25 @@ final class DeskRemoteUITests: XCTestCase {
         snapshot("36-top")
         element("chat-to-bottom").tap()
         XCTAssertTrue(poll(timeout: 6) { newest.exists && newest.isHittable }, "the bottom button did not reach the newest message")
-        // The lever between the chevrons: pulled up it scrolls up a few rows at a time, the further
-        // the faster; let go it stops (asked 10/30, after held buttons).
+        // The scroll bar at the right edge, like the desktop's (asked 10/30): the thumb sits at the
+        // end now; holding the blank track above it pages up, a page at a time, towards the finger.
         let rail = top.frame
-        XCTAssertGreaterThan(rail.minX, app.windows.firstMatch.frame.maxX - 40, "the rail is not at the right edge: \(rail)")
-        let lever = element("chat-lever")
-        XCTAssertTrue(lever.exists, "no lever")
-        let knob = lever.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-        // A gentle pull (two fifths of its reach) held a moment: a few rows up, not the top (the
-        // fake conversation is short, about 27 rows).
-        knob.press(forDuration: 0.1, thenDragTo: knob.withOffset(CGVector(dx: 0, dy: -14)),
-                   withVelocity: .default, thenHoldForDuration: 1.2)
-        XCTAssertTrue(poll(timeout: 3) { !(newest.exists && newest.isHittable) }, "pulling the lever up did not scroll up")
-        XCTAssertFalse(first.exists && first.isHittable, "a gentle pull jumped to the top")
-        snapshot("36-lever")
-        // Pulled all the way down and held: back at the newest message.
-        knob.press(forDuration: 0.1, thenDragTo: knob.withOffset(CGVector(dx: 0, dy: 34)),
-                   withVelocity: .default, thenHoldForDuration: 4.0)
-        XCTAssertTrue(poll(timeout: 6) { newest.exists && newest.isHittable }, "pulling the lever down did not reach the newest message")
+        XCTAssertGreaterThan(rail.minX, app.windows.firstMatch.frame.maxX - 30, "the bar is not at the right edge: \(rail)")
+        let bar = element("chat-scrollbar"), thumb = element("chat-thumb")
+        XCTAssertTrue(bar.exists && thumb.exists, "no scroll bar or thumb")
+        XCTAssertGreaterThan(thumb.frame.midY, bar.frame.midY, "the thumb is not near the end of a conversation opened at its end: \(thumb.frame) in \(bar.frame)")
+        // Held just above the thumb for a moment: a page or two up, not the top (the fake
+        // conversation is short, about 27 rows).
+        let above = bar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        above.press(forDuration: 0.6)
+        XCTAssertTrue(poll(timeout: 3) { !(newest.exists && newest.isHittable) }, "holding the track above the thumb did not scroll up")
+        XCTAssertFalse(first.exists && first.isHittable, "a short hold on the track jumped to the top")
+        snapshot("36-scrollbar")
+        // The thumb dragged to the bottom of the track: back at the newest message.
+        let grip = thumb.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        grip.press(forDuration: 0.2, thenDragTo: bar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.97)),
+                   withVelocity: .slow, thenHoldForDuration: 0.5)
+        XCTAssertTrue(poll(timeout: 6) { newest.exists && newest.isHittable }, "dragging the thumb to the bottom did not reach the newest message")
     }
 
     func test37CodexFastModeSwitch() throws {
@@ -820,7 +821,7 @@ final class DeskRemoteUITests: XCTestCase {
             let texts = app.staticTexts.allElementsBoundByIndex.prefix(12).map { String($0.label.prefix(16)) }
             XCTFail("the new messages did not come: title \(said(app.navigationBars.firstMatch)), \(app.staticTexts.count) texts "
                     + "\(texts), \(replies.count) replies and \(users.count) user bubbles in the tree, "
-                    + "on screen \(shown), lever \(element("chat-lever").exists), landing \(element("chat-landing").exists), "
+                    + "on screen \(shown), bar \(element("chat-scrollbar").exists), landing \(element("chat-landing").exists), "
                     + "error \(said(element("chat-error"))), "
                     + "helper has \(events.count) events, last: \(String((events.last?["text"] as? String ?? "").prefix(30)))")
         }

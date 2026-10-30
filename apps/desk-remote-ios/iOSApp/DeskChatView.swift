@@ -35,8 +35,7 @@ struct DeskChatView: View {
     @StateObject private var presser = DeskPopupPresser()
     @FocusState private var inputFocused: Bool
     @State private var places = DeskRowPlaces()      // where the drawn rows are on the screen
-    @State private var holdIndex: Int?      // where the scroll lever has got to
-    @State private var holdUp = true        // which way it was going
+    @StateObject private var metrics = DeskScrollMetrics()  // where the scroll bar's thumb goes
     @State private var landing = false      // opening: hidden until it has reached the end
     @State private var settling = 0         // the latest run of scrolling to the end; older ones stop
 
@@ -108,14 +107,18 @@ struct DeskChatView: View {
                                                    value: ["bottom": geometry.frame(in: .named("chat")).minY])
                         })
                 }
+                .background(GeometryReader { geometry in
+                    Color.clear.preference(key: DeskContentFrame.self, value: geometry.frame(in: .named("chat")))
+                })
                 .opacity(landing ? 0 : 1)
                 .padding(.leading, 12)
-                // The scroll rail has a lane of its own, so it never covers the text (10/30).
-                .padding(.trailing, showsRail ? 34 : 12)
+                // The scroll bar has a lane of its own, so it never covers the text (10/30).
+                .padding(.trailing, showsRail ? 18 : 12)
                 .padding(.vertical, 8)
             }
             .coordinateSpace(name: "chat")
             .onPreferenceChange(DeskRowTops.self) { places.tops = $0 }
+            .onPreferenceChange(DeskContentFrame.self) { metrics.update(content: $0, viewport: places.height) }
             .background(GeometryReader { geometry in
                 Color.clear
                     .onAppear { places.height = geometry.size.height }
@@ -132,18 +135,16 @@ struct DeskChatView: View {
             .onChange(of: pending.count) { toEnd(proxy) }
             .onChange(of: log.prompt) { toEnd(proxy) }
             .onChange(of: log.question?.questionId) { toEnd(proxy) }
-            // A long conversation goes to its start or its end in one tap (asked 10/29); between the
-            // two, a small lever: pulled up or down it scrolls that way, the further the faster,
-            // and springs back when let go (asked 10/30, after held buttons). Right edge.
+            // A thin scroll bar like the desktop's at the right edge (asked 10/30, after held
+            // buttons and a lever): arrows to the start and the end, a grey thumb to drag, and
+            // holding the blank track pages towards the finger.
             .overlay(alignment: .trailing) {
                 if showsRail {
-                    DeskScrollLever(toTop: { jump(proxy, to: "top", anchor: .top) },
-                                    toBottom: { toEnd(proxy) },
-                                    step: { up, rows in step(proxy, up: up, rows: rows) },
-                                    released: { holdIndex = nil })
-                        .background(.regularMaterial, in: Capsule())
-                        .overlay(Capsule().stroke(Color.secondary.opacity(0.25)))
-                        .padding(.trailing, 3)
+                    DeskScrollBar(metrics: metrics,
+                                  toTop: { jump(proxy, to: "top", anchor: .top) },
+                                  toBottom: { toEnd(proxy) },
+                                  scroll: { fraction in scroll(proxy, to: fraction) })
+                        .padding(.trailing, 1)
                 }
             }
         }
@@ -278,27 +279,19 @@ struct DeskChatView: View {
 
     private var showsRail: Bool { log.rows.count > 12 }
 
-    /// One step of the lever: `rows` rows up or down from where the last step left off, starting
-    /// from the top (or bottom) row on the screen when the pull began or turned round. The lazy
-    /// stack draws more rows than fit (a short conversation all of them), so the rows' places
-    /// decide, not their drawing.
-    private func step(_ proxy: ScrollViewProxy, up: Bool, rows: Int) {
+    /// Scrolls to `fraction` of the way through the conversation (0 its start, 1 its end), for the
+    /// scroll bar. The scroll view only goes to rows, so the row that far down the list is put
+    /// that far down the screen: the first at the top, the last at the bottom, the rest in between.
+    private func scroll(_ proxy: ScrollViewProxy, to fraction: CGFloat) {
         let ids = log.rows.map(\.id)
         guard !ids.isEmpty else { return }
-        if holdIndex == nil || holdUp != up {
-            holdUp = up
-            let placed = ids.indices.compactMap { index in places.tops[ids[index]].map { (index, $0) } }
-            let top = placed.last { $0.1 <= 1 }?.0 ?? placed.first?.0
-            let bottom = placed.last { $0.1 < places.height }?.0
-            holdIndex = (up ? top : bottom) ?? (up ? ids.count - 1 : 0)
-        }
-        let current = holdIndex ?? 0
-        let next = up ? max(0, current - rows) : min(ids.count - 1, current + rows)
-        holdIndex = next
-        if next == current {
-            proxy.scrollTo(up ? "top" : "bottom", anchor: up ? .top : .bottom)
+        if fraction <= 0.002 {
+            proxy.scrollTo("top", anchor: .top)
+        } else if fraction >= 0.998 {
+            proxy.scrollTo("bottom", anchor: .bottom)
         } else {
-            withAnimation(.linear(duration: 0.1)) { proxy.scrollTo(ids[next], anchor: up ? .top : .bottom) }
+            let index = Int((CGFloat(ids.count - 1) * fraction).rounded())
+            proxy.scrollTo(ids[index], anchor: UnitPoint(x: 0, y: fraction))
         }
     }
 
@@ -505,76 +498,117 @@ struct DeskRowTops: PreferenceKey {
     }
 }
 
-/// Half of the scroll rail at the conversation's right edge: a tap jumps to the end, holding it
-/// calls `step` about nine times a second until it is let go.
-/// The scroll rail: a chevron to the top, a lever, a chevron to the end. The lever's knob follows
-/// the finger up to `reach` points each way; while it is off centre `step` is called again and
-/// again, more rows and more often the further it is pulled; let go, it springs back and stops.
-struct DeskScrollLever: View {
+/// The whole conversation's frame in the scroll view's space: its top edge is minus the scroll
+/// offset, its height the content's (the lazy stack's estimate for rows not drawn yet).
+struct DeskContentFrame: PreferenceKey {
+    static var defaultValue = CGRect.zero
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) { value = nextValue() }
+}
+
+/// Where the scroll bar's thumb goes, kept apart from the view's state so that scrolling redraws
+/// the bar alone: `position` 0 at the start of the conversation, 1 at its end; `size` the share of
+/// the conversation on the screen.
+final class DeskScrollMetrics: ObservableObject {
+    @Published var position: CGFloat = 1
+    @Published var size: CGFloat = 1
+
+    func update(content: CGRect, viewport: CGFloat) {
+        guard content.height > 0, viewport > 0 else { return }
+        let room = content.height - viewport
+        let newPosition = room > 1 ? min(1, max(0, -content.minY / room)) : 1
+        let newSize = min(1, viewport / content.height)
+        if abs(newPosition - position) > 0.002 { position = newPosition }
+        if abs(newSize - size) > 0.01 { size = newSize }
+    }
+}
+
+/// A thin scroll bar like the desktop's, at the conversation's right edge: an arrow at each end
+/// (a tap goes to the start or the end), a grey thumb that follows the scrolling and can be
+/// dragged, and a track that, held above or below the thumb, pages that way until the thumb
+/// reaches the finger or the finger lifts (asked 10/30).
+struct DeskScrollBar: View {
+    @ObservedObject var metrics: DeskScrollMetrics
     let toTop: () -> Void
     let toBottom: () -> Void
-    let step: (_ up: Bool, _ rows: Int) -> Void
-    let released: () -> Void
-    @State private var offset: CGFloat = 0
-    @State private var pulling: Task<Void, Never>?
-    static let reach: CGFloat = 34
+    let scroll: (CGFloat) -> Void
+    @State private var grab: CGFloat?           // the finger's offset from the thumb's top while dragging it
+    @State private var paging: Task<Void, Never>?
+    @State private var finger: CGFloat = 0      // the finger's place on the track while it is held
+    static let width: CGFloat = 14
+    static let arrow: CGFloat = 18
+    static let thumbMinimum: CGFloat = 36
 
     var body: some View {
         VStack(spacing: 0) {
-            Image(systemName: "chevron.up.2")
-                .font(.footnote.weight(.bold))
-                .frame(width: 26, height: 30)
-                .contentShape(Rectangle())
-                .onTapGesture(perform: toTop)
-                .accessibilityLabel("捲到最上面")
-                .accessibilityAddTraits(.isButton)
-                .accessibilityIdentifier("chat-to-top")
-            ZStack {
-                Capsule().fill(Color.secondary.opacity(0.2)).frame(width: 6)
-                Capsule()
-                    .fill(offset == 0 ? Color.secondary : Color.accentColor)
-                    .frame(width: 18, height: 26)
-                    .offset(y: offset)
-            }
-            .frame(width: 26, height: Self.reach * 2 + 26)
-            .contentShape(Rectangle())
-            .gesture(DragGesture(minimumDistance: 0)
-                .onChanged { value in
-                    offset = min(Self.reach, max(-Self.reach, value.translation.height))
-                    if pulling == nil { pulling = Task { @MainActor in await pull() } }
+            arrowView("chevron.up", label: "捲到最上面", identifier: "chat-to-top", action: toTop)
+            GeometryReader { geometry in
+                let track = geometry.size.height
+                let thumbHeight = min(track, max(Self.thumbMinimum, track * metrics.size))
+                let thumbTop = (track - thumbHeight) * metrics.position
+                ZStack(alignment: .top) {
+                    Color.clear
+                    Capsule()
+                        .fill(Color.secondary.opacity(grab == nil ? 0.5 : 0.85))
+                        .frame(width: 5, height: thumbHeight)
+                        .offset(y: thumbTop)
+                        .accessibilityIdentifier("chat-thumb")
                 }
-                .onEnded { _ in
-                    pulling?.cancel()
-                    pulling = nil
-                    withAnimation(.spring(duration: 0.25)) { offset = 0 }
-                    released()
-                })
-            .accessibilityElement()
-            .accessibilityLabel("快速捲動拉桿（按著往上或往下拉）")
-            .accessibilityIdentifier("chat-lever")
-            Image(systemName: "chevron.down.2")
-                .font(.footnote.weight(.bold))
-                .frame(width: 26, height: 30)
+                .frame(width: Self.width, height: track)
                 .contentShape(Rectangle())
-                .onTapGesture(perform: toBottom)
-                .accessibilityLabel("捲到最新")
-                .accessibilityAddTraits(.isButton)
-                .accessibilityIdentifier("chat-to-bottom")
+                .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                    .onChanged { value in
+                        finger = value.location.y
+                        if grab == nil && paging == nil {
+                            if finger >= thumbTop && finger <= thumbTop + thumbHeight {
+                                grab = finger - thumbTop
+                            } else {
+                                paging = Task { @MainActor in await page(track: track, thumbHeight: thumbHeight) }
+                            }
+                        }
+                        if let grab, track > thumbHeight {
+                            let top = min(max(0, finger - grab), track - thumbHeight)
+                            scroll(top / (track - thumbHeight))
+                        }
+                    }
+                    .onEnded { _ in
+                        grab = nil
+                        paging?.cancel()
+                        paging = nil
+                    })
+            }
+            arrowView("chevron.down", label: "捲到最新", identifier: "chat-to-bottom", action: toBottom)
         }
+        .frame(width: Self.width)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("chat-scrollbar")
     }
 
-    /// A pull of under 15% does nothing (a tap or a wobble); then 1 row every 0.2 s, 2 rows every
-    /// 0.12 s past 45%, 4 rows every 0.09 s past 80%.
-    private func pull() async {
+    private func arrowView(_ symbol: String, label: String, identifier: String, action: @escaping () -> Void) -> some View {
+        Image(systemName: symbol)
+            .font(.system(size: 9, weight: .bold))
+            .foregroundStyle(.secondary)
+            .frame(width: Self.width, height: Self.arrow)
+            .contentShape(Rectangle())
+            .onTapGesture(perform: action)
+            .accessibilityLabel(label)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityIdentifier(identifier)
+    }
+
+    /// A page (the share on the screen) towards the finger about six times a second, stopping once
+    /// the thumb has reached it; the finger may move meanwhile.
+    private func page(track: CGFloat, thumbHeight: CGFloat) async {
+        guard track > thumbHeight else { return }
         while !Task.isCancelled {
-            let strength = abs(offset) / Self.reach
-            var wait: UInt64 = 80
-            if strength >= 0.15 {
-                let rows = strength < 0.45 ? 1 : (strength < 0.8 ? 2 : 4)
-                wait = strength < 0.45 ? 200 : (strength < 0.8 ? 120 : 90)
-                step(offset < 0, rows)
+            let wanted = min(1, max(0, (finger - thumbHeight / 2) / (track - thumbHeight)))
+            let current = metrics.position
+            let step = max(0.02, metrics.size)
+            if wanted < current - 0.005 {
+                scroll(max(wanted, current - step))
+            } else if wanted > current + 0.005 {
+                scroll(min(wanted, current + step))
             }
-            try? await Task.sleep(nanoseconds: wait * 1_000_000)
+            try? await Task.sleep(nanoseconds: 160_000_000)
         }
     }
 }
