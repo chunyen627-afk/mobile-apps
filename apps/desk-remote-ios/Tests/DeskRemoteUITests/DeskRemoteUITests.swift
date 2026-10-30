@@ -688,6 +688,15 @@ final class DeskRemoteUITests: XCTestCase {
         snapshot("36-top")
         element("chat-to-bottom").tap()
         XCTAssertTrue(poll(timeout: 6) { newest.exists && newest.isHittable }, "the bottom button did not reach the newest message")
+        // Held, the buttons scroll a few rows at a time instead of jumping (asked 10/30).
+        let rail = top.frame
+        XCTAssertGreaterThan(rail.minX, app.windows.firstMatch.frame.maxX - 40, "the rail is not at the right edge: \(rail)")
+        top.press(forDuration: 1.0)
+        XCTAssertTrue(poll(timeout: 3) { !(newest.exists && newest.isHittable) }, "holding the top button did not scroll up")
+        XCTAssertFalse(first.exists && first.isHittable, "holding the top button jumped to the top")
+        snapshot("36-held")
+        element("chat-to-bottom").press(forDuration: 4.0)
+        XCTAssertTrue(poll(timeout: 6) { newest.exists && newest.isHittable }, "holding the bottom button did not reach the newest message")
     }
 
     func test37CodexFastModeSwitch() throws {
@@ -726,15 +735,46 @@ final class DeskRemoteUITests: XCTestCase {
         XCTAssertTrue(button.label.contains("4.30.0"), "the button does not name the version: \(said(button))")
         XCTAssertTrue(element("app-row-claude").label.contains("已下載"), "the Claude row does not say: \(said(element("app-row-claude")))")
         snapshot("38a-update-waiting")
-        button.tap()
-        let confirm = app.buttons["重新啟動以更新"]
-        XCTAssertTrue(confirm.waitForExistence(timeout: 5), "no confirmation before ending Claude Code sessions")
-        XCTAssertTrue(text("Claude Code 工作").exists, "the confirmation does not say what is lost")
-        confirm.tap()
         let note = element("claude-update-note")
-        XCTAssertTrue(waitFor(note, labelContains: "已更新為", timeout: 30), "the update did not finish: \(said(note))")
-        snapshot("38b-updated")
+        func pressUpdate() {
+            XCTAssertTrue(reveal(element("claude-update")), "the update button is gone")
+            element("claude-update").tap()
+            let confirm = app.buttons["重新啟動以更新"]
+            XCTAssertTrue(confirm.waitForExistence(timeout: 5), "no confirmation before ending Claude Code sessions")
+            XCTAssertTrue(text("Claude Code 工作").exists, "the confirmation does not say what is lost")
+            confirm.tap()
+        }
+        // Claude Code is working (fake): Claude asks on the PC first, and the phone answers (10/30).
+        pressUpdate()
+        XCTAssertTrue(waitFor(note, labelContains: "仍在處理中", timeout: 30), "the PC's question is not mentioned: \(said(note))")
+        let cancel = element("popup-button-取消")
+        XCTAssertTrue(cancel.waitForExistence(timeout: 15), "Claude's question is not shown with its buttons")
+        XCTAssertTrue(element("popup-button-等待 Claude").exists && element("popup-button-仍要結束").exists, "buttons missing")
+        snapshot("38b-claude-asks")
+        XCTAssertTrue(reveal(cancel), "the cancel button cannot be reached")
+        cancel.tap()
+        let sure = app.buttons["按「取消」"]
+        XCTAssertTrue(sure.waitForExistence(timeout: 5), "pressing was not confirmed first")
+        sure.tap()
+        XCTAssertTrue(waitFor(element("popup-result"), labelContains: "已在電腦上按「取消」", timeout: 25),
+                      "result says \(said(element("popup-result")))")
+        XCTAssertTrue(poll(timeout: 15) { !self.element("popup-button-取消").exists }, "the question is still shown")
+        XCTAssertTrue(reveal(element("claude-update")), "cancelling took the update button away")
+        snapshot("38c-cancelled")
+        // Again, and this time quit anyway: it updates.
+        pressUpdate()
+        let quit = element("popup-button-仍要結束")
+        XCTAssertTrue(quit.waitForExistence(timeout: 30), "Claude's question did not come back")
+        XCTAssertTrue(reveal(quit), "the quit button cannot be reached")
+        quit.tap()
+        let sureQuit = app.buttons["按「仍要結束」"]
+        XCTAssertTrue(sureQuit.waitForExistence(timeout: 5), "pressing was not confirmed first")
+        sureQuit.tap()
+        XCTAssertTrue(waitFor(element("popup-result"), labelContains: "已在電腦上按「仍要結束」", timeout: 25),
+                      "result says \(said(element("popup-result")))")
         XCTAssertTrue(poll(timeout: 90) { !element("claude-update").exists }, "the button stays after updating")
+        XCTAssertTrue(element("app-version-claude").label.contains("4.30.0"), "version: \(said(element("app-version-claude")))")
+        snapshot("38d-updated")
     }
 
     // MARK: - Helpers

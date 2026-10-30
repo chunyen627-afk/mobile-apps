@@ -34,6 +34,8 @@ struct DeskChatView: View {
     @State private var pcState: HelperState?
     @StateObject private var presser = DeskPopupPresser()
     @FocusState private var inputFocused: Bool
+    @State private var topID: String?       // the row at the top of the screen
+    @State private var holdIndex: Int?      // where a held scroll button has got to
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -93,9 +95,13 @@ struct DeskChatView: View {
                     }
                     Color.clear.frame(height: 1).id("bottom")
                 }
-                .padding(.horizontal, 12)
+                .scrollTargetLayout()
+                .padding(.leading, 12)
+                // The scroll rail has a lane of its own, so it never covers the text (10/30).
+                .padding(.trailing, showsRail ? 34 : 12)
                 .padding(.vertical, 8)
             }
+            .scrollPosition(id: $topID)
             .scrollDismissesKeyboard(.interactively)
             .defaultScrollAnchor(.bottom)
             // Opening a conversation lands on its newest message (it sometimes stopped short, 10/29).
@@ -104,17 +110,24 @@ struct DeskChatView: View {
             .onChange(of: pending.count) { jump(proxy, to: "bottom") }
             .onChange(of: log.prompt) { jump(proxy, to: "bottom") }
             .onChange(of: log.question?.questionId) { jump(proxy, to: "bottom") }
-            // A long conversation goes to its start or its end in one tap (asked 10/29).
-            .overlay(alignment: .bottomTrailing) {
-                if log.rows.count > 12 {
-                    VStack(spacing: 10) {
-                        DeskScrollButton(symbol: "chevron.up.2", label: "捲到最上面") { jump(proxy, to: "top", anchor: .top) }
+            // A long conversation goes to its start or its end in one tap (asked 10/29), and scrolls
+            // fast while a button is held; the rail sits at the right edge (asked 10/30).
+            .overlay(alignment: .trailing) {
+                if showsRail {
+                    VStack(spacing: 0) {
+                        DeskHoldButton(symbol: "chevron.up.2", label: "捲到最上面（按住往上捲）",
+                                       tap: { jump(proxy, to: "top", anchor: .top) },
+                                       step: { tick in step(proxy, up: true, tick: tick) })
                             .accessibilityIdentifier("chat-to-top")
-                        DeskScrollButton(symbol: "chevron.down.2", label: "捲到最新") { jump(proxy, to: "bottom") }
+                        Divider().frame(width: 16)
+                        DeskHoldButton(symbol: "chevron.down.2", label: "捲到最新（按住往下捲）",
+                                       tap: { jump(proxy, to: "bottom") },
+                                       step: { tick in step(proxy, up: false, tick: tick) })
                             .accessibilityIdentifier("chat-to-bottom")
                     }
-                    .padding(.trailing, 10)
-                    .padding(.bottom, 12)
+                    .background(.regularMaterial, in: Capsule())
+                    .overlay(Capsule().stroke(Color.secondary.opacity(0.25)))
+                    .padding(.trailing, 3)
                 }
             }
         }
@@ -198,6 +211,27 @@ struct DeskChatView: View {
                 try? await Task.sleep(nanoseconds: delay * 1_000_000)
                 proxy.scrollTo(target, anchor: anchor)
             }
+        }
+    }
+
+    private var showsRail: Bool { log.rows.count > 12 }
+
+    /// One step of a held scroll button: a row at first, then 2, then 4 at a time, from the row
+    /// that was at the top when the hold began.
+    private func step(_ proxy: ScrollViewProxy, up: Bool, tick: Int) {
+        let ids = log.rows.map(\.id)
+        guard !ids.isEmpty else { return }
+        if tick == 0 || holdIndex == nil {
+            holdIndex = topID.flatMap { ids.firstIndex(of: $0) } ?? (topID == "top" ? 0 : ids.count - 1)
+        }
+        let current = holdIndex ?? 0
+        let size = tick < 6 ? 1 : (tick < 16 ? 2 : 4)
+        let next = up ? max(0, current - size) : min(ids.count - 1, current + size)
+        holdIndex = next
+        if next == current {
+            proxy.scrollTo(up ? "top" : "bottom", anchor: up ? .top : .bottom)
+        } else {
+            withAnimation(.linear(duration: 0.1)) { proxy.scrollTo(ids[next], anchor: .top) }
         }
     }
 
@@ -385,26 +419,53 @@ struct DeskChatView: View {
     }
 }
 
-/// A message typed on the phone that the transcript does not show yet.
-/// A round button floating over the conversation's right edge.
-struct DeskScrollButton: View {
+/// Half of the scroll rail at the conversation's right edge: a tap jumps to the end, holding it
+/// calls `step` about nine times a second until it is let go.
+struct DeskHoldButton: View {
     let symbol: String
     let label: String
-    let action: () -> Void
+    let tap: () -> Void
+    let step: (Int) -> Void
+    @State private var pressing = false
+    @State private var repeating = false
+    @State private var holding: Task<Void, Never>?
 
     var body: some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.subheadline.weight(.semibold))
-                .frame(width: 40, height: 40)
-                .background(.regularMaterial, in: Circle())
-                .overlay(Circle().stroke(Color.secondary.opacity(0.25)))
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(label)
+        Image(systemName: symbol)
+            .font(.footnote.weight(.bold))
+            .foregroundStyle(pressing ? Color.accentColor : Color.primary)
+            .frame(width: 26, height: 64)
+            .contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 0)
+                .onChanged { _ in
+                    guard !pressing else { return }
+                    pressing = true
+                    holding = Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 350_000_000)
+                        var tick = 0
+                        while !Task.isCancelled {
+                            repeating = true
+                            step(tick)
+                            tick += 1
+                            try? await Task.sleep(nanoseconds: 110_000_000)
+                        }
+                    }
+                }
+                .onEnded { _ in
+                    holding?.cancel()
+                    holding = nil
+                    if !repeating { tap() }
+                    pressing = false
+                    repeating = false
+                })
+            .accessibilityElement()
+            .accessibilityLabel(label)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { tap() }
     }
 }
 
+/// A message typed on the phone that the transcript does not show yet.
 struct DeskPending: Identifiable, Equatable {
     let id = UUID()
     let text: String

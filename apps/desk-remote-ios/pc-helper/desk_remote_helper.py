@@ -26,6 +26,7 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -36,7 +37,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.12'
+VERSION = '0.5.13'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -1282,8 +1283,12 @@ class Notifier:
         body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
         request = urllib.request.Request(self.cfg['server'], data=body, method='POST',
                                          headers={'Content-Type': 'application/json'})
-        with urllib.request.urlopen(request, timeout=10) as response:
-            response.read(4096)
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                response.read(4096)
+        except urllib.error.HTTPError as e:  # ntfy says why in its body (a 413 on 10/30)
+            reason = e.read(300).decode('utf-8', 'replace')
+            raise OSError(f'ntfy answered {e.code}: {reason}') from None
 
 
 class AuthGate:
@@ -2100,16 +2105,17 @@ class UiWatcher:
                 if self.memory:
                     self.remember_usage()
 
-    def check_popups(self):
+    def check_popups(self, notify=True):
         """A window that pops up and waits for an answer (a firewall question, found 10/29) keeps
         the desktop apps from coming to the front, so messages cannot be sent: tell the phone once
-        per window, and let it press one of the window's buttons."""
+        per window, and let it press one of the window's buttons. Returns the windows; `notify`
+        False when the phone is already looking (it pressed the button that opened the window)."""
         if not hasattr(self.driver, 'popups'):
-            return
+            return []
         try:
             found = self.driver.popups()
         except ActionError:
-            return
+            return []
         listed = []
         for raw in found:
             if not isinstance(raw, dict) or not raw.get('buttons'):
@@ -2123,11 +2129,12 @@ class UiWatcher:
             known = {p['id'] for p in self.popups}
             self.popups = listed
         for popup in listed:
-            if popup['id'] not in known:
+            if popup['id'] not in known and notify:
                 name = popup['title'] or popup['process']
                 detail = popup['text'].replace('\n', ' ')[:100] or popup['process']
                 self.send(f'🪟 電腦跳出視窗：{name}', f'{self.pc_name}・{detail}；打開桌面遙控選要按的按鈕', 4, ['window'],
                           open_link(self.pc_name))
+        return listed
 
     def popup_list(self):
         """The pop-ups for the phone (without the window handle)."""
@@ -2213,7 +2220,7 @@ class UiWatcher:
             try:
                 self.notify(title, message, priority, tags, click)
             except OSError:
-                logging.exception('notification failed')
+                logging.exception('notification failed: %s', title)
 
     RESTART_IDLE = 600  # seconds nobody has touched the PC before Codex is restarted into a new version
 
@@ -2964,11 +2971,19 @@ class ActionRunner:
         self.driver.press_update(app, button)
         logging.info('update %s: pressed %s', app, button)
         self.update(action, message='Claude 桌面版重新啟動中…')
-        deadline = self.clock() + 240
+        start = self.clock()
+        deadline = start + 240
         while True:
             running = (self.driver.versions().get(app) or {}).get('running')
             if running and version_key(running)[:3] >= version_key(target)[:3]:
                 self.update(action, state='done', verified=True, message=f'Claude 桌面版已更新為 {running}')
+                return
+            # With Claude Code still working, Claude asks first, in a window of its own (10/30);
+            # the phone answers it like any other pop-up.
+            if self.clock() - start < 20 and any(p['process'].lower() == 'claude'
+                                                 for p in self.watcher.check_popups(notify=False)):
+                logging.info('update %s: it asks whether to interrupt the running work', app)
+                self.update(action, state='done', verified=False, message=QUIT_GUARD_TEXT)
                 return
             if self.clock() >= deadline:
                 self.update(action, state='done', verified=False,
@@ -3156,6 +3171,8 @@ FAILURE_TEXT = {
     'uac': '電腦跳出系統管理員確認（UAC）擋著，要到電腦前按',
 }
 
+QUIT_GUARD_TEXT = ('Claude 還有工作在跑，電腦跳出「Claude 仍在處理中」確認視窗（開著時桌面版收不到訊息）：'
+                   '在這頁上方選「取消」就不更新、「等待 Claude」等工作做完再更新、「仍要結束」立刻更新（會中斷工作）')
 UAC_TEXT = '電腦跳出系統管理員確認（UAC）擋著，手機無法代按；請到電腦前按（或用 Google 遠端桌面），按掉前訊息送不出去'
 
 # What the worker found in front when it could not take the foreground ("in front: <process>").
@@ -3704,8 +3721,15 @@ class FakeDriver:
                 for app, (installed, running) in found.items()}
 
     def press_update(self, app, name, confirm=None):
-        """Claude's button restarts it into the version it names; the button then goes."""
+        """Claude's button restarts it into the version it names; the button then goes. With
+        `fake_update_guard` it first asks, as Claude does while Claude Code is working."""
         self.calls.append(('press_update', app, name, confirm))
+        if getattr(self, 'fake_update_guard', False):
+            self.fake_popups = self.fake_popups + [dict(FAKE_QUIT_GUARD, update=(app, name))]
+            return 'invoke'
+        return self.apply_update(app, name, confirm)
+
+    def apply_update(self, app, name, confirm=None):
         updates = dict(getattr(self, 'fake_update', None) or {})
         updates.pop(app, None)
         self.fake_update = updates
@@ -3756,7 +3780,10 @@ class FakeDriver:
 
     def press_popup(self, popup, button):
         self.calls.append(('press_popup', popup['title'], button))
+        pressed = next((p for p in self.fake_popups if p['hwnd'] == popup['hwnd']), {})
         self.fake_popups = [p for p in self.fake_popups if p['hwnd'] != popup['hwnd']]
+        if pressed.get('update') and button != '取消':  # quitting now, or once Claude is done
+            self.apply_update(*pressed['update'])
         return True
 
     def send(self, app, doc, text, images=None):
@@ -3906,6 +3933,10 @@ FAKE_TABLE = '''
 FAKE_POPUP = {'hwnd': 4242, 'title': 'Windows 安全性', 'process': 'SecurityHealthHost',
               'text': '是否要允許公開和私人網路存取此應用程式?\nWindows 防火牆已封鎖所有公用和私人網路上 示範程式 的部分功能。\n示範程式',
               'buttons': ['允許', '取消']}
+# Claude's question when it is told to restart while Claude Code works (its zh-Hant strings, 10/30).
+FAKE_QUIT_GUARD = {'hwnd': 4343, 'title': 'Claude', 'process': 'claude',
+                   'text': 'Claude 仍在處理中\nClaude 正在 1 個工作階段中執行作業。立即結束將中斷這項作業。',
+                   'buttons': ['仍要結束', '等待 Claude', '取消']}
 
 
 def fake_fresh_usage(read, app, percent):
@@ -3929,7 +3960,7 @@ def main(argv=None):
     parser.add_argument('--fake-closed', default='', help='fake mode: these apps (comma-separated) start with no window')
     parser.add_argument('--fake-usage', default='', help='fake mode: app=percent, limits read just now')
     parser.add_argument('--fake-popup', action='store_true', help='fake mode: a firewall question is waiting on the desktop')
-    parser.add_argument('--fake-update', action='store_true', help='fake mode: Claude has a downloaded update waiting')
+    parser.add_argument('--fake-update', action='store_true', help="fake mode: Claude has a downloaded update waiting (and asks before interrupting work)")
     args = parser.parse_args(argv)
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
@@ -3955,6 +3986,7 @@ def main(argv=None):
             driver.fake_popups = [dict(FAKE_POPUP)]
         if args.fake_update:
             driver.fake_update = {'claude': '重新啟動以更新 v4.30.0'}
+            driver.fake_update_guard = True  # Claude Code is "working": Claude asks first
             driver.fake_versions = {'claude': ('3.6556.2.0', '3.6556.2.0'), 'codex': ('26.1023.6123.0', '26.1023.6123.0')}
         runner = build_driving(hub, driver, None, cfg['pc_name'], cfg, interval=1, verify_seconds=10)
         hub.elevate = fake.elevate_relay()

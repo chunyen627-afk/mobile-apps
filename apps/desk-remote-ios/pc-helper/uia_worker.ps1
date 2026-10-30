@@ -61,6 +61,17 @@ public static class DeskWin {
     }, IntPtr.Zero);
     return found;
   }
+  // Visible standard dialogs, owned ones included: UI Automation lists a dialog owned by an app
+  // window under that window, not on the desktop (Claude's "still working" question, 10/30).
+  public static System.Collections.Generic.List<IntPtr> VisibleDialogs() {
+    var found = new System.Collections.Generic.List<IntPtr>();
+    EnumWindows((h, l) => {
+      var c = new System.Text.StringBuilder(64); GetClassName(h, c, 64);
+      if (c.ToString() == "#32770" && IsWindowVisible(h)) found.Add(h);
+      return true;
+    }, IntPtr.Zero);
+    return found;
+  }
   public static string Text(IntPtr hWnd) {
     var t = new System.Text.StringBuilder(1024); GetWindowText(hWnd, t, 1024);
     return t.ToString().Replace("&", "").Trim();
@@ -990,18 +1001,25 @@ function Dialog-Buttons($hwnd) {
 
 function Find-Popups {
   $found = @()
-  foreach ($w in $AE::RootElement.FindAll($Tree::Children, [System.Windows.Automation.Condition]::TrueCondition)) {
+  $windows = @($AE::RootElement.FindAll($Tree::Children, [System.Windows.Automation.Condition]::TrueCondition))
+  $listed = @{}
+  foreach ($w in $windows) { try { $listed[[int64]$w.Current.NativeWindowHandle] = $true } catch { } }
+  foreach ($h in [DeskWin]::VisibleDialogs()) {
+    if (-not $listed[[int64]$h]) { try { $windows += $AE::FromHandle($h) } catch { } }
+  }
+  foreach ($w in $windows) {
     try {
       $cur = $w.Current
       if ($cur.IsOffscreen) { continue }
+      $dialog = $cur.ClassName -eq '#32770'
       $pattern = $null
-      if (-not $w.TryGetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern, [ref]$pattern)) { continue }
+      $hasPattern = $w.TryGetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern, [ref]$pattern)
+      if (-not $hasPattern -and -not $dialog) { continue }
       $proc = 'unknown'
       try { $proc = (Get-Process -Id $cur.ProcessId -ErrorAction Stop).ProcessName } catch { }
-      $dialog = $cur.ClassName -eq '#32770'
       if ($PopupSkip -contains $proc) { continue }
       if ($proc -eq 'explorer' -and -not $dialog) { continue }
-      if ($pattern.Current.CanMinimize -and -not $dialog) { continue }
+      if ($hasPattern -and $pattern.Current.CanMinimize -and -not $dialog) { continue }
       $hwnd = [IntPtr]$cur.NativeWindowHandle
       $buttons = @(Popup-Buttons $w | ForEach-Object { $_.Current.Name.Trim() } | Select-Object -Unique)
       $texts = @($w.FindAll($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Text))) |

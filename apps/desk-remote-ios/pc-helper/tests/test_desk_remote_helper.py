@@ -1283,6 +1283,42 @@ class VersionTests(FakeEnvironment):
         watcher.look('claude')
         self.assertEqual(runner.submit('update', 'claude', None, {})[1]['error'], 'no-update')
 
+    def test_claudes_question_about_running_work_is_answered_from_the_phone(self):
+        """Claude Code still working: Claude asks before restarting (10/30). The update ends at
+        once with a note, the question is a pop-up the phone answers, and no notification goes."""
+        hub, driver, watcher, sent, _ = self.version_setup(claude=('3.6556.2.0', '3.6556.2.0'))
+        driver.fake_update = {'claude': '重新啟動以更新 v4.29.0'}
+        driver.fake_update_guard = True
+        watcher.look('claude')
+        watcher.check_versions(now=1000)
+        sent.clear()
+        runner = h.ActionRunner(hub, driver, hub.presence, watcher, None, '示範電腦', hub.strings,
+                                verify_seconds=3, doc_wait=1, settle_seconds=0)
+        status = self.finish(runner, runner.submit('update', 'claude', None, {}))
+        self.assertEqual((status['state'], status['verified']), ('done', False), status)
+        self.assertIn('取消', status['message'])
+        popups = hub.state()['popups']
+        self.assertEqual([p['buttons'] for p in popups], [['仍要結束', '等待 Claude', '取消']], popups)
+        watcher.check_popups()
+        self.assertEqual(sent, [], 'the phone is already looking at it')
+        # 取消: nothing changes and the button stays.
+        status = self.finish(runner, runner.submit('popup', None, popups[0]['id'], {'button': '取消'}))
+        self.assertEqual(status['state'], 'done', status)
+        watcher.look('claude')
+        self.assertEqual(driver.versions()['claude']['running'], '3.6556.2.0')
+        self.assertEqual(hub.state()['popups'], [])
+        # Asked again and told to quit anyway: it updates.
+        self.finish(runner, runner.submit('update', 'claude', None, {}))
+        popup = hub.state()['popups'][0]
+        self.finish(runner, runner.submit('popup', None, popup['id'], {'button': '仍要結束'}))
+        self.assertEqual(driver.versions()['claude']['running'], '4.29.0')
+
+    def finish(self, runner, submitted):
+        code, body = submitted
+        self.assertEqual(code, 202, body)
+        run_all(runner)
+        return runner.status(body['id'])
+
     def test_codexs_own_update_button_is_pressed_when_idle(self):
         _, driver, watcher, _, presence = self.version_setup(idle=30, codex=('26.1021.3705.0', '26.1021.3705.0'))
         driver.fake_update = {'codex': '更新'}
