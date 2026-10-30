@@ -691,7 +691,8 @@ final class DeskRemoteUITests: XCTestCase {
         // Held, the buttons scroll a few rows at a time instead of jumping (asked 10/30).
         let rail = top.frame
         XCTAssertGreaterThan(rail.minX, app.windows.firstMatch.frame.maxX - 40, "the rail is not at the right edge: \(rail)")
-        top.press(forDuration: 1.0)
+        // The fake conversation is short (about 27 rows, half a screen above): a short hold.
+        top.press(forDuration: 0.7)
         XCTAssertTrue(poll(timeout: 3) { !(newest.exists && newest.isHittable) }, "holding the top button did not scroll up")
         XCTAssertFalse(first.exists && first.isHittable, "holding the top button jumped to the top")
         snapshot("36-held")
