@@ -34,7 +34,7 @@ struct DeskChatView: View {
     @State private var pcState: HelperState?
     @StateObject private var presser = DeskPopupPresser()
     @FocusState private var inputFocused: Bool
-    @State private var topID: String?       // the row at the top of the screen
+    @State private var shownRows: Set<String> = []  // rows on (or just off) the screen
     @State private var holdIndex: Int?      // where a held scroll button has got to
     @State private var landing = false      // opening: hidden until it has reached the end
     @State private var bottomShown = false  // the end marker is on screen
@@ -55,6 +55,8 @@ struct DeskChatView: View {
                     }
                     ForEach(log.rows) { row in
                         rowView(row).id(row.id)
+                            .onAppear { shownRows.insert(row.id) }
+                            .onDisappear { shownRows.remove(row.id) }
                     }
                     ForEach(pending) { item in
                         DeskPendingBubble(item: item, retry: { Task { await send(item, force: false) } },
@@ -99,14 +101,12 @@ struct DeskChatView: View {
                         .onAppear { bottomShown = true }
                         .onDisappear { bottomShown = false }
                 }
-                .scrollTargetLayout()
                 .opacity(landing ? 0 : 1)
                 .padding(.leading, 12)
                 // The scroll rail has a lane of its own, so it never covers the text (10/30).
                 .padding(.trailing, showsRail ? 34 : 12)
                 .padding(.vertical, 8)
             }
-            .scrollPosition(id: $topID)
             .scrollDismissesKeyboard(.interactively)
             .defaultScrollAnchor(.bottom)
             // Opening a conversation lands on its newest message (it sometimes stopped short, 10/29).
@@ -240,13 +240,14 @@ struct DeskChatView: View {
 
     private var showsRail: Bool { log.rows.count > 12 }
 
-    /// One step of a held scroll button: a row at first, then 2, then 4 at a time, from the row
-    /// that was at the top when the hold began.
+    /// One step of a held scroll button: a row at first, then 2, then 4 at a time, from the
+    /// first (or last) row on the screen when the hold began.
     private func step(_ proxy: ScrollViewProxy, up: Bool, tick: Int) {
         let ids = log.rows.map(\.id)
         guard !ids.isEmpty else { return }
         if tick == 0 || holdIndex == nil {
-            holdIndex = topID.flatMap { ids.firstIndex(of: $0) } ?? (topID == "top" ? 0 : ids.count - 1)
+            let shown = ids.indices.filter { shownRows.contains(ids[$0]) }
+            holdIndex = (up ? shown.first : shown.last) ?? (up ? ids.count - 1 : 0)
         }
         let current = holdIndex ?? 0
         let size = tick < 6 ? 1 : (tick < 16 ? 2 : 4)
@@ -255,7 +256,7 @@ struct DeskChatView: View {
         if next == current {
             proxy.scrollTo(up ? "top" : "bottom", anchor: up ? .top : .bottom)
         } else {
-            withAnimation(.linear(duration: 0.1)) { proxy.scrollTo(ids[next], anchor: .top) }
+            withAnimation(.linear(duration: 0.1)) { proxy.scrollTo(ids[next], anchor: up ? .top : .bottom) }
         }
     }
 
