@@ -1204,7 +1204,8 @@ class VersionTests(FakeEnvironment):
         self.assertEqual(sent, [], 'a restart that worked is not news')
         watcher.check_versions(now=1061)
         self.assertEqual(hub.state()['versions']['codex'],
-                         {'installed': '26.1023.6123.0', 'running': '26.1023.6123.0', 'update': False, 'pending': None})
+                         {'installed': '26.1023.6123.0', 'running': '26.1023.6123.0', 'update': False, 'pending': None,
+                          'restart': False})
         watcher.check_versions(now=1400)
         self.assertEqual(driver.calls.count(('restart', 'codex')), 1)
 
@@ -1312,6 +1313,75 @@ class VersionTests(FakeEnvironment):
         popup = hub.state()['popups'][0]
         self.finish(runner, runner.submit('popup', None, popup['id'], {'button': '仍要更新'}))
         self.assertEqual(driver.versions()['claude']['running'], '4.29.0')
+
+    def test_a_downloaded_update_without_a_button_is_applied_by_closing_and_starting_claude(self):
+        """Office 10/30: the updater swapped the waiting 4.29 for 4.4212 and the button never came
+        back. Its log still says what is downloaded: the phone's update then closes Claude and
+        starts it again, which brings up the new one."""
+        hub, driver, watcher, sent, _ = self.version_setup(claude=('3.6556.2.0', '3.6556.2.0'))
+        driver.fake_downloaded = '4.4212.0'
+        watcher.look('claude')
+        watcher.check_versions(now=1000)
+        shown = hub.state()['versions']['claude']
+        self.assertEqual((shown['update'], shown['pending'], shown['restart']), (True, '4.4212.0', True), shown)
+        self.assertEqual(len(sent), 1, sent)
+        self.assertIn('4.4212.0', sent[0][1])
+        self.assertNotIn('close', [c[0] for c in driver.calls], 'never closed on its own')
+        runner = h.ActionRunner(hub, driver, hub.presence, watcher, None, '示範電腦', hub.strings,
+                                verify_seconds=3, doc_wait=1, settle_seconds=0)
+        status = self.finish(runner, runner.submit('update', 'claude', None, {}))
+        self.assertEqual((status['state'], status['verified']), ('done', True), status)
+        self.assertIn('4.4212.0', status['message'])
+        self.assertEqual([c for c in driver.calls if c[0] in ('close', 'launch', 'press_update')],
+                         [('close', 'claude'), ('launch', 'claude', False)])
+        self.assertIsNone(watcher.relaunch)
+        watcher.versions_checked = None
+        watcher.check_versions(now=2000)
+        self.assertEqual(hub.state()['versions']['claude']['update'], False)
+        # An older downloaded version than the one running (the log is behind) means nothing.
+        driver.fake_downloaded = '4.29.0'
+        watcher.versions_checked = None
+        watcher.check_versions(now=3000)
+        self.assertIsNone(watcher.update_target('claude'))
+
+    def test_closing_claude_for_an_update_waits_for_its_question_then_starts_it_again(self):
+        hub, driver, watcher, sent, _ = self.version_setup(claude=('3.6556.2.0', '3.6556.2.0'))
+        driver.fake_downloaded = '4.4212.0'
+        driver.fake_update_guard = True
+        watcher.look('claude')
+        watcher.check_versions(now=1000)
+        sent.clear()
+        runner = h.ActionRunner(hub, driver, hub.presence, watcher, None, '示範電腦', hub.strings,
+                                verify_seconds=3, doc_wait=1, settle_seconds=0)
+        status = self.finish(runner, runner.submit('update', 'claude', None, {}))
+        self.assertEqual((status['state'], status['verified']), ('done', False), status)
+        self.assertIn('仍要結束', status['message'])
+        popups = hub.state()['popups']
+        self.assertEqual([p['buttons'] for p in popups], [['仍要結束', '等待 Claude', '取消']], popups)
+        self.assertEqual(sent, [], 'the phone is already looking at it')
+        # 取消: Claude keeps running, nothing is started, the update still waits.
+        self.finish(runner, runner.submit('popup', None, popups[0]['id'], {'button': '取消'}))
+        watcher.tick()
+        self.assertEqual(driver.versions()['claude']['running'], '3.6556.2.0')
+        self.assertNotIn('launch', [c[0] for c in driver.calls])
+        self.assertTrue(watcher.update_target('claude'))
+        # Again, and 仍要結束: Claude ends; the next look starts it again, as the new version.
+        self.finish(runner, runner.submit('update', 'claude', None, {}))
+        popup = hub.state()['popups'][0]
+        self.finish(runner, runner.submit('popup', None, popup['id'], {'button': '仍要結束'}))
+        self.assertIsNone(driver.versions()['claude']['running'])
+        watcher.tick()
+        self.assertIn(('launch', 'claude', False), driver.calls)
+        self.assertEqual(driver.versions()['claude']['running'], '4.4212.0')
+        self.assertIsNone(watcher.relaunch)
+
+    def test_the_downloaded_version_is_read_from_claudes_log(self):
+        log = ("2026-10-28 05:04:45 [info] [updater] Update downloaded and ready to install { releaseName: 'Claude 4.29.0' }\n"
+               "2026-10-30 13:14:46 [info] [updater] [evt:replacing-staged] Newer version 4.4212.0 available (staged: 4.29.0), replacing staged update\n"
+               "2026-10-30 13:14:59 [info] [updater] Update downloaded and ready to install { releaseName: 'Claude 4.4212.0' }\n"
+               "2026-10-30 15:24:59 [info] [updater] Staged version 4.4212.0 is still current (latest: 4.4212.0, lastTarget: 4.4212.0)\n")
+        self.assertEqual(h.downloaded_version(log), '4.4212.0')
+        self.assertIsNone(h.downloaded_version('2026-10-30 [info] [updater] Checking for updates\n'))
 
     def test_a_question_inside_an_apps_page_is_told_only_when_nobody_is_at_the_pc(self):
         _, driver, watcher, sent, presence = self.version_setup(idle=30)

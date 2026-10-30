@@ -37,7 +37,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.15'
+VERSION = '0.5.16'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -1741,6 +1741,42 @@ class WindowsDriver:
                         'old': bool(installed.get(app)) and any(version_key(v) < version_key(installed[app]) for v in running)}
         return out
 
+    def downloaded_update(self, app):
+        """The version Claude's updater has downloaded (its log's last word on it), or None. Only
+        the tail of the log is read, and only that one line is looked for."""
+        if app != 'claude':
+            return None
+        try:
+            with open(CLAUDE_LOG, 'rb') as log:
+                log.seek(0, os.SEEK_END)
+                log.seek(max(0, log.tell() - 2 * 1024 * 1024))
+                return downloaded_version(log.read().decode('utf-8', 'replace'))
+        except OSError:
+            return None
+
+    def close_app(self, app):
+        """Asks each of the app's windows to close (WM_CLOSE), as the close button would: Claude
+        then quits, asking first ("仍要結束") while Claude Code is working. Never terminates it."""
+        package, exe = APP_PACKAGES[app]
+        pids = set(package_processes(package, exe))
+        user32 = ctypes.windll.user32
+        closed = []
+
+        @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+        def each(hwnd, _):
+            owner = ctypes.c_uint()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+            if owner.value in pids and user32.IsWindowVisible(hwnd) and not user32.GetParent(hwnd):
+                closed.append(hwnd)
+            return True
+
+        user32.EnumWindows(each, 0)
+        if not closed:
+            raise ActionError('app-not-running', 'no window of the app to close')
+        for hwnd in closed:
+            user32.PostMessageW(ctypes.c_void_p(hwnd), 0x0010, 0, 0)  # WM_CLOSE
+        return len(closed)
+
     def restart_app(self, app):
         """Ends every process of the app's package and starts the installed (newest) one. Only
         Codex: ending Claude would end every Claude Code session in it (the user's rule)."""
@@ -1958,6 +1994,19 @@ def pending_version(button):
     return found.group(1) if found else button
 
 
+# Claude's own log (%LOCALAPPDATA%\Claude\Logs\main.log) when its updater has a version ready.
+# Office 10/30: 4.29 waited with its button; the updater then swapped it for 4.4212 and the button
+# never came back, so the phone had nothing to press while 4.4212 sat downloaded.
+CLAUDE_LOG = Path(os.environ.get('LOCALAPPDATA') or '.') / 'Claude' / 'Logs' / 'main.log'
+DOWNLOADED_RE = re.compile(r"\[updater\] Update downloaded and ready to install .*?releaseName: 'Claude (\d+(?:\.\d+)+)'")
+
+
+def downloaded_version(text):
+    """The last version Claude's log says is downloaded and ready to install, or None."""
+    found = DOWNLOADED_RE.findall(text)
+    return found[-1] if found else None
+
+
 def version_key(text):
     return tuple(int(part) for part in str(text).split('.') if part.isdigit())
 
@@ -2041,6 +2090,7 @@ class UiWatcher:
         self.uac_since = self.uac_told = None  # when a UAC prompt was first seen; whether the phone was told
         self.versions, self.versions_checked = {}, None  # each app's installed and running version
         self.update_told, self.restart_tried = set(), {}  # (app, version) told; Codex version -> when restarted
+        self.relaunch = None  # {'app', 'target', 'until'}: start it again once it has ended (phone's restart)
         self.busy = lambda: False                         # a phone action is queued or running
         self.last_usage_check = 0.0
         self.usage_checked_once = False
@@ -2257,6 +2307,12 @@ class UiWatcher:
         button = (self.current('claude') or {}).get('update')
         if button:
             found['claude'] = dict(found.get('claude') or {}, pending=pending_version(button))
+        else:
+            # Downloaded, button or not (its log says so): the phone can still restart it (10/30).
+            running = (found.get('claude') or {}).get('running')
+            downloaded = self.driver.downloaded_update('claude') if hasattr(self.driver, 'downloaded_update') else None
+            if downloaded and running and version_key(downloaded)[:3] > version_key(running)[:3]:
+                found['claude'] = dict(found.get('claude') or {}, pending=downloaded, restart=True)
         with self.lock:
             self.versions = found
         claude = found.get('claude') or {}
@@ -2320,8 +2376,48 @@ class UiWatcher:
     def version_list(self):
         with self.lock:
             return {app: {'installed': info.get('installed'), 'running': info.get('running'),
-                          'update': bool(info.get('old') or info.get('pending')), 'pending': info.get('pending')}
+                          'update': bool(info.get('old') or info.get('pending')), 'pending': info.get('pending'),
+                          'restart': bool(info.get('restart'))}  # no button: the helper closes and starts it
                     for app, info in self.versions.items()}
+
+    def update_target(self, app):
+        """What the phone's update does for `app`: {'button': its label or None, 'version'}, or
+        None when nothing waits. Claude's button when it shows one, else its downloaded version."""
+        button = self.current(app).get('update')
+        if button:
+            return {'button': button, 'version': pending_version(button)}
+        with self.lock:
+            info = self.versions.get(app) or {}
+        if info.get('restart') and info.get('pending'):
+            return {'button': None, 'version': info['pending']}
+        return None
+
+    def check_relaunch(self):
+        """The phone's restart: Claude asked to close may ask "仍要結束" first (answered from the
+        phone, or it waits for its work): start it again once it has ended, within 10 minutes."""
+        wanted = self.relaunch
+        if not wanted:
+            return
+        now = time.monotonic()
+        try:
+            running = (self.driver.versions().get(wanted['app']) or {}).get('running')
+        except (ActionError, OSError):
+            return
+        if running and version_key(running)[:3] >= version_key(wanted['target'])[:3]:
+            self.relaunch = None  # it came back by itself
+        elif not running:
+            self.relaunch = None
+            logging.info('relaunch %s: it has ended, starting it again', wanted['app'])
+            try:
+                self.driver.launch(wanted['app'])
+            except ActionError as exc:
+                logging.warning('relaunch %s failed: %s %s', wanted['app'], exc.code, exc.message)
+                self.send('⚠️ Claude 桌面版沒能重新打開', f"{self.pc_name}・更新時關掉後沒開回來；請在電腦上打開 Claude",
+                          4, ['warning'], open_link(self.pc_name))
+            self.versions_checked = None
+        elif now >= wanted['until']:
+            self.relaunch = None
+            logging.info('relaunch %s: still running after 10 minutes, giving up', wanted['app'])
 
     UAC_GRACE = 20  # seconds: someone at the PC answers their own UAC prompt before this
 
@@ -2344,6 +2440,7 @@ class UiWatcher:
         for app in APPS:
             self.look(app)
         self.check_versions()  # after the looks: Claude's update button is read there
+        self.check_relaunch()
         self.check_popups()
         self.check_card()
         if time.monotonic() - self.last_turn_check > 15:
@@ -2461,7 +2558,7 @@ class ActionRunner:
         if kind == 'update':
             if app != 'claude':
                 return 400, error('not-supported', 'Codex 會在電腦閒置時自己更新')
-            if not self.watcher.current(app).get('update'):
+            if not self.watcher.update_target(app):
                 return 409, error('no-update', 'Claude 桌面版沒有等著安裝的新版')
         if kind == 'fast':
             if not strings.get('fast_on'):
@@ -2975,31 +3072,52 @@ class ActionRunner:
         """Claude's "重新啟動以更新" pressed for the phone (asked 10/30: only when the user presses
         it there, since it ends every Claude Code session in the app); done once the new one runs."""
         app = action['app']
-        button = self.watcher.current(app).get('update')
-        if not button:
+        wanted = self.watcher.update_target(app)
+        if not wanted:
             raise ActionError('no-update', 'no update waiting')
-        target = pending_version(button)
+        button, target = wanted['button'], wanted['version']
         self.recheck(action, False)
-        self.update(action, message=f'正在按「{button}」…')
         self.watcher.quiet_popups_until = time.monotonic() + 60  # its question goes to the phone looking
-        self.driver.press_update(app, button)
-        logging.info('update %s: pressed %s', app, button)
-        self.update(action, message='Claude 桌面版重新啟動中…')
+        if button:
+            self.update(action, message=f'正在按「{button}」…')
+            self.driver.press_update(app, button)
+            logging.info('update %s: pressed %s', app, button)
+            self.update(action, message='Claude 桌面版重新啟動中…')
+        else:
+            # Downloaded but no button (10/30): close it as its close button would, and start it
+            # again once it has ended; the new version registers in between.
+            self.update(action, message=f'Claude 沒有顯示更新按鈕，改為關掉 Claude 再打開（已下載 {target}）…')
+            self.driver.close_app(app)
+            self.watcher.relaunch = {'app': app, 'target': target, 'until': time.monotonic() + 600}
+            logging.info('update %s: asked it to close, to start again as %s', app, target)
         start = self.clock()
         deadline = start + 240
+        launched = False
         while True:
             running = (self.driver.versions().get(app) or {}).get('running')
             if running and version_key(running)[:3] >= version_key(target)[:3]:
+                self.watcher.relaunch = None
                 self.update(action, state='done', verified=True, message=f'Claude 桌面版已更新為 {running}')
+                return
+            if not button and not running and not launched:
+                self.watcher.relaunch = None
+                launched = True
+                self.update(action, message='Claude 已關掉，正在重新打開…')
+                self.driver.launch(app)
+            elif not button and launched and running:
+                self.watcher.relaunch = None
+                self.update(action, state='done', verified=False,
+                            message=f'Claude 重新打開了，但還是 {running}（下載的 {target} 沒有裝上）')
                 return
             # With Claude Code still working, Claude asks first, in a window of its own (10/30);
             # the phone answers it like any other pop-up.
-            if self.clock() - start < 20 and any(p['process'].lower() == 'claude'
-                                                 for p in self.watcher.check_popups(notify=False)):
+            if not launched and self.clock() - start < 20 and any(p['process'].lower() == 'claude'
+                                                                  for p in self.watcher.check_popups(notify=False)):
                 logging.info('update %s: it asks whether to interrupt the running work', app)
-                self.update(action, state='done', verified=False, message=QUIT_GUARD_TEXT)
+                self.update(action, state='done', verified=False, message=QUIT_GUARD_TEXT if button else RESTART_GUARD_TEXT)
                 return
             if self.clock() >= deadline:
+                self.watcher.relaunch = None
                 self.update(action, state='done', verified=False,
                             message=f'已按下更新，但 4 分鐘內還沒看到新版在跑（現在是 {running or "沒有在跑"}）')
                 return
@@ -3185,6 +3303,8 @@ FAILURE_TEXT = {
     'uac': '電腦跳出系統管理員確認（UAC）擋著，要到電腦前按',
 }
 
+RESTART_GUARD_TEXT = ('Claude 還有工作在跑，關掉前它跳出確認視窗（開著時桌面版收不到訊息）：在這頁上方選「取消」就不更新、'
+                      '「等待 Claude」等工作做完再關、「仍要結束」立刻關（會中斷工作）；關掉後電腦會自動把 Claude 開回來，就是新版')
 QUIT_GUARD_TEXT = ('Claude 還有工作在跑，電腦跳出「Claude 仍在處理中」確認視窗（開著時桌面版收不到訊息）：'
                    '在這頁上方選「取消」就不更新、「等待 Claude」等工作做完再更新、「仍要更新」立刻更新（會中斷工作）')
 UAC_TEXT = '電腦跳出系統管理員確認（UAC）擋著，手機無法代按；請到電腦前按（或用 Google 遠端桌面），按掉前訊息送不出去'
@@ -3725,6 +3845,33 @@ class FakeDriver:
     def launch(self, app, again=False):
         self.calls.append(('launch', app, again))
         self.windows()[app] = True
+        versions = dict(getattr(self, 'fake_versions', None) or {})
+        if app in versions and versions[app][1] is None:  # ended: comes back as the installed one
+            versions[app] = (versions[app][0], versions[app][0])
+            self.fake_versions = versions
+
+    def downloaded_update(self, app):
+        """As WindowsDriver.downloaded_update; `fake_downloaded` is Claude's downloaded version."""
+        return getattr(self, 'fake_downloaded', None) if app == 'claude' else None
+
+    def close_app(self, app):
+        """Claude asked to close: it asks first with `fake_update_guard` (Claude Code working),
+        else it ends, and the downloaded version is the installed one from then on."""
+        self.calls.append(('close', app))
+        if getattr(self, 'fake_update_guard', False):
+            self.fake_popups = self.fake_popups + [dict(FAKE_QUIT_BOX, close=app)]
+            return 1
+        self.end_app(app)
+        return 1
+
+    def end_app(self, app):
+        versions = dict(getattr(self, 'fake_versions', None) or {})
+        downloaded = getattr(self, 'fake_downloaded', None) if app == 'claude' else None
+        if app in versions:
+            versions[app] = (downloaded or versions[app][0], None)
+            self.fake_versions = versions
+        self.fake_downloaded = None
+        self.windows()[app] = False
 
     def versions(self):
         """As WindowsDriver.versions; `fake_versions` sets {app: (installed, running)}."""
@@ -3798,6 +3945,8 @@ class FakeDriver:
         self.fake_popups = [p for p in self.fake_popups if p['hwnd'] != popup['hwnd']]
         if pressed.get('update') and button != '取消':  # restarting now, or once Claude is done
             self.apply_update(*pressed['update'])
+        if pressed.get('close') and button != '取消':  # closing now, or once Claude is done
+            self.end_app(pressed['close'])
         return True
 
     def send(self, app, doc, text, images=None):
@@ -3952,6 +4101,10 @@ FAKE_POPUP = {'hwnd': 4242, 'title': 'Windows 安全性', 'process': 'SecurityHe
 FAKE_QUIT_GUARD = {'hwnd': 4343, 'title': 'Claude 仍在處理中', 'process': 'claude', 'page': True,
                    'text': 'Claude 仍在處理中\nClaude 正在 1 個工作階段中執行作業。立即重新啟動將會中斷該作業。',
                    'buttons': ['取消', '等待 Claude', '仍要更新']}
+# Claude's question, a dialog of its own, when closed while Claude Code works.
+FAKE_QUIT_BOX = {'hwnd': 4345, 'title': 'Claude', 'process': 'claude', 'page': False,
+                 'text': 'Claude 正在 1 個工作階段中執行作業。立即結束將會中斷該作業。',
+                 'buttons': ['仍要結束', '等待 Claude', '取消']}
 
 
 def fake_fresh_usage(read, app, percent):
