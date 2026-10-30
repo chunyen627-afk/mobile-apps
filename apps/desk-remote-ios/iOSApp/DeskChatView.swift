@@ -35,7 +35,10 @@ struct DeskChatView: View {
     @StateObject private var presser = DeskPopupPresser()
     @FocusState private var inputFocused: Bool
     @State private var places = DeskRowPlaces()      // where the drawn rows are on the screen
-    @StateObject private var metrics = DeskScrollMetrics()  // where the scroll bar's thumb goes
+    // Where the scroll bar's thumb goes. Plain @State on purpose: a @StateObject would redraw this
+    // whole view on every scrolled point (the release run's main thread was busy for 30 s while the
+    // thumb was dragged, CI 10/30); only the bar observes it.
+    @State private var metrics = DeskScrollMetrics()
     @State private var landing = false      // opening: hidden until it has reached the end
     @State private var reload = 0           // bumped to make the scroll view anew (blank screen)
     @State private var settling = 0         // the latest run of scrolling to the end; older ones stop
@@ -302,7 +305,8 @@ struct DeskChatView: View {
     /// that far down the screen: the first at the top, the last at the bottom, the rest in between.
     private func scroll(_ proxy: ScrollViewProxy, to fraction: CGFloat) {
         let ids = log.rows.map(\.id)
-        guard !ids.isEmpty else { return }
+        guard !ids.isEmpty, abs(fraction - places.lastFraction) > 0.002 else { return }  // not for every touched point
+        places.lastFraction = fraction
         if fraction <= 0.002 {
             proxy.scrollTo("top", anchor: .top)
         } else if fraction >= 0.998 {
@@ -507,6 +511,7 @@ struct DeskChatView: View {
 final class DeskRowPlaces {
     var tops: [String: CGFloat] = [:]
     var height: CGFloat = 0
+    var lastFraction: CGFloat = -1  // where the scroll bar last sent the view
 }
 
 struct DeskRowTops: PreferenceKey {
