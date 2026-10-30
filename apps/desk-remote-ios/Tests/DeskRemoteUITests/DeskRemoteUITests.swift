@@ -692,25 +692,36 @@ final class DeskRemoteUITests: XCTestCase {
         // end now; holding the blank track above it pages up, a page at a time, towards the finger.
         let rail = top.frame
         XCTAssertGreaterThan(rail.minX, app.windows.firstMatch.frame.maxX - 30, "the bar is not at the right edge: \(rail)")
-        let bar = element("chat-scrollbar"), thumb = element("chat-thumb")
-        XCTAssertTrue(bar.exists && thumb.exists, "no scroll bar or thumb")
-        XCTAssertGreaterThan(thumb.frame.midY, bar.frame.midY, "the thumb is not near the end of a conversation opened at its end: \(thumb.frame) in \(bar.frame)")
-        // Held on the track above the thumb for a moment: a page or two up, not the top (the fake
-        // conversation is short, about 27 rows, so the thumb is about half the track: press well
-        // above its top, or the press lands on the thumb and just holds it).
-        let thumbTop = (thumb.frame.minY - bar.frame.minY) / bar.frame.height
-        let above = bar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: max(0.12, thumbTop - 0.15)))
-        above.press(forDuration: 0.6)
+        let bar = element("chat-scrollbar")
+        XCTAssertTrue(bar.exists, "no scroll bar")
+        // The bar says where its thumb is ("位置 p 大小 s …"); the thumb's own frame does not
+        // follow its offset in the accessibility tree, so the thumb is placed from these.
+        func barState() -> (position: Double, size: Double) {
+            let numbers = (bar.value as? String ?? "").split(whereSeparator: { !"0123456789.-".contains($0) }).compactMap { Double($0) }
+            return (numbers.first ?? -1, numbers.dropFirst().first ?? -1)
+        }
+        let arrow = 18.0, track = bar.frame.height - 2 * arrow
+        func thumbTop(_ state: (position: Double, size: Double)) -> Double {
+            arrow + (track - max(36, track * state.size)) * state.position
+        }
+        let opened = barState()
+        XCTAssertGreaterThan(opened.position, 0.6, "the thumb is not near the end of a conversation opened at its end: \(bar.value ?? "-")")
+        XCTAssertLessThan(opened.size, 0.95, "the thumb fills the track: \(bar.value ?? "-")")
+        // Held on the track above the thumb for a moment: pages up towards the finger (a page is
+        // half of this short conversation, so it may well reach the top).
+        let aboveY = max(arrow + 6, thumbTop(opened) - 40)
+        bar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: aboveY / bar.frame.height)).press(forDuration: 0.6)
         XCTAssertTrue(poll(timeout: 3) { !(newest.exists && newest.isHittable) },
-                      "holding the track above the thumb did not scroll up: thumb top at \(thumbTop), bar \(bar.value ?? "-")")
-        // (A page here is half the conversation, so two pages do reach the top: no "not the top".)
-        XCTAssertLessThan(thumb.frame.minY, bar.frame.minY + thumbTop * bar.frame.height - 10, "the thumb did not move up")
+                      "holding the track above the thumb did not scroll up: \(bar.value ?? "-")")
+        XCTAssertTrue(poll(timeout: 2) { barState().position < opened.position - 0.2 }, "the thumb did not move up: \(bar.value ?? "-")")
         snapshot("36-scrollbar")
         // The thumb dragged to the bottom of the track: back at the newest message.
-        let grip = thumb.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-        grip.press(forDuration: 0.2, thenDragTo: bar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.97)),
+        let now = barState()
+        let gripY = thumbTop(now) + max(36, track * now.size) / 2
+        bar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: gripY / bar.frame.height))
+            .press(forDuration: 0.2, thenDragTo: bar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.97)),
                    withVelocity: .slow, thenHoldForDuration: 0.5)
-        XCTAssertTrue(poll(timeout: 6) { newest.exists && newest.isHittable }, "dragging the thumb to the bottom did not reach the newest message")
+        XCTAssertTrue(poll(timeout: 6) { newest.exists && newest.isHittable }, "dragging the thumb to the bottom did not reach the newest message: \(bar.value ?? "-")")
     }
 
     func test37CodexFastModeSwitch() throws {
