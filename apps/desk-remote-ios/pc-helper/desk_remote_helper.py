@@ -37,7 +37,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.17'
+VERSION = '0.5.18'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -93,10 +93,12 @@ def is_noise(text):
 
 
 EFFORT_LABELS = {'low': '低', 'medium': '中', 'high': '高', 'xhigh': '超高', 'max': '最高'}
-# Context window sizes the desktop app itself reported (Claude 10/27: Opus 5.5 has 1M). Models
-# not listed show tokens used without a percentage rather than a guessed size; more can be
-# added under "claude": {"context_windows": {"<model id prefix>": size}} in config.json.
-CONTEXT_WINDOWS = {'claude-opus-5': 1_000_000}
+# Context window sizes the desktop app itself reported (Claude 10/27: Opus 5.5 has 1M) or that
+# the transcripts prove (10/31: Fable 5.1 and Opus 4.8 conversations reached 967K and 949K tokens
+# of input, so 1M). Models not listed show tokens used without a percentage rather than a guessed
+# size; more can be added under "claude": {"context_windows": {"<model id prefix>": size}} in
+# config.json.
+CONTEXT_WINDOWS = {'claude-opus-5': 1_000_000, 'claude-fable-5': 1_000_000, 'claude-opus-4-8': 1_000_000}
 
 
 def model_label(model_id):

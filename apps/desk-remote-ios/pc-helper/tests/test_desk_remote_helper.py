@@ -831,6 +831,7 @@ class MetaTests(FakeEnvironment):
         meta = self.meta('claude', B)
         self.assertEqual((meta['model'], meta['effort'], meta['context']), ('Sonnet 5.5', '中', None))
         self.assertIsNone(self.sources['claude'].context_window('claude-sonnet-5-5'))
+        self.assertEqual(self.sources['claude'].context_window('claude-fable-5-1'), 1_000_000)  # the phone showed "52.4 萬" without a % (10/31)
         self.assertEqual(h.ClaudeSource('x', 'y', {'claude-sonnet-5': 200000}).context_window('claude-sonnet-5-5'), 200000)
 
     def test_codex_meta_and_limits_from_the_rollout(self):
