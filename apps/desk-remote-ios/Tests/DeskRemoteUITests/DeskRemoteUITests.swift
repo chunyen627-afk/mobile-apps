@@ -817,7 +817,8 @@ final class DeskRemoteUITests: XCTestCase {
             let shown = (replies + users).filter(\.isHittable).map { String($0.label.prefix(24)) }
             let events = ask(helper, "\(path)/events?after=0")?["events"] as? [[String: Any]] ?? []
             XCTFail("the new messages did not come: \(replies.count) replies and \(users.count) user bubbles in the tree, "
-                    + "on screen \(shown), lever \(element("chat-lever").exists), error \(said(element("chat-error"))), "
+                    + "on screen \(shown), lever \(element("chat-lever").exists), landing \(element("chat-landing").exists), "
+                    + "error \(said(element("chat-error"))), "
                     + "helper has \(events.count) events, last: \(String((events.last?["text"] as? String ?? "").prefix(30)))")
         }
         let landed = poll(timeout: 4) { newest.isHittable }

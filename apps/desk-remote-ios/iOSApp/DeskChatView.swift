@@ -125,7 +125,7 @@ struct DeskChatView: View {
             .defaultScrollAnchor(.bottom)
             // Opening a conversation lands on its newest message (it sometimes stopped short, 10/29).
             .onChange(of: log.loaded) { if log.loaded { land(proxy) } }
-            .overlay { if landing { ProgressView() } }
+            .overlay { if landing { ProgressView().accessibilityIdentifier("chat-landing") } }
             // New messages also go on until the end is really on screen: after a cached copy, the
             // ones that came since (a huge one among them) stopped it halfway (10/30).
             .onChange(of: log.rows.last?.id) { if log.loaded { toEnd(proxy) } }
@@ -237,6 +237,11 @@ struct DeskChatView: View {
     private func land(_ proxy: ScrollViewProxy) {
         landing = true
         toEnd(proxy)
+        // Whatever happens to the scrolling runs, the conversation shows after their longest time.
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 3_500_000_000)
+            landing = false
+        }
     }
 
     /// Scrolls to the end again and again until the end marker is on screen twice in a row (at
