@@ -700,27 +700,30 @@ final class DeskRemoteUITests: XCTestCase {
             let numbers = (bar.value as? String ?? "").split(whereSeparator: { !"0123456789.-".contains($0) }).compactMap { Double($0) }
             return (numbers.first ?? -1, numbers.dropFirst().first ?? -1)
         }
-        let arrow = 18.0, track = bar.frame.height - 2 * arrow
+        let frame = bar.frame
+        let arrow = 18.0, track = frame.height - 2 * arrow
         func thumbTop(_ state: (position: Double, size: Double)) -> Double {
             arrow + (track - max(36, track * state.size)) * state.position
+        }
+        // Points on the bar from the screen's origin: a coordinate on the bar itself re-queries it
+        // during a drag, which timed out while the app kept scrolling (CI 10/30).
+        func point(_ y: Double) -> XCUICoordinate {
+            app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: frame.midX, dy: frame.minY + y))
         }
         let opened = barState()
         XCTAssertGreaterThan(opened.position, 0.6, "the thumb is not near the end of a conversation opened at its end: \(bar.value ?? "-")")
         XCTAssertLessThan(opened.size, 0.95, "the thumb fills the track: \(bar.value ?? "-")")
         // Held on the track above the thumb for a moment: pages up towards the finger (a page is
         // half of this short conversation, so it may well reach the top).
-        let aboveY = max(arrow + 6, thumbTop(opened) - 40)
-        bar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: aboveY / bar.frame.height)).press(forDuration: 0.6)
+        point(max(arrow + 6, thumbTop(opened) - 40)).press(forDuration: 0.6)
         XCTAssertTrue(poll(timeout: 3) { !(newest.exists && newest.isHittable) },
                       "holding the track above the thumb did not scroll up: \(bar.value ?? "-")")
         XCTAssertTrue(poll(timeout: 2) { barState().position < opened.position - 0.2 }, "the thumb did not move up: \(bar.value ?? "-")")
         snapshot("36-scrollbar")
         // The thumb dragged to the bottom of the track: back at the newest message.
         let now = barState()
-        let gripY = thumbTop(now) + max(36, track * now.size) / 2
-        bar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: gripY / bar.frame.height))
-            .press(forDuration: 0.2, thenDragTo: bar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.97)),
-                   withVelocity: .slow, thenHoldForDuration: 0.5)
+        point(thumbTop(now) + max(36, track * now.size) / 2)
+            .press(forDuration: 0.2, thenDragTo: point(frame.height - arrow - 2), withVelocity: .default, thenHoldForDuration: 0.3)
         XCTAssertTrue(poll(timeout: 6) { newest.exists && newest.isHittable }, "dragging the thumb to the bottom did not reach the newest message: \(bar.value ?? "-")")
     }
 
