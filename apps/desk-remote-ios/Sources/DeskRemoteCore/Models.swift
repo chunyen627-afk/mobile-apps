@@ -151,8 +151,8 @@ public struct PlanUsage: Codable, Equatable, Sendable {
 }
 
 /// Model, effort and context use of one conversation (`meta` of an event page).
-public struct ConversationMeta: Decodable, Equatable, Sendable {
-    public struct Context: Decodable, Equatable, Sendable {
+public struct ConversationMeta: Codable, Equatable, Sendable {
+    public struct Context: Codable, Equatable, Sendable {
         public let used: Int
         /// nil when the helper does not know this model's context window.
         public let window: Int?
@@ -251,7 +251,7 @@ public struct SessionList: Decodable, Equatable, Sendable {
 }
 
 /// One transcript event. `kind` is user, assistant, tool_call, tool_result or status.
-public struct TranscriptEvent: Decodable, Equatable, Identifiable, Sendable {
+public struct TranscriptEvent: Codable, Equatable, Identifiable, Sendable {
     public let seq: Int
     public let ts: String?
     public let kind: String
@@ -277,7 +277,7 @@ public struct TranscriptEvent: Decodable, Equatable, Identifiable, Sendable {
 }
 
 /// A permission question the desktop app is showing now.
-public struct PermissionPrompt: Decodable, Equatable, Sendable {
+public struct PermissionPrompt: Codable, Equatable, Sendable {
     public let promptId: String
     public let tool: String?
     public let text: String
@@ -285,13 +285,13 @@ public struct PermissionPrompt: Decodable, Equatable, Sendable {
 
 /// An option question Claude is waiting on (AskUserQuestion): one or more questions, each with
 /// labelled options, single or multiple choice, plus free text ("其他").
-public struct OptionQuestion: Decodable, Equatable, Sendable {
-    public struct Option: Decodable, Equatable, Sendable {
+public struct OptionQuestion: Codable, Equatable, Sendable {
+    public struct Option: Codable, Equatable, Sendable {
         public let label: String
         public let description: String?
     }
 
-    public struct Item: Decodable, Equatable, Sendable {
+    public struct Item: Codable, Equatable, Sendable {
         public let question: String
         public let header: String?
         public let multiSelect: Bool
@@ -316,8 +316,8 @@ public struct QuestionAnswer: Codable, Equatable, Sendable {
 }
 
 /// Reply buttons from the desktop app's next-step box; each just sends its message.
-public struct ReplySuggestions: Decodable, Equatable, Sendable {
-    public struct Reply: Decodable, Equatable, Hashable, Sendable {
+public struct ReplySuggestions: Codable, Equatable, Sendable {
+    public struct Reply: Codable, Equatable, Hashable, Sendable {
         public let label: String
         public let message: String
     }

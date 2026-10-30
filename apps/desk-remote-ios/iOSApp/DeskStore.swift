@@ -92,6 +92,7 @@ final class DeskStore: ObservableObject {
         defaults.removeObject(forKey: "deskremote.elevate-hidden.\(id.uuidString)")
         pcs.removeAll { $0.id == id }
         persist()
+        DeskLogCache.shared.forget(pc: id)
     }
 
     /// The PC's administrator approval key (64 hex characters); empty removes it.

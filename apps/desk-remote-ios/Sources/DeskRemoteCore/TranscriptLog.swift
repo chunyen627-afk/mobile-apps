@@ -16,8 +16,9 @@ public enum TranscriptRow: Identifiable, Equatable, Sendable {
     }
 }
 
-/// The events of one conversation as the app has received them, merged page by page.
-public struct TranscriptLog: Equatable, Sendable {
+/// The events of one conversation as the app has received them, merged page by page. Kept on
+/// the phone between visits (DeskLogCache), so opening it again only asks for what is new.
+public struct TranscriptLog: Equatable, Sendable, Codable {
     public private(set) var events: [TranscriptEvent] = []
     public private(set) var epoch = ""
     public private(set) var cursor = 0
@@ -30,9 +31,31 @@ public struct TranscriptLog: Equatable, Sendable {
     /// Model, effort and context use; kept when a page (from an older helper) has none.
     public private(set) var meta: ConversationMeta?
     public private(set) var loaded = false
+    /// The events grouped for display, worked out once per change rather than on every redraw.
+    public private(set) var rows: [TranscriptRow] = []
     static let maxEvents = 1000
 
+    enum CodingKeys: String, CodingKey {
+        case events, epoch, cursor, earlier, status, prompt, question, suggestions, meta
+    }
+
     public init() {}
+
+    /// A log saved on an earlier visit: shown at once, then brought up to date from its cursor.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        events = try c.decode([TranscriptEvent].self, forKey: .events)
+        epoch = try c.decode(String.self, forKey: .epoch)
+        cursor = try c.decode(Int.self, forKey: .cursor)
+        earlier = try c.decode(Bool.self, forKey: .earlier)
+        status = try c.decode(String.self, forKey: .status)
+        prompt = try c.decodeIfPresent(PermissionPrompt.self, forKey: .prompt)
+        question = try c.decodeIfPresent(OptionQuestion.self, forKey: .question)
+        suggestions = try c.decodeIfPresent(ReplySuggestions.self, forKey: .suggestions)
+        meta = try c.decodeIfPresent(ConversationMeta.self, forKey: .meta)
+        rows = Self.group(events)
+        loaded = true
+    }
 
     /// Merges one page: a reset replaces everything (new conversation file, helper restart);
     /// otherwise only events newer than what is held are appended. Returns whether anything
@@ -41,6 +64,7 @@ public struct TranscriptLog: Equatable, Sendable {
     public mutating func apply(_ page: EventPage) -> Bool {
         let waitingBefore = (question, suggestions, meta)
         let before = (events.last?.seq, events.count, prompt, status, earlier, loaded)
+        let regroup = page.reset || page.epoch != epoch || rows.isEmpty
         if page.reset || page.epoch != epoch {
             events = page.events
             earlier = page.earlier
@@ -60,6 +84,9 @@ public struct TranscriptLog: Equatable, Sendable {
         suggestions = page.suggestions
         if let pageMeta = page.meta { meta = pageMeta }
         loaded = true
+        if regroup || (events.last?.seq, events.count) != (before.0, before.1) {
+            rows = Self.group(events)
+        }
         let after = (events.last?.seq, events.count, prompt, status, earlier, loaded)
         return before != after || waitingBefore != (question, suggestions, meta)
     }
@@ -81,7 +108,7 @@ public struct TranscriptLog: Equatable, Sendable {
 
     /// Events grouped for display: each tool result sits under the first earlier call of the
     /// same tool that has no result yet (calls can run in parallel).
-    public var rows: [TranscriptRow] {
+    static func group(_ events: [TranscriptEvent]) -> [TranscriptRow] {
         var rows: [TranscriptRow] = []
         var pending: [Int] = []
         for event in events {

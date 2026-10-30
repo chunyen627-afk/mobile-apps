@@ -184,6 +184,8 @@ struct DeskChatView: View {
         // A new network starts over at once instead of waiting out a long-poll on the old one.
         .task(id: [scenePhase == .active ? 1 : 0, network.changes]) { await follow() }
         .onAppear { store.opened.insert(session.id) }
+        .onDisappear { DeskLogCache.shared.save(pc: pcID, app: app, session: session.id) }
+        .onChange(of: scenePhase) { if scenePhase != .active { DeskLogCache.shared.save(pc: pcID, app: app, session: session.id) } }
     }
 
     @ViewBuilder
@@ -268,6 +270,10 @@ struct DeskChatView: View {
 
     /// Reads until the view goes away or the app leaves the foreground.
     private func follow() async {
+        // Last visit's copy first (shown at once, even offline); then only what came after it.
+        if !log.loaded, let cached = DeskLogCache.shared.log(pc: pcID, app: app, session: session.id) {
+            log = cached
+        }
         guard scenePhase == .active, let client = store.client(pcID) else {
             if store.client(pcID) == nil { failure = "沒有連線密碼" }
             return
@@ -280,6 +286,7 @@ struct DeskChatView: View {
                                                    knownQuestion: log.question?.questionId, wait: wait)
                 let previousQuestion = log.question?.questionId
                 log.apply(page)
+                DeskLogCache.shared.note(log, pc: pcID, app: app, session: session.id)
                 if log.prompt == nil { promptBusy = nil } else { sawPrompt = true }
                 if log.question?.questionId != previousQuestion { questionBusy = nil }
                 pending.removeAll { $0.mark != nil && log.hasUserText($0.text, after: $0.mark ?? 0) }

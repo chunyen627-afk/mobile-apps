@@ -158,6 +158,24 @@ final class TranscriptLogTests: XCTestCase {
         TranscriptEvent(seq: seq, kind: kind, text: "e\(seq)", tool: tool)
     }
 
+    /// A log kept on the phone comes back whole, and the next page only adds what is new (10/30).
+    func testSavedLogComesBackAndContinuesFromItsCursor() throws {
+        var log = TranscriptLog()
+        log.apply(page("a", reset: true, [event(1, "user"), event(2, "tool_call", tool: "Bash"),
+                                          event(3, "tool_result", tool: "Bash"), event(4)]))
+        let saved = try JSONDecoder().decode(TranscriptLog.self, from: JSONEncoder().encode(log))
+        XCTAssertEqual(saved, log)
+        XCTAssertTrue(saved.loaded, "a saved log shows at once")
+        XCTAssertEqual(saved.rows.map(\.id), ["m1", "t2", "m4"])
+        XCTAssertEqual(saved.cursor, 4)
+        var next = saved
+        XCTAssertTrue(next.apply(page("a", reset: false, [event(5)])))
+        XCTAssertEqual(next.rows.map(\.id), ["m1", "t2", "m4", "m5"])
+        // The helper restarted meanwhile: its new epoch replaces the saved events.
+        XCTAssertTrue(next.apply(page("b", reset: true, [event(1)])))
+        XCTAssertEqual(next.rows.map(\.id), ["m1"])
+    }
+
     func testResetReplacesAndAppendSkipsSeen() {
         var log = TranscriptLog()
         XCTAssertTrue(log.apply(page("a", reset: true, [event(1), event(2)])))
