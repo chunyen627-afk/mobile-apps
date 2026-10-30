@@ -129,6 +129,8 @@ struct DeskChatView: View {
                     .onChange(of: geometry.size.height) { places.height = geometry.size.height }
             })
             .scrollDismissesKeyboard(.interactively)
+            // The bar stands in for the system's indicator; both showed side by side (phone 10/31).
+            .scrollIndicators(showsRail ? .hidden : .automatic)
             .defaultScrollAnchor(.bottom)
             .id(reload)
             // Opening a conversation lands on its newest message (it sometimes stopped short, 10/29).
