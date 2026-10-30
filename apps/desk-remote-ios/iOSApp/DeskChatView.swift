@@ -34,7 +34,7 @@ struct DeskChatView: View {
     @State private var pcState: HelperState?
     @StateObject private var presser = DeskPopupPresser()
     @FocusState private var inputFocused: Bool
-    @State private var shownRows: Set<String> = []  // rows on (or just off) the screen
+    @State private var places = DeskRowPlaces()      // where the drawn rows are on the screen
     @State private var holdIndex: Int?      // where a held scroll button has got to
     @State private var landing = false      // opening: hidden until it has reached the end
     @State private var bottomShown = false  // the end marker is on screen
@@ -55,8 +55,10 @@ struct DeskChatView: View {
                     }
                     ForEach(log.rows) { row in
                         rowView(row).id(row.id)
-                            .onAppear { shownRows.insert(row.id) }
-                            .onDisappear { shownRows.remove(row.id) }
+                            .background(GeometryReader { geometry in
+                                Color.clear.preference(key: DeskRowTops.self,
+                                                       value: [row.id: geometry.frame(in: .named("chat")).minY])
+                            })
                     }
                     ForEach(pending) { item in
                         DeskPendingBubble(item: item, retry: { Task { await send(item, force: false) } },
@@ -107,6 +109,13 @@ struct DeskChatView: View {
                 .padding(.trailing, showsRail ? 34 : 12)
                 .padding(.vertical, 8)
             }
+            .coordinateSpace(name: "chat")
+            .onPreferenceChange(DeskRowTops.self) { places.tops = $0 }
+            .background(GeometryReader { geometry in
+                Color.clear
+                    .onAppear { places.height = geometry.size.height }
+                    .onChange(of: geometry.size.height) { places.height = geometry.size.height }
+            })
             .scrollDismissesKeyboard(.interactively)
             .defaultScrollAnchor(.bottom)
             // Opening a conversation lands on its newest message (it sometimes stopped short, 10/29).
@@ -243,13 +252,16 @@ struct DeskChatView: View {
     private var showsRail: Bool { log.rows.count > 12 }
 
     /// One step of a held scroll button: a row at first, then 2, then 4 at a time, from the
-    /// first (or last) row on the screen when the hold began.
+    /// top (or bottom) row on the screen when the hold began. The lazy stack draws more rows than
+    /// fit (a short conversation all of them), so the rows' places decide, not their drawing.
     private func step(_ proxy: ScrollViewProxy, up: Bool, tick: Int) {
         let ids = log.rows.map(\.id)
         guard !ids.isEmpty else { return }
         if tick == 0 || holdIndex == nil {
-            let shown = ids.indices.filter { shownRows.contains(ids[$0]) }
-            holdIndex = (up ? shown.first : shown.last) ?? (up ? ids.count - 1 : 0)
+            let placed = ids.indices.compactMap { index in places.tops[ids[index]].map { (index, $0) } }
+            let top = placed.last { $0.1 <= 1 }?.0 ?? placed.first?.0
+            let bottom = placed.last { $0.1 < places.height }?.0
+            holdIndex = (up ? top : bottom) ?? (up ? ids.count - 1 : 0)
         }
         let current = holdIndex ?? 0
         let size = tick < 6 ? 1 : (tick < 16 ? 2 : 4)
@@ -448,6 +460,20 @@ struct DeskChatView: View {
         } catch {
             openState = "沒有成功：\(DeskText.failure(.unreachable))"
         }
+    }
+}
+
+/// The tops of the drawn rows in the chat's visible area, and its height. A plain object, so
+/// scrolling (which changes them every frame) does not redraw the chat.
+final class DeskRowPlaces {
+    var tops: [String: CGFloat] = [:]
+    var height: CGFloat = 0
+}
+
+struct DeskRowTops: PreferenceKey {
+    static var defaultValue: [String: CGFloat] = [:]
+    static func reduce(value: inout [String: CGFloat], nextValue: () -> [String: CGFloat]) {
+        value.merge(nextValue()) { $1 }
     }
 }
 
