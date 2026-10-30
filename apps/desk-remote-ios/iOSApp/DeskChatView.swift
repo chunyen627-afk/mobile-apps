@@ -37,6 +37,7 @@ struct DeskChatView: View {
     @State private var places = DeskRowPlaces()      // where the drawn rows are on the screen
     @StateObject private var metrics = DeskScrollMetrics()  // where the scroll bar's thumb goes
     @State private var landing = false      // opening: hidden until it has reached the end
+    @State private var reload = 0           // bumped to make the scroll view anew (blank screen)
     @State private var settling = 0         // the latest run of scrolling to the end; older ones stop
 
     var body: some View {
@@ -126,6 +127,7 @@ struct DeskChatView: View {
             })
             .scrollDismissesKeyboard(.interactively)
             .defaultScrollAnchor(.bottom)
+            .id(reload)
             // Opening a conversation lands on its newest message (it sometimes stopped short, 10/29).
             .onChange(of: log.loaded) { if log.loaded { land(proxy) } }
             .overlay { if landing { ProgressView().accessibilityIdentifier("chat-landing") } }
@@ -265,12 +267,16 @@ struct DeskChatView: View {
             proxy.scrollTo("bottom", anchor: .bottom)
             landing = false
             // A blank screen (no row drawn where it stopped: seen on CI 10/30 after a saved copy
-            // got huge new rows) is scrolled to the last row itself, then from the start again.
-            for target in [log.rows.last?.id, "top", "bottom"] {
+            // got huge new rows; going to the last row did not help either) is scrolled to the
+            // last row itself once more, then the scroll view is made anew, which starts at the end.
+            for target in [log.rows.last?.id, "bottom"] {
                 try? await Task.sleep(nanoseconds: 300_000_000)
                 guard run == settling, !rowOnScreen, let target else { return }
-                proxy.scrollTo(target, anchor: target == "top" ? .top : .bottom)
+                proxy.scrollTo(target, anchor: .bottom)
             }
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard run == settling, !rowOnScreen else { return }
+            reload += 1
         }
     }
 
@@ -514,7 +520,11 @@ struct DeskRowTops: PreferenceKey {
 /// offset, its height the content's (the lazy stack's estimate for rows not drawn yet).
 struct DeskContentFrame: PreferenceKey {
     static var defaultValue = CGRect.zero
-    static func reduce(value: inout CGRect, nextValue: () -> CGRect) { value = nextValue() }
+    /// Siblings without a frame of their own must not wipe it (they did: the bar read 0, CI 10/30).
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        let next = nextValue()
+        if next.height > 0 { value = next }
+    }
 }
 
 /// Where the scroll bar's thumb goes, kept apart from the view's state so that scrolling redraws
