@@ -1755,27 +1755,47 @@ class WindowsDriver:
             return None
 
     def close_app(self, app):
-        """Asks each of the app's windows to close (WM_CLOSE), as the close button would: Claude
-        then quits, asking first ("仍要結束") while Claude Code is working. Never terminates it."""
+        """Asks the app to quit the way Windows does before an update: the Restart Manager's
+        close-app request (WM_QUERYENDSESSION with ENDSESSION_CLOSEAPP), which Claude answers by
+        quitting ("Windows session ending (close-app) - quitting the app", its log 10/22-23). Closing
+        its window (WM_CLOSE) only hides it (office 10/30 16:52). Nothing is terminated by force."""
         package, exe = APP_PACKAGES[app]
-        pids = set(package_processes(package, exe))
-        user32 = ctypes.windll.user32
-        closed = []
+        pids = list(package_processes(package, exe))
+        if not pids:
+            raise ActionError('app-not-running', 'the app is not running')
+        rstrtmgr = ctypes.windll.rstrtmgr
+        kernel32 = ctypes.windll.kernel32
 
-        @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
-        def each(hwnd, _):
-            owner = ctypes.c_uint()
-            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
-            if owner.value in pids and user32.IsWindowVisible(hwnd) and not user32.GetParent(hwnd):
-                closed.append(hwnd)
-            return True
+        class FileTime(ctypes.Structure):
+            _fields_ = [('low', ctypes.c_uint32), ('high', ctypes.c_uint32)]
 
-        user32.EnumWindows(each, 0)
-        if not closed:
-            raise ActionError('app-not-running', 'no window of the app to close')
-        for hwnd in closed:
-            user32.PostMessageW(ctypes.c_void_p(hwnd), 0x0010, 0, 0)  # WM_CLOSE
-        return len(closed)
+        class UniqueProcess(ctypes.Structure):
+            _fields_ = [('pid', ctypes.c_uint32), ('started', FileTime)]
+
+        processes = (UniqueProcess * len(pids))()
+        for slot, pid in zip(processes, pids):
+            slot.pid = pid
+            handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+            if handle:
+                try:
+                    created, exited, kern, user = FileTime(), FileTime(), FileTime(), FileTime()
+                    kernel32.GetProcessTimes(handle, ctypes.byref(created), ctypes.byref(exited), ctypes.byref(kern), ctypes.byref(user))
+                    slot.started = created
+                finally:
+                    kernel32.CloseHandle(handle)
+        session = ctypes.c_uint32()
+        key = ctypes.create_unicode_buffer(64)
+        if rstrtmgr.RmStartSession(ctypes.byref(session), 0, key):
+            raise ActionError('close-failed', 'the Restart Manager session could not start')
+        try:
+            if rstrtmgr.RmRegisterResources(session, 0, None, len(pids), processes, 0, None):
+                raise ActionError('close-failed', 'the app could not be registered with the Restart Manager')
+            # No RmForceShutdown: an app that does not quit on request is left alone.
+            if rstrtmgr.RmShutdown(session, 0, None):
+                raise ActionError('close-failed', 'the app did not quit when asked')
+        finally:
+            rstrtmgr.RmEndSession(session)
+        return len(pids)
 
     def restart_app(self, app):
         """Ends every process of the app's package and starts the installed (newest) one. Only
