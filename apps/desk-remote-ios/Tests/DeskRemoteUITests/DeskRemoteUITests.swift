@@ -775,6 +775,7 @@ final class DeskRemoteUITests: XCTestCase {
                       "result says \(said(element("popup-result")))")
         XCTAssertTrue(poll(timeout: 90) { !element("claude-update").exists }, "the button stays after updating")
         XCTAssertTrue(element("app-version-claude").label.contains("4.30.0"), "version: \(said(element("app-version-claude")))")
+        XCTAssertTrue(waitFor(note, labelContains: "已更新為 4.30.0", timeout: 20), "the note still talks of the question: \(said(note))")
         snapshot("38d-updated")
     }
 

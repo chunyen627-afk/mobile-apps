@@ -121,6 +121,10 @@ struct DeskPCView: View {
         // A window waiting on the PC is looked at more often, so its card goes once it is answered.
         .deskForegroundLoop(every: 15, failing: { unreachable || state?.shownPopups.isEmpty == false }) { await refresh() }
         .refreshable { await refresh() }
+        // Updated after Claude's question was answered: the note about the question is old news.
+        .onChange(of: state?.version(.claude)?.running) { old, new in
+            if old != nil, new != old, !updating, let new { updateNote = "Claude 桌面版已更新為 \(new)" }
+        }
     }
 
     private func runUpdate() async {
