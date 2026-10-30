@@ -750,7 +750,7 @@ final class DeskRemoteUITests: XCTestCase {
         XCTAssertTrue(waitFor(note, labelContains: "仍在處理中", timeout: 30), "the PC's question is not mentioned: \(said(note))")
         let cancel = element("popup-button-取消")
         XCTAssertTrue(cancel.waitForExistence(timeout: 15), "Claude's question is not shown with its buttons")
-        XCTAssertTrue(element("popup-button-等待 Claude").exists && element("popup-button-仍要結束").exists, "buttons missing")
+        XCTAssertTrue(element("popup-button-等待 Claude").exists && element("popup-button-仍要更新").exists, "buttons missing")
         snapshot("38b-claude-asks")
         XCTAssertTrue(reveal(cancel), "the cancel button cannot be reached")
         cancel.tap()
@@ -762,16 +762,16 @@ final class DeskRemoteUITests: XCTestCase {
         XCTAssertTrue(poll(timeout: 15) { !self.element("popup-button-取消").exists }, "the question is still shown")
         XCTAssertTrue(reveal(element("claude-update")), "cancelling took the update button away")
         snapshot("38c-cancelled")
-        // Again, and this time quit anyway: it updates.
+        // Again, and this time update anyway: it updates.
         pressUpdate()
-        let quit = element("popup-button-仍要結束")
+        let quit = element("popup-button-仍要更新")
         XCTAssertTrue(quit.waitForExistence(timeout: 30), "Claude's question did not come back")
         XCTAssertTrue(reveal(quit), "the quit button cannot be reached")
         quit.tap()
-        let sureQuit = app.buttons["按「仍要結束」"]
+        let sureQuit = app.buttons["按「仍要更新」"]
         XCTAssertTrue(sureQuit.waitForExistence(timeout: 5), "pressing was not confirmed first")
         sureQuit.tap()
-        XCTAssertTrue(waitFor(element("popup-result"), labelContains: "已在電腦上按「仍要結束」", timeout: 25),
+        XCTAssertTrue(waitFor(element("popup-result"), labelContains: "已在電腦上按「仍要更新」", timeout: 25),
                       "result says \(said(element("popup-result")))")
         XCTAssertTrue(poll(timeout: 90) { !element("claude-update").exists }, "the button stays after updating")
         XCTAssertTrue(element("app-version-claude").label.contains("4.30.0"), "version: \(said(element("app-version-claude")))")

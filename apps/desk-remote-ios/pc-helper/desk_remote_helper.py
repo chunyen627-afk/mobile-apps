@@ -37,7 +37,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.13'
+VERSION = '0.5.14'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -1769,7 +1769,7 @@ class WindowsDriver:
     def press_popup(self, popup, button):
         """Presses `button` in `popup` while it still has its title; True once it has closed."""
         return bool(self.worker.request({'cmd': 'press_popup', 'hwnd': popup['hwnd'], 'title': popup['title'],
-                                         'button': button}).get('gone'))
+                                         'button': button, 'page': bool(popup.get('page'))}).get('gone'))
 
     def answer(self, app, doc, decision, expect):
         return self.ask(app, cmd='answer', doc=doc, decision=decision, expect=expect).get('how')
@@ -2030,6 +2030,7 @@ class UiWatcher:
         self.checked_once = False
         self.context_alerted, self.usage_alerted = set(), set()
         self.popups = []        # pop-up windows on the desktop at the last look, each with an id
+        self.quiet_popups_until = 0.0  # no pop-up notifications before then (the phone opened one)
         self.uac_since = self.uac_told = None  # when a UAC prompt was first seen; whether the phone was told
         self.versions, self.versions_checked = {}, None  # each app's installed and running version
         self.update_told, self.restart_tried = set(), {}  # (app, version) told; Codex version -> when restarted
@@ -2124,12 +2125,17 @@ class UiWatcher:
             listed.append({'id': hashlib.sha256(key.encode('utf-8')).hexdigest()[:12], 'hwnd': raw.get('hwnd'),
                            'title': str(raw.get('title') or ''), 'process': str(raw.get('process') or ''),
                            'text': str(raw.get('text') or '')[:600],
-                           'buttons': [str(b) for b in raw['buttons']][:8]})
+                           'buttons': [str(b) for b in raw['buttons']][:8], 'page': bool(raw.get('page'))})
         with self.lock:
             known = {p['id'] for p in self.popups}
             self.popups = listed
+        # A question inside an app's page may be a menu or a question the person at the PC just
+        # opened: told only when nobody is at the PC.
+        presence = self.hub.presence.snapshot() if any(p['page'] for p in listed) else {}
+        away = presence.get('locked') or (presence.get('idleSeconds') or 0) >= 60
+        quiet = not notify or time.monotonic() < self.quiet_popups_until
         for popup in listed:
-            if popup['id'] not in known and notify:
+            if popup['id'] not in known and not quiet and (away or not popup['page']):
                 name = popup['title'] or popup['process']
                 detail = popup['text'].replace('\n', ' ')[:100] or popup['process']
                 self.send(f'🪟 電腦跳出視窗：{name}', f'{self.pc_name}・{detail}；打開桌面遙控選要按的按鈕', 4, ['window'],
@@ -2968,6 +2974,7 @@ class ActionRunner:
         target = pending_version(button)
         self.recheck(action, False)
         self.update(action, message=f'正在按「{button}」…')
+        self.watcher.quiet_popups_until = time.monotonic() + 60  # its question goes to the phone looking
         self.driver.press_update(app, button)
         logging.info('update %s: pressed %s', app, button)
         self.update(action, message='Claude 桌面版重新啟動中…')
@@ -3172,7 +3179,7 @@ FAILURE_TEXT = {
 }
 
 QUIT_GUARD_TEXT = ('Claude 還有工作在跑，電腦跳出「Claude 仍在處理中」確認視窗（開著時桌面版收不到訊息）：'
-                   '在這頁上方選「取消」就不更新、「等待 Claude」等工作做完再更新、「仍要結束」立刻更新（會中斷工作）')
+                   '在這頁上方選「取消」就不更新、「等待 Claude」等工作做完再更新、「仍要更新」立刻更新（會中斷工作）')
 UAC_TEXT = '電腦跳出系統管理員確認（UAC）擋著，手機無法代按；請到電腦前按（或用 Google 遠端桌面），按掉前訊息送不出去'
 
 # What the worker found in front when it could not take the foreground ("in front: <process>").
@@ -3782,7 +3789,7 @@ class FakeDriver:
         self.calls.append(('press_popup', popup['title'], button))
         pressed = next((p for p in self.fake_popups if p['hwnd'] == popup['hwnd']), {})
         self.fake_popups = [p for p in self.fake_popups if p['hwnd'] != popup['hwnd']]
-        if pressed.get('update') and button != '取消':  # quitting now, or once Claude is done
+        if pressed.get('update') and button != '取消':  # restarting now, or once Claude is done
             self.apply_update(*pressed['update'])
         return True
 
@@ -3933,10 +3940,11 @@ FAKE_TABLE = '''
 FAKE_POPUP = {'hwnd': 4242, 'title': 'Windows 安全性', 'process': 'SecurityHealthHost',
               'text': '是否要允許公開和私人網路存取此應用程式?\nWindows 防火牆已封鎖所有公用和私人網路上 示範程式 的部分功能。\n示範程式',
               'buttons': ['允許', '取消']}
-# Claude's question when it is told to restart while Claude Code works (its zh-Hant strings, 10/30).
-FAKE_QUIT_GUARD = {'hwnd': 4343, 'title': 'Claude', 'process': 'claude',
-                   'text': 'Claude 仍在處理中\nClaude 正在 1 個工作階段中執行作業。立即結束將中斷這項作業。',
-                   'buttons': ['仍要結束', '等待 Claude', '取消']}
+# Claude's question, drawn inside its page, when told to restart to update while Claude Code works
+# (read live 10/30).
+FAKE_QUIT_GUARD = {'hwnd': 4343, 'title': 'Claude 仍在處理中', 'process': 'claude', 'page': True,
+                   'text': 'Claude 仍在處理中\nClaude 正在 1 個工作階段中執行作業。立即重新啟動將會中斷該作業。',
+                   'buttons': ['取消', '等待 Claude', '仍要更新']}
 
 
 def fake_fresh_usage(read, app, percent):

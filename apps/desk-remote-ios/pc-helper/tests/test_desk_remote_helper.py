@@ -1298,7 +1298,7 @@ class VersionTests(FakeEnvironment):
         self.assertEqual((status['state'], status['verified']), ('done', False), status)
         self.assertIn('取消', status['message'])
         popups = hub.state()['popups']
-        self.assertEqual([p['buttons'] for p in popups], [['仍要結束', '等待 Claude', '取消']], popups)
+        self.assertEqual([p['buttons'] for p in popups], [['取消', '等待 Claude', '仍要更新']], popups)
         watcher.check_popups()
         self.assertEqual(sent, [], 'the phone is already looking at it')
         # 取消: nothing changes and the button stays.
@@ -1307,11 +1307,22 @@ class VersionTests(FakeEnvironment):
         watcher.look('claude')
         self.assertEqual(driver.versions()['claude']['running'], '3.6556.2.0')
         self.assertEqual(hub.state()['popups'], [])
-        # Asked again and told to quit anyway: it updates.
+        # Asked again and told to update anyway: it updates.
         self.finish(runner, runner.submit('update', 'claude', None, {}))
         popup = hub.state()['popups'][0]
-        self.finish(runner, runner.submit('popup', None, popup['id'], {'button': '仍要結束'}))
+        self.finish(runner, runner.submit('popup', None, popup['id'], {'button': '仍要更新'}))
         self.assertEqual(driver.versions()['claude']['running'], '4.29.0')
+
+    def test_a_question_inside_an_apps_page_is_told_only_when_nobody_is_at_the_pc(self):
+        _, driver, watcher, sent, presence = self.version_setup(idle=30)
+        driver.fake_popups = [dict(h.FAKE_QUIT_GUARD)]
+        watcher.check_popups()
+        self.assertEqual(sent, [], 'the person at the PC sees it (or opened it)')
+        self.assertTrue(watcher.popup_list(), 'still listed for the phone')
+        presence['idleSeconds'] = 900
+        driver.fake_popups = [dict(h.FAKE_QUIT_GUARD, hwnd=4344)]
+        watcher.check_popups()
+        self.assertEqual(len(sent), 1, sent)
 
     def finish(self, runner, submitted):
         code, body = submitted

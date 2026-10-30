@@ -980,6 +980,7 @@ function Read-UsageCard($w, $s) {
 # Windows that pop up and wait for an answer (a firewall question, a message box) and keep the
 # desktop apps from coming to the front: shown, cannot be minimized (or a standard dialog), and
 # have buttons. Main windows, the shell's own pop-ups and notifications are not listed.
+$PageDialogApps = @('claude', 'ChatGPT')
 $PopupSkip = @('ShellExperienceHost', 'StartMenuExperienceHost', 'SearchHost', 'TextInputHost', 'LockApp', 'cua-driver')
 
 function Popup-Buttons($win) {
@@ -1034,12 +1035,56 @@ function Find-Popups {
       $found += @{ hwnd = [int64]$cur.NativeWindowHandle; title = "$($cur.Name)"; process = $proc; text = $text; buttons = $buttons }
     } catch { continue }  # it closed while being read
   }
+  # A desktop app's own question drawn inside its page: Claude asks there before restarting to
+  # update while Claude Code works (live 10/30). Its window stays the app's main one.
+  foreach ($w in $windows) {
+    try {
+      $cur = $w.Current
+      if ($cur.IsOffscreen -or $cur.ClassName -ne 'Chrome_WidgetWin_1') { continue }
+      $proc = (Get-Process -Id $cur.ProcessId -ErrorAction Stop).ProcessName
+      if ($PageDialogApps -notcontains $proc) { continue }
+      foreach ($d in $w.FindAll($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Window)))) {
+        $name = "$($d.Current.Name)".Trim()
+        $buttons = @(Popup-Buttons $d | ForEach-Object { $_.Current.Name.Trim() } | Select-Object -Unique)
+        if (-not $name -or $buttons.Count -lt 2) { continue }
+        $texts = @($d.FindAll($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Text))) |
+          ForEach-Object { "$($_.Current.Name)".Trim() } | Where-Object { $_ } | Select-Object -Unique)
+        $text = $texts -join "`n"
+        if ($text.Length -gt 600) { $text = $text.Substring(0, 600) }
+        $found += @{ hwnd = [int64]$cur.NativeWindowHandle; title = $name; process = $proc; text = $text; buttons = $buttons; page = $true }
+      }
+    } catch { continue }
+  }
   return $found
+}
+
+# The dialog named $c.title inside the app window $c.hwnd, or $null once it has gone.
+function Page-Dialog($c) {
+  $w = $null
+  try { $w = $AE::FromHandle([IntPtr][int64]$c.hwnd) } catch { return $null }
+  try {
+    $cond = New-Object System.Windows.Automation.AndCondition(
+      (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Window)),
+      (New-Object System.Windows.Automation.PropertyCondition($AE::NameProperty, $c.title)))
+    return $w.FindFirst($Tree::Descendants, $cond)
+  } catch { return $null }
 }
 
 # Presses the button named $c.button in the pop-up $c.hwnd, only while that window still has
 # the title it was listed with. True when the window has closed within 3 s.
 function Press-Popup($c) {
+  if ($c.page) {
+    $d = Page-Dialog $c
+    if (-not $d) { Fail 'popup-gone' 'the dialog is gone' }
+    $button = @(Popup-Buttons $d | Where-Object { $_.Current.Name.Trim() -eq $c.button }) | Select-Object -First 1
+    if (-not $button) { Fail 'not-found' 'no such button in the dialog' }
+    if (-not (Invoke-Element $button)) { Fail 'press-failed' 'the button did not take the press' }
+    for ($i = 0; $i -lt 12; $i++) {
+      Start-Sleep -Milliseconds 250
+      if (-not (Page-Dialog $c)) { return $true }
+    }
+    return $false
+  }
   $w = $null
   try { $w = $AE::FromHandle([IntPtr][int64]$c.hwnd) } catch { }
   if (-not $w) { Fail 'popup-gone' 'the window is gone' }

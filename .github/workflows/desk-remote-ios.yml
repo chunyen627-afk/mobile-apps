@@ -19,7 +19,8 @@ jobs:
     # Fail closed for private repositories; standard public runners are free.
     if: github.event.repository.private == false
     runs-on: macos-15
-    timeout-minutes: 30
+    # The UI tests alone take about 16 minutes; 30 cut a release run short (10/30).
+    timeout-minutes: 45
     env:
       HOMEBREW_NO_AUTO_UPDATE: "1"
       APP_DIR: apps/desk-remote-ios
