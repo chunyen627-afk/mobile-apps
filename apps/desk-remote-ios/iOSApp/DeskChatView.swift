@@ -36,6 +36,8 @@ struct DeskChatView: View {
     @FocusState private var inputFocused: Bool
     @State private var topID: String?       // the row at the top of the screen
     @State private var holdIndex: Int?      // where a held scroll button has got to
+    @State private var landing = false      // opening: hidden until it has reached the end
+    @State private var bottomShown = false  // the end marker is on screen
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -94,8 +96,11 @@ struct DeskChatView: View {
                             .accessibilityIdentifier("chat-stop-state")
                     }
                     Color.clear.frame(height: 1).id("bottom")
+                        .onAppear { bottomShown = true }
+                        .onDisappear { bottomShown = false }
                 }
                 .scrollTargetLayout()
+                .opacity(landing ? 0 : 1)
                 .padding(.leading, 12)
                 // The scroll rail has a lane of its own, so it never covers the text (10/30).
                 .padding(.trailing, showsRail ? 34 : 12)
@@ -105,7 +110,8 @@ struct DeskChatView: View {
             .scrollDismissesKeyboard(.interactively)
             .defaultScrollAnchor(.bottom)
             // Opening a conversation lands on its newest message (it sometimes stopped short, 10/29).
-            .onChange(of: log.loaded) { if log.loaded { jump(proxy, to: "bottom", animated: false) } }
+            .onChange(of: log.loaded) { if log.loaded { land(proxy) } }
+            .overlay { if landing { ProgressView() } }
             .onChange(of: log.rows.last?.id) { jump(proxy, to: "bottom") }
             .onChange(of: pending.count) { jump(proxy, to: "bottom") }
             .onChange(of: log.prompt) { jump(proxy, to: "bottom") }
@@ -211,6 +217,24 @@ struct DeskChatView: View {
                 try? await Task.sleep(nanoseconds: delay * 1_000_000)
                 proxy.scrollTo(target, anchor: anchor)
             }
+        }
+    }
+
+    /// Opening: scrolls to the end again and again, hidden, until the end is really on screen (at
+    /// most 3 s). Three tries were not enough for long replies: it sat in the middle until the next
+    /// message came (10/30).
+    private func land(_ proxy: ScrollViewProxy) {
+        landing = true
+        Task { @MainActor in
+            var seen = 0
+            for _ in 0 ..< 20 {
+                proxy.scrollTo("bottom", anchor: .bottom)
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                seen = bottomShown ? seen + 1 : 0
+                if seen >= 2 { break }
+            }
+            proxy.scrollTo("bottom", anchor: .bottom)
+            landing = false
         }
     }
 
