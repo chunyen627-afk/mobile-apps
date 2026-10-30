@@ -688,16 +688,24 @@ final class DeskRemoteUITests: XCTestCase {
         snapshot("36-top")
         element("chat-to-bottom").tap()
         XCTAssertTrue(poll(timeout: 6) { newest.exists && newest.isHittable }, "the bottom button did not reach the newest message")
-        // Held, the buttons scroll a few rows at a time instead of jumping (asked 10/30).
+        // The lever between the chevrons: pulled up it scrolls up a few rows at a time, the further
+        // the faster; let go it stops (asked 10/30, after held buttons).
         let rail = top.frame
         XCTAssertGreaterThan(rail.minX, app.windows.firstMatch.frame.maxX - 40, "the rail is not at the right edge: \(rail)")
-        // The fake conversation is short (about 27 rows, half a screen above): a short hold.
-        top.press(forDuration: 0.7)
-        XCTAssertTrue(poll(timeout: 3) { !(newest.exists && newest.isHittable) }, "holding the top button did not scroll up")
-        XCTAssertFalse(first.exists && first.isHittable, "holding the top button jumped to the top")
-        snapshot("36-held")
-        element("chat-to-bottom").press(forDuration: 4.0)
-        XCTAssertTrue(poll(timeout: 6) { newest.exists && newest.isHittable }, "holding the bottom button did not reach the newest message")
+        let lever = element("chat-lever")
+        XCTAssertTrue(lever.exists, "no lever")
+        let knob = lever.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        // A gentle pull (two fifths of its reach) held a moment: a few rows up, not the top (the
+        // fake conversation is short, about 27 rows).
+        knob.press(forDuration: 0.1, thenDragTo: knob.withOffset(CGVector(dx: 0, dy: -14)),
+                   withVelocity: .default, thenHoldForDuration: 1.2)
+        XCTAssertTrue(poll(timeout: 3) { !(newest.exists && newest.isHittable) }, "pulling the lever up did not scroll up")
+        XCTAssertFalse(first.exists && first.isHittable, "a gentle pull jumped to the top")
+        snapshot("36-lever")
+        // Pulled all the way down and held: back at the newest message.
+        knob.press(forDuration: 0.1, thenDragTo: knob.withOffset(CGVector(dx: 0, dy: 34)),
+                   withVelocity: .default, thenHoldForDuration: 4.0)
+        XCTAssertTrue(poll(timeout: 6) { newest.exists && newest.isHittable }, "pulling the lever down did not reach the newest message")
     }
 
     func test37CodexFastModeSwitch() throws {

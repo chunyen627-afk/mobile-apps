@@ -35,7 +35,8 @@ struct DeskChatView: View {
     @StateObject private var presser = DeskPopupPresser()
     @FocusState private var inputFocused: Bool
     @State private var places = DeskRowPlaces()      // where the drawn rows are on the screen
-    @State private var holdIndex: Int?      // where a held scroll button has got to
+    @State private var holdIndex: Int?      // where the scroll lever has got to
+    @State private var holdUp = true        // which way it was going
     @State private var landing = false      // opening: hidden until it has reached the end
     @State private var settling = 0         // the latest run of scrolling to the end; older ones stop
 
@@ -131,24 +132,18 @@ struct DeskChatView: View {
             .onChange(of: pending.count) { toEnd(proxy) }
             .onChange(of: log.prompt) { toEnd(proxy) }
             .onChange(of: log.question?.questionId) { toEnd(proxy) }
-            // A long conversation goes to its start or its end in one tap (asked 10/29), and scrolls
-            // fast while a button is held; the rail sits at the right edge (asked 10/30).
+            // A long conversation goes to its start or its end in one tap (asked 10/29); between the
+            // two, a small lever: pulled up or down it scrolls that way, the further the faster,
+            // and springs back when let go (asked 10/30, after held buttons). Right edge.
             .overlay(alignment: .trailing) {
                 if showsRail {
-                    VStack(spacing: 0) {
-                        DeskHoldButton(symbol: "chevron.up.2", label: "捲到最上面（按住往上捲）",
-                                       tap: { jump(proxy, to: "top", anchor: .top) },
-                                       step: { tick in step(proxy, up: true, tick: tick) })
-                            .accessibilityIdentifier("chat-to-top")
-                        Divider().frame(width: 16)
-                        DeskHoldButton(symbol: "chevron.down.2", label: "捲到最新（按住往下捲）",
-                                       tap: { toEnd(proxy) },
-                                       step: { tick in step(proxy, up: false, tick: tick) })
-                            .accessibilityIdentifier("chat-to-bottom")
-                    }
-                    .background(.regularMaterial, in: Capsule())
-                    .overlay(Capsule().stroke(Color.secondary.opacity(0.25)))
-                    .padding(.trailing, 3)
+                    DeskScrollLever(toTop: { jump(proxy, to: "top", anchor: .top) },
+                                    toBottom: { toEnd(proxy) },
+                                    step: { up, rows in step(proxy, up: up, rows: rows) },
+                                    released: { holdIndex = nil })
+                        .background(.regularMaterial, in: Capsule())
+                        .overlay(Capsule().stroke(Color.secondary.opacity(0.25)))
+                        .padding(.trailing, 3)
                 }
             }
         }
@@ -273,21 +268,22 @@ struct DeskChatView: View {
 
     private var showsRail: Bool { log.rows.count > 12 }
 
-    /// One step of a held scroll button: a row at first, then 2, then 4 at a time, from the
-    /// top (or bottom) row on the screen when the hold began. The lazy stack draws more rows than
-    /// fit (a short conversation all of them), so the rows' places decide, not their drawing.
-    private func step(_ proxy: ScrollViewProxy, up: Bool, tick: Int) {
+    /// One step of the lever: `rows` rows up or down from where the last step left off, starting
+    /// from the top (or bottom) row on the screen when the pull began or turned round. The lazy
+    /// stack draws more rows than fit (a short conversation all of them), so the rows' places
+    /// decide, not their drawing.
+    private func step(_ proxy: ScrollViewProxy, up: Bool, rows: Int) {
         let ids = log.rows.map(\.id)
         guard !ids.isEmpty else { return }
-        if tick == 0 || holdIndex == nil {
+        if holdIndex == nil || holdUp != up {
+            holdUp = up
             let placed = ids.indices.compactMap { index in places.tops[ids[index]].map { (index, $0) } }
             let top = placed.last { $0.1 <= 1 }?.0 ?? placed.first?.0
             let bottom = placed.last { $0.1 < places.height }?.0
             holdIndex = (up ? top : bottom) ?? (up ? ids.count - 1 : 0)
         }
         let current = holdIndex ?? 0
-        let size = tick < 6 ? 1 : (tick < 16 ? 2 : 4)
-        let next = up ? max(0, current - size) : min(ids.count - 1, current + size)
+        let next = up ? max(0, current - rows) : min(ids.count - 1, current + rows)
         holdIndex = next
         if next == current {
             proxy.scrollTo(up ? "top" : "bottom", anchor: up ? .top : .bottom)
@@ -501,47 +497,75 @@ struct DeskRowTops: PreferenceKey {
 
 /// Half of the scroll rail at the conversation's right edge: a tap jumps to the end, holding it
 /// calls `step` about nine times a second until it is let go.
-struct DeskHoldButton: View {
-    let symbol: String
-    let label: String
-    let tap: () -> Void
-    let step: (Int) -> Void
-    @State private var pressing = false
-    @State private var repeating = false
-    @State private var holding: Task<Void, Never>?
+/// The scroll rail: a chevron to the top, a lever, a chevron to the end. The lever's knob follows
+/// the finger up to `reach` points each way; while it is off centre `step` is called again and
+/// again, more rows and more often the further it is pulled; let go, it springs back and stops.
+struct DeskScrollLever: View {
+    let toTop: () -> Void
+    let toBottom: () -> Void
+    let step: (_ up: Bool, _ rows: Int) -> Void
+    let released: () -> Void
+    @State private var offset: CGFloat = 0
+    @State private var pulling: Task<Void, Never>?
+    static let reach: CGFloat = 34
 
     var body: some View {
-        Image(systemName: symbol)
-            .font(.footnote.weight(.bold))
-            .foregroundStyle(pressing ? Color.accentColor : Color.primary)
-            .frame(width: 26, height: 64)
+        VStack(spacing: 0) {
+            Image(systemName: "chevron.up.2")
+                .font(.footnote.weight(.bold))
+                .frame(width: 26, height: 30)
+                .contentShape(Rectangle())
+                .onTapGesture(perform: toTop)
+                .accessibilityLabel("捲到最上面")
+                .accessibilityAddTraits(.isButton)
+                .accessibilityIdentifier("chat-to-top")
+            ZStack {
+                Capsule().fill(Color.secondary.opacity(0.2)).frame(width: 6)
+                Capsule()
+                    .fill(offset == 0 ? Color.secondary : Color.accentColor)
+                    .frame(width: 18, height: 26)
+                    .offset(y: offset)
+            }
+            .frame(width: 26, height: Self.reach * 2 + 26)
             .contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 0)
-                .onChanged { _ in
-                    guard !pressing else { return }
-                    pressing = true
-                    holding = Task { @MainActor in
-                        try? await Task.sleep(nanoseconds: 350_000_000)
-                        var tick = 0
-                        while !Task.isCancelled {
-                            repeating = true
-                            step(tick)
-                            tick += 1
-                            try? await Task.sleep(nanoseconds: 110_000_000)
-                        }
-                    }
+                .onChanged { value in
+                    offset = min(Self.reach, max(-Self.reach, value.translation.height))
+                    if pulling == nil { pulling = Task { @MainActor in await pull() } }
                 }
                 .onEnded { _ in
-                    holding?.cancel()
-                    holding = nil
-                    if !repeating { tap() }
-                    pressing = false
-                    repeating = false
+                    pulling?.cancel()
+                    pulling = nil
+                    withAnimation(.spring(duration: 0.25)) { offset = 0 }
+                    released()
                 })
             .accessibilityElement()
-            .accessibilityLabel(label)
-            .accessibilityAddTraits(.isButton)
-            .accessibilityAction { tap() }
+            .accessibilityLabel("快速捲動拉桿（按著往上或往下拉）")
+            .accessibilityIdentifier("chat-lever")
+            Image(systemName: "chevron.down.2")
+                .font(.footnote.weight(.bold))
+                .frame(width: 26, height: 30)
+                .contentShape(Rectangle())
+                .onTapGesture(perform: toBottom)
+                .accessibilityLabel("捲到最新")
+                .accessibilityAddTraits(.isButton)
+                .accessibilityIdentifier("chat-to-bottom")
+        }
+    }
+
+    /// A pull of under 15% does nothing (a tap or a wobble); then 1 row every 0.2 s, 2 rows every
+    /// 0.12 s past 45%, 4 rows every 0.09 s past 80%.
+    private func pull() async {
+        while !Task.isCancelled {
+            let strength = abs(offset) / Self.reach
+            var wait: UInt64 = 80
+            if strength >= 0.15 {
+                let rows = strength < 0.45 ? 1 : (strength < 0.8 ? 2 : 4)
+                wait = strength < 0.45 ? 200 : (strength < 0.8 ? 120 : 90)
+                step(offset < 0, rows)
+            }
+            try? await Task.sleep(nanoseconds: wait * 1_000_000)
+        }
     }
 }
 
