@@ -147,3 +147,4 @@ Nobody can click a UAC prompt for you on this PC. When a command needs administr
 | 不經手機查狀態 | 讀 `config.json` 的 token，`GET http://<ZeroTier 位址>:18790/v1/state` 帶 `Authorization: Bearer <token>`（不要把 token 印出來） |
 | 模擬器測試與截圖 | 推到 `claude/desk-remote` 會自動跑；截圖在 `ci-screenshots-desk-remote-ios` 分支（用 commit SHA 的 raw 網址讀，分支網址會被快取） |
 | 發布 | 版本在 `project.yml`（`MARKETING_VERSION`、`CURRENT_PROJECT_VERSION` 每次發布都要加），commit 訊息帶 `[release-ipa]` |
+| 版本號怎麼加（2026-10-30 定） | build 號每次發布 +1、不歸零。第三碼（0.6.x）：每次發布，修正或在現有畫面上加小功能。第二碼（0.x）：符合任一條就升——一批新功能都在手機上實測通過、告一段落；要電腦端小幫手同時更新才能用（新舊不相容）；併進工具箱成為它的分頁。1.0：主要功能都在手機與兩台電腦上實測過、連續用一段時間沒出問題。小幫手的版本另外算，跟 App 無關 |
