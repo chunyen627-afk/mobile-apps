@@ -37,7 +37,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.14'
+VERSION = '0.5.15'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -308,6 +308,7 @@ def summarize_input(name, data):
 
 QUESTION_TOOL = 'AskUserQuestion'
 INTERRUPTED = '[Request interrupted by user'
+COMPACTED = '對話已壓縮'  # the app squeezed the earlier part into a summary; the messages stay
 
 
 def is_wrap_up(name):
@@ -379,6 +380,10 @@ class ClaudeParser:
             obj = {'type': 'user', 'timestamp': attachment.get('timestamp') or obj.get('timestamp'),
                    'message': {'role': 'user', 'content': prompt if isinstance(prompt, (str, list)) else []}}
             kind = 'user'
+        if kind == 'user' and obj.get('isCompactSummary') and not obj.get('isSidechain'):
+            # A long conversation squeezed into a summary is written as a 13-23k-character user
+            # message (seen live 10/30): on the phone it was a huge bubble the person never typed.
+            return [{'kind': 'status', 'text': COMPACTED, 'ts': iso(obj.get('timestamp'))}]
         if kind not in ('user', 'assistant') or obj.get('isSidechain') or obj.get('isMeta'):
             return []
         message = obj.get('message') or {}
@@ -501,6 +506,8 @@ class CodexParser:
                 if text.strip() and not is_noise(text):
                     return [{'kind': 'user' if ptype == 'user_message' else 'assistant', 'text': text, 'ts': ts}]
             return []
+        if kind == 'compacted':
+            return [{'kind': 'status', 'text': COMPACTED, 'ts': ts}]
         if kind == 'response_item' and not self.modern:
             if ptype in ('function_call', 'custom_tool_call'):
                 name = payload.get('name') or ''

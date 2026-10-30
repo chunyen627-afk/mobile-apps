@@ -779,6 +779,34 @@ final class DeskRemoteUITests: XCTestCase {
         snapshot("38d-updated")
     }
 
+    func test39HugeMessagesAfterASavedCopyStillEndAtTheNewest() throws {
+        let helper = try helperSettings()
+        let path = "/v1/codex/sessions/\(codexX)"
+        func written(_ reply: String) -> Bool {
+            let events = ask(helper, "\(path)/events?after=0")?["events"] as? [[String: Any]] ?? []
+            return events.contains { $0["text"] as? String == reply }
+        }
+        try launchWithHelper()
+        openChat("codex", codexX)
+        XCTAssertTrue(element("bubble-reply").waitForExistence(timeout: 15), "the conversation did not load")
+        app.navigationBars.buttons.element(boundBy: 0).tap()  // the phone keeps this copy
+        let row = element("session-row-\(codexX)")
+        XCTAssertTrue(row.waitForExistence(timeout: 10), "back on the list")
+        // Meanwhile two huge messages come on the PC, then a short one (10/30: it stopped in the
+        // middle of a long blue bubble). The fake echoes a message's first 30 characters.
+        let huge = String(repeating: "很長的貼上內容，一行接一行。", count: 400)
+        for (n, message) in ["甲：" + huge, "乙：" + huge, "尾巴第 39 則"].enumerated() {
+            ask(helper, "\(path)/messages", body: ["text": message, "clientMsgId": UUID().uuidString, "force": true])
+            XCTAssertTrue(poll(timeout: 30) { written("（示範）收到：\(message.prefix(30))") }, "reply \(n + 1) was not written")
+        }
+        row.tap()
+        let newest = text("（示範）收到：尾巴第 39 則")
+        XCTAssertTrue(newest.waitForExistence(timeout: 15), "the new messages did not come")
+        let landed = poll(timeout: 4) { newest.isHittable }
+        snapshot("39-newest-after-huge")
+        XCTAssertTrue(landed, "it did not end at the newest message after the huge ones")
+    }
+
     // MARK: - Helpers
 
     /// How many photos the fake helper's transcript of `session` holds from the user.

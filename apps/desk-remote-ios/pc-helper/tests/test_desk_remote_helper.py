@@ -1580,6 +1580,21 @@ class PopupTests(FakeEnvironment):
         out = parser.feed({'type': 'user', 'message': {'role': 'user', 'content': '[Request interrupted by user for tool use]'}})
         self.assertEqual(out[0]['kind'], 'status')
 
+    def test_a_squeezed_conversation_shows_one_line_not_its_summary(self):
+        parser = h.ClaudeParser()
+        parser.feed({'type': 'user', 'message': {'role': 'user', 'content': '第一則'}})
+        # As Claude writes it (live 10/30): a user message of 13-23k characters, flagged.
+        out = parser.feed({'type': 'user', 'isCompactSummary': True, 'isVisibleInTranscriptOnly': True,
+                           'timestamp': '2026-10-30T05:00:00.000Z', 'message': {'role': 'user', 'content':
+                               'This session is being continued from a previous conversation ' + 'x' * 15000}})
+        self.assertEqual(out, [{'kind': 'status', 'text': '對話已壓縮', 'ts': '2026-10-30T05:00:00Z'}])
+        self.assertEqual(parser.feed({'type': 'user', 'message': {'role': 'user', 'content': '第二則'}})[0]['text'], '第二則')
+        # Codex marks it with a line of its own and shows nothing for it.
+        codex = h.CodexParser()
+        self.assertEqual(codex.feed({'type': 'compacted', 'timestamp': '2026-10-21T02:05:20.105Z',
+                                     'payload': {'message': '', 'replacement_history': []}}),
+                         [{'kind': 'status', 'text': '對話已壓縮', 'ts': '2026-10-21T02:05:20Z'}])
+
     def test_a_message_sent_during_a_turn_stays_in_the_conversation(self):
         parser = h.ClaudeParser()
         # As Claude 2.1.308 writes it (live 10/28): a queued_command attachment, not a user message.

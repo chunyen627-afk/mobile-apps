@@ -6,9 +6,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 # Includes 3 Windows-only tests (the real PowerShell companion twice, a real screen capture),
 # which are skipped (and counted) on macOS.
-EXPECTED_HELPER_TESTS="${EXPECTED_HELPER_TESTS:-133}"
+EXPECTED_HELPER_TESTS="${EXPECTED_HELPER_TESTS:-134}"
 EXPECTED_TESTS="${EXPECTED_TESTS:-42}"
-EXPECTED_UI_TESTS="${EXPECTED_UI_TESTS:-38}"
+EXPECTED_UI_TESTS="${EXPECTED_UI_TESTS:-39}"
 FIXTURES=fixtures/fake-helper
 HELPER_PORT=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["port"])' "$FIXTURES/fake-config.json")
 # A second fake helper that reports someone at the keyboard (5 s idle), for "send anyway".

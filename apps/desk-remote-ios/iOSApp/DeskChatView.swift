@@ -37,7 +37,7 @@ struct DeskChatView: View {
     @State private var places = DeskRowPlaces()      // where the drawn rows are on the screen
     @State private var holdIndex: Int?      // where a held scroll button has got to
     @State private var landing = false      // opening: hidden until it has reached the end
-    @State private var bottomShown = false  // the end marker is on screen
+    @State private var settling = 0         // the latest run of scrolling to the end; older ones stop
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -99,9 +99,13 @@ struct DeskChatView: View {
                         Text(stopState).font(.caption).foregroundStyle(.secondary)
                             .accessibilityIdentifier("chat-stop-state")
                     }
+                    // Its place, not its drawing, says the end is on screen: the lazy stack draws
+                    // it a little before it scrolls into view.
                     Color.clear.frame(height: 1).id("bottom")
-                        .onAppear { bottomShown = true }
-                        .onDisappear { bottomShown = false }
+                        .background(GeometryReader { geometry in
+                            Color.clear.preference(key: DeskRowTops.self,
+                                                   value: ["bottom": geometry.frame(in: .named("chat")).minY])
+                        })
                 }
                 .opacity(landing ? 0 : 1)
                 .padding(.leading, 12)
@@ -121,10 +125,12 @@ struct DeskChatView: View {
             // Opening a conversation lands on its newest message (it sometimes stopped short, 10/29).
             .onChange(of: log.loaded) { if log.loaded { land(proxy) } }
             .overlay { if landing { ProgressView() } }
-            .onChange(of: log.rows.last?.id) { jump(proxy, to: "bottom") }
-            .onChange(of: pending.count) { jump(proxy, to: "bottom") }
-            .onChange(of: log.prompt) { jump(proxy, to: "bottom") }
-            .onChange(of: log.question?.questionId) { jump(proxy, to: "bottom") }
+            // New messages also go on until the end is really on screen: after a cached copy, the
+            // ones that came since (a huge one among them) stopped it halfway (10/30).
+            .onChange(of: log.rows.last?.id) { if log.loaded { toEnd(proxy) } }
+            .onChange(of: pending.count) { toEnd(proxy) }
+            .onChange(of: log.prompt) { toEnd(proxy) }
+            .onChange(of: log.question?.questionId) { toEnd(proxy) }
             // A long conversation goes to its start or its end in one tap (asked 10/29), and scrolls
             // fast while a button is held; the rail sits at the right edge (asked 10/30).
             .overlay(alignment: .trailing) {
@@ -136,7 +142,7 @@ struct DeskChatView: View {
                             .accessibilityIdentifier("chat-to-top")
                         Divider().frame(width: 16)
                         DeskHoldButton(symbol: "chevron.down.2", label: "捲到最新（按住往下捲）",
-                                       tap: { jump(proxy, to: "bottom") },
+                                       tap: { toEnd(proxy) },
                                        step: { tick in step(proxy, up: false, tick: tick) })
                             .accessibilityIdentifier("chat-to-bottom")
                     }
@@ -231,22 +237,38 @@ struct DeskChatView: View {
         }
     }
 
-    /// Opening: scrolls to the end again and again, hidden, until the end is really on screen (at
-    /// most 3 s). Three tries were not enough for long replies: it sat in the middle until the next
-    /// message came (10/30).
+    /// Opening: goes to the end hidden, so the middle never shows. Three tries were not enough for
+    /// long replies: it sat in the middle until the next message came (10/30).
     private func land(_ proxy: ScrollViewProxy) {
         landing = true
+        toEnd(proxy)
+    }
+
+    /// Scrolls to the end again and again until the end marker is on screen twice in a row (at
+    /// most 3 s): the lazy stack only guesses the height of rows it has not drawn, so one jump past
+    /// a huge message stops short. A newer call takes over from an older one, and the last one to
+    /// finish shows a conversation still hidden by `land`.
+    private func toEnd(_ proxy: ScrollViewProxy) {
+        settling += 1
+        let run = settling
         Task { @MainActor in
             var seen = 0
             for _ in 0 ..< 20 {
+                guard run == settling else { return }
                 proxy.scrollTo("bottom", anchor: .bottom)
                 try? await Task.sleep(nanoseconds: 150_000_000)
-                seen = bottomShown ? seen + 1 : 0
+                seen = endShown ? seen + 1 : 0
                 if seen >= 2 { break }
             }
+            guard run == settling else { return }
             proxy.scrollTo("bottom", anchor: .bottom)
             landing = false
         }
+    }
+
+    private var endShown: Bool {
+        guard let top = places.tops["bottom"] else { return false }
+        return top >= 0 && top <= places.height
     }
 
     private var showsRail: Bool { log.rows.count > 12 }
