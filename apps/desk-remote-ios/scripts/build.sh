@@ -6,7 +6,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 # Includes 3 Windows-only tests (the real PowerShell companion twice, a real screen capture),
 # which are skipped (and counted) on macOS.
-EXPECTED_HELPER_TESTS="${EXPECTED_HELPER_TESTS:-137}"
+EXPECTED_HELPER_TESTS="${EXPECTED_HELPER_TESTS:-136}"
 EXPECTED_TESTS="${EXPECTED_TESTS:-42}"
 EXPECTED_UI_TESTS="${EXPECTED_UI_TESTS:-39}"
 FIXTURES=fixtures/fake-helper
