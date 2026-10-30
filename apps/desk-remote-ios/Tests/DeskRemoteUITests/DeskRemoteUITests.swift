@@ -816,7 +816,10 @@ final class DeskRemoteUITests: XCTestCase {
             let users = app.descendants(matching: .any).matching(identifier: "bubble-user").allElementsBoundByIndex
             let shown = (replies + users).filter(\.isHittable).map { String($0.label.prefix(24)) }
             let events = ask(helper, "\(path)/events?after=0")?["events"] as? [[String: Any]] ?? []
-            XCTFail("the new messages did not come: \(replies.count) replies and \(users.count) user bubbles in the tree, "
+            snapshot("39-stuck")
+            let texts = app.staticTexts.allElementsBoundByIndex.prefix(12).map { String($0.label.prefix(16)) }
+            XCTFail("the new messages did not come: title \(said(app.navigationBars.firstMatch)), \(app.staticTexts.count) texts "
+                    + "\(texts), \(replies.count) replies and \(users.count) user bubbles in the tree, "
                     + "on screen \(shown), lever \(element("chat-lever").exists), landing \(element("chat-landing").exists), "
                     + "error \(said(element("chat-error"))), "
                     + "helper has \(events.count) events, last: \(String((events.last?["text"] as? String ?? "").prefix(30)))")
