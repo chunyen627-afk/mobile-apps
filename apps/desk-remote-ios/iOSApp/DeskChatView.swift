@@ -261,9 +261,14 @@ struct DeskChatView: View {
         }
     }
 
+    /// The end marker is on screen and so is the last row: the marker's place can be the one it
+    /// had before new rows came (a row the lazy stack has not drawn yet reports no place), so the
+    /// last row has to have been drawn too (test39 failed on that once, CI 10/30).
     private var endShown: Bool {
-        guard let top = places.tops["bottom"] else { return false }
-        return top >= 0 && top <= places.height
+        guard let top = places.tops["bottom"], top >= 0, top <= places.height else { return false }
+        guard let last = log.rows.last?.id else { return true }
+        guard let rowTop = places.tops[last] else { return false }
+        return rowTop < places.height
     }
 
     private var showsRail: Bool { log.rows.count > 12 }
