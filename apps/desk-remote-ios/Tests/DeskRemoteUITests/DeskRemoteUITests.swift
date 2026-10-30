@@ -703,7 +703,8 @@ final class DeskRemoteUITests: XCTestCase {
         above.press(forDuration: 0.6)
         XCTAssertTrue(poll(timeout: 3) { !(newest.exists && newest.isHittable) },
                       "holding the track above the thumb did not scroll up: thumb top at \(thumbTop), bar \(bar.value ?? "-")")
-        XCTAssertFalse(first.exists && first.isHittable, "a short hold on the track jumped to the top")
+        // (A page here is half the conversation, so two pages do reach the top: no "not the top".)
+        XCTAssertLessThan(thumb.frame.minY, bar.frame.minY + thumbTop * bar.frame.height - 10, "the thumb did not move up")
         snapshot("36-scrollbar")
         // The thumb dragged to the bottom of the track: back at the newest message.
         let grip = thumb.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
