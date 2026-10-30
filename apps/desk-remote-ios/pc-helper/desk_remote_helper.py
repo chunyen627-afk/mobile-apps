@@ -1755,47 +1755,43 @@ class WindowsDriver:
             return None
 
     def close_app(self, app):
-        """Asks the app to quit the way Windows does before an update: the Restart Manager's
-        close-app request (WM_QUERYENDSESSION with ENDSESSION_CLOSEAPP), which Claude answers by
-        quitting ("Windows session ending (close-app) - quitting the app", its log 10/22-23). Closing
-        its window (WM_CLOSE) only hides it (office 10/30 16:52). Nothing is terminated by force."""
+        """Asks the app to quit the way Windows does before an update: WM_QUERYENDSESSION, then
+        WM_ENDSESSION, both with ENDSESSION_CLOSEAPP, to its main window. Claude answers the first
+        with yes (probed 10/30) and quits on the second ("Windows session ending (close-app) -
+        quitting the app", its log 10/22-23). Closing its window (WM_CLOSE) only hides it, and the
+        Restart Manager's shutdown never reached it (office 10/30). Nothing is terminated by force;
+        a no to the question is reported."""
         package, exe = APP_PACKAGES[app]
-        pids = list(package_processes(package, exe))
+        pids = set(package_processes(package, exe))
         if not pids:
             raise ActionError('app-not-running', 'the app is not running')
-        rstrtmgr = ctypes.windll.rstrtmgr
-        kernel32 = ctypes.windll.kernel32
+        user32 = ctypes.windll.user32
+        windows = []
 
-        class FileTime(ctypes.Structure):
-            _fields_ = [('low', ctypes.c_uint32), ('high', ctypes.c_uint32)]
+        @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+        def each(hwnd, _):
+            owner = ctypes.c_uint()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+            if owner.value in pids and not user32.GetParent(hwnd):
+                name = ctypes.create_unicode_buffer(64)
+                user32.GetClassNameW(hwnd, name, 64)
+                if name.value == 'Chrome_WidgetWin_1':
+                    windows.append(hwnd)
+            return True
 
-        class UniqueProcess(ctypes.Structure):
-            _fields_ = [('pid', ctypes.c_uint32), ('started', FileTime)]
-
-        processes = (UniqueProcess * len(pids))()
-        for slot, pid in zip(processes, pids):
-            slot.pid = pid
-            handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
-            if handle:
-                try:
-                    created, exited, kern, user = FileTime(), FileTime(), FileTime(), FileTime()
-                    kernel32.GetProcessTimes(handle, ctypes.byref(created), ctypes.byref(exited), ctypes.byref(kern), ctypes.byref(user))
-                    slot.started = created
-                finally:
-                    kernel32.CloseHandle(handle)
-        session = ctypes.c_uint32()
-        key = ctypes.create_unicode_buffer(64)
-        if rstrtmgr.RmStartSession(ctypes.byref(session), 0, key):
-            raise ActionError('close-failed', 'the Restart Manager session could not start')
-        try:
-            if rstrtmgr.RmRegisterResources(session, 0, None, len(pids), processes, 0, None):
-                raise ActionError('close-failed', 'the app could not be registered with the Restart Manager')
-            # No RmForceShutdown: an app that does not quit on request is left alone.
-            if rstrtmgr.RmShutdown(session, 0, None):
-                raise ActionError('close-failed', 'the app did not quit when asked')
-        finally:
-            rstrtmgr.RmEndSession(session)
-        return len(pids)
+        user32.EnumWindows(each, 0)
+        if not windows:
+            raise ActionError('app-not-running', 'no window of the app to ask')
+        answer = ctypes.c_size_t()
+        close_app = 0x1  # ENDSESSION_CLOSEAPP
+        for hwnd in windows:
+            if not user32.SendMessageTimeoutW(ctypes.c_void_p(hwnd), 0x0011, 0, close_app, 0x0002, 20000, ctypes.byref(answer)):
+                raise ActionError('close-failed', 'the app did not answer whether it can quit')
+            if not answer.value:
+                raise ActionError('close-refused', 'the app says it cannot quit now')
+        for hwnd in windows:
+            user32.SendMessageTimeoutW(ctypes.c_void_p(hwnd), 0x0016, 1, close_app, 0x0002, 20000, ctypes.byref(answer))
+        return len(windows)
 
     def restart_app(self, app):
         """Ends every process of the app's package and starts the installed (newest) one. Only
