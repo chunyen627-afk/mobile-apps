@@ -821,7 +821,8 @@ final class DeskRemoteUITests: XCTestCase {
             let texts = app.staticTexts.allElementsBoundByIndex.prefix(12).map { String($0.label.prefix(16)) }
             XCTFail("the new messages did not come: title \(said(app.navigationBars.firstMatch)), \(app.staticTexts.count) texts "
                     + "\(texts), \(replies.count) replies and \(users.count) user bubbles in the tree, "
-                    + "on screen \(shown), bar \(element("chat-scrollbar").exists), landing \(element("chat-landing").exists), "
+                    + "on screen \(shown), bar \(element("chat-scrollbar").exists) \(element("chat-scrollbar").value ?? "-"), "
+                    + "landing \(element("chat-landing").exists), "
                     + "error \(said(element("chat-error"))), "
                     + "helper has \(events.count) events, last: \(String((events.last?["text"] as? String ?? "").prefix(30)))")
         }

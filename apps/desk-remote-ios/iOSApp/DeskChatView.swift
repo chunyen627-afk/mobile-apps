@@ -264,7 +264,19 @@ struct DeskChatView: View {
             guard run == settling else { return }
             proxy.scrollTo("bottom", anchor: .bottom)
             landing = false
+            // A blank screen (no row drawn where it stopped: seen on CI 10/30 after a saved copy
+            // got huge new rows) is scrolled to the last row itself, then from the start again.
+            for target in [log.rows.last?.id, "top", "bottom"] {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                guard run == settling, !rowOnScreen, let target else { return }
+                proxy.scrollTo(target, anchor: target == "top" ? .top : .bottom)
+            }
         }
+    }
+
+    /// Some row is drawn within the screen.
+    private var rowOnScreen: Bool {
+        places.tops.contains { id, top in id != "bottom" && top > -60 && top < places.height }
     }
 
     /// The end marker is on screen and so is the last row: the marker's place can be the one it
@@ -511,8 +523,10 @@ struct DeskContentFrame: PreferenceKey {
 final class DeskScrollMetrics: ObservableObject {
     @Published var position: CGFloat = 1
     @Published var size: CGFloat = 1
+    var content = CGRect.zero  // for the bar's accessibility value (UI tests read it when stuck)
 
     func update(content: CGRect, viewport: CGFloat) {
+        self.content = content
         guard content.height > 0, viewport > 0 else { return }
         let room = content.height - viewport
         let newPosition = room > 1 ? min(1, max(0, -content.minY / room)) : 1
@@ -581,6 +595,8 @@ struct DeskScrollBar: View {
         .frame(width: Self.width)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("chat-scrollbar")
+        .accessibilityValue(String(format: "位置 %.2f 大小 %.2f 內容 %.0f 從 %.0f", metrics.position, metrics.size,
+                                   metrics.content.height, metrics.content.minY))
     }
 
     private func arrowView(_ symbol: String, label: String, identifier: String, action: @escaping () -> Void) -> some View {
