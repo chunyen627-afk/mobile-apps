@@ -41,6 +41,10 @@
     "cumulative": {
       "description": "OPTIONAL extension (feature `cumulative`): each machine's estimated earnings added up since `since`, for checking against the pool account at the end of the month. An estimate, not money received. Null before anything has been added up.",
       "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/cumulative" }]
+    },
+    "poolBalance": {
+      "description": "OPTIONAL extension (feature `balance`): the pool account's balance as its dashboard showed it at observedAt (read from the logged-in page every 2 hours; the pool has no API for it), with TWD at the current BTC price. A balance amount only, never an address or account name. Null before the first reading.",
+      "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/poolBalance" }]
     }
   },
   "allOf": [
@@ -240,6 +244,16 @@
         "btcUsd": { "type": ["number", "null"], "exclusiveMinimum": 0 },
         "usdTwd": { "type": ["number", "null"], "exclusiveMinimum": 0 },
         "observedAt": { "$ref": "#/$defs/timestampOrNull" }
+      }
+    },
+    "poolBalance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["balanceBtc", "twd", "observedAt"],
+      "properties": {
+        "balanceBtc": { "type": "number", "minimum": 0 },
+        "twd": { "type": ["number", "null"], "minimum": 0 },
+        "observedAt": { "$ref": "#/$defs/timestamp" }
       }
     },
     "cumulative": {

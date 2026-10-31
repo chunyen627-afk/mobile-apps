@@ -34,11 +34,13 @@ public struct MinerStatusFeed: Codable, Hashable, Sendable {
     public let advice: [AdviceReport]?
     /// Optional extension: estimated earnings added up since a start time; nil when absent or null.
     public let cumulative: CumulativeReport?
+    /// Optional extension: the pool account's balance as last read from its dashboard; nil when absent or null.
+    public let poolBalance: PoolBalanceReport?
 
     public var isDemo: Bool { dataOrigin == .demo }
 
     enum CodingKeys: String, CodingKey, CaseIterable {
-        case schemaVersion, dataOrigin, demoNotice, publishedAt, machines, market, tariff, advice, cumulative
+        case schemaVersion, dataOrigin, demoNotice, publishedAt, machines, market, tariff, advice, cumulative, poolBalance
     }
 
     public init(from decoder: Decoder) throws {
@@ -78,6 +80,7 @@ public struct MinerStatusFeed: Codable, Hashable, Sendable {
             throw DecodingError.dataCorruptedError(forKey: .advice, in: c, debugDescription: "at most 8 advice items")
         }
         cumulative = c.contains(.cumulative) ? try c.decodeNullable(CumulativeReport.self, forKey: .cumulative) : nil
+        poolBalance = c.contains(.poolBalance) ? try c.decodeNullable(PoolBalanceReport.self, forKey: .poolBalance) : nil
 
         // Stricter than the schema: duplicate ids would let samples from different
         // machines be compared against each other.
@@ -100,6 +103,7 @@ public struct MinerStatusFeed: Codable, Hashable, Sendable {
         try c.encodeIfPresent(tariff, forKey: .tariff)
         try c.encodeIfPresent(advice, forKey: .advice)
         try c.encodeIfPresent(cumulative, forKey: .cumulative)
+        try c.encodeIfPresent(poolBalance, forKey: .poolBalance)
     }
 }
 
@@ -427,6 +431,36 @@ public struct MarketReport: Codable, Hashable, Sendable {
         try c.encode(coinUsd, forKey: .coinUsd)
         try c.encode(btcUsd, forKey: .btcUsd)
         try c.encode(usdTwd, forKey: .usdTwd)
+        try c.encode(observedAt, forKey: .observedAt)
+    }
+}
+
+/// The pool account's balance (BTC) as its logged-in dashboard showed it at `observedAt`; the source reads the
+/// page every 2 hours, as the pool has no API for it. `twd` is at the current BTC price. An amount only.
+public struct PoolBalanceReport: Codable, Hashable, Sendable {
+    public let balanceBtc: Double
+    public let twd: Double?
+    public let observedAt: Timestamp
+
+    enum CodingKeys: String, CodingKey, CaseIterable {
+        case balanceBtc, twd, observedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownKeys(decoder, allowed: CodingKeys.self)
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        balanceBtc = try c.decode(Double.self, forKey: .balanceBtc)
+        guard balanceBtc.isFinite, balanceBtc >= 0 else {
+            throw DecodingError.dataCorruptedError(forKey: .balanceBtc, in: c, debugDescription: "balanceBtc must be >= 0")
+        }
+        twd = try c.decodeNumber(forKey: .twd, minimum: 0)
+        observedAt = try c.decode(Timestamp.self, forKey: .observedAt)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(balanceBtc, forKey: .balanceBtc)
+        try c.encode(twd, forKey: .twd)
         try c.encode(observedAt, forKey: .observedAt)
     }
 }

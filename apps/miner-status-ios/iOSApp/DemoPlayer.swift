@@ -125,6 +125,7 @@ struct DemoResult {
     let clock: ClockReading
     let market: MarketReport?
     let cumulative: CumulativeReport?
+    let poolBalance: PoolBalanceReport?
 }
 
 /// Holds the bundled template. `loadBundled()` returns nil when the resource is missing or not
@@ -153,6 +154,7 @@ struct DemoPlayer {
         var engine = StatusEngine()
         var market: MarketReport?
         var cumulative: CumulativeReport?
+        var poolBalance: PoolBalanceReport?
         for step in scenario.steps {
             switch step {
             case let .samples(offset, sequence, accepted, edit):
@@ -166,6 +168,7 @@ struct DemoPlayer {
                 let feed = try decodeFeed(machines, at: time)
                 market = feed.market
                 cumulative = feed.cumulative
+                poolBalance = feed.poolBalance
                 engine.ingest(feed, at: reading(offset))
             case let .requestFailure(offset):
                 engine.recordRequestFailure(at: reading(offset))
@@ -173,7 +176,7 @@ struct DemoPlayer {
         }
         let now = reading(scenario.evaluateAt)
         return DemoResult(snapshots: engine.snapshots(at: now), feedProblem: engine.feedProblem, clock: now, market: market,
-                          cumulative: cumulative)
+                          cumulative: cumulative, poolBalance: poolBalance)
     }
 
     /// Re-stamps the template machine for one step. Index 1 is a second, equally fictional machine.
@@ -239,6 +242,9 @@ struct DemoPlayer {
                     ["machineId": "demo-rig-b", "coin": "QTC", "amount": 0.025, "twd": 60.0],
                 ],
             ] as [String: Any],
+            // Fictional pool balance, read an hour before this step.
+            "poolBalance": ["balanceBtc": 0.00012345, "twd": 432.0,
+                            "observedAt": demoTimestamp(time.addingTimeInterval(-3600))] as [String: Any],
         ]
         let data = try JSONSerialization.data(withJSONObject: object)
         return try JSONDecoder().decode(MinerStatusFeed.self, from: data)

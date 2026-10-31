@@ -60,6 +60,19 @@ struct EarningsSummarySection: View {
             }
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier("earnings-summary")
+            if let balance = model.poolBalance {
+                VStack(alignment: .leading, spacing: 4) {
+                    LabeledContent("錢包（礦池帳上餘額）", value: EarningsText.btc(balance.balanceBtc)).font(.headline)
+                    if let twd = balance.twd {
+                        LabeledContent("約等於", value: EarningsText.twd(twd)).font(.caption)
+                    }
+                    Text("\(EarningsText.since(balance.observedAt)) 從礦池網頁讀取，每 2 小時更新；台幣依目前 BTC 價格換算。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("earnings-pool-balance")
+            }
             if let cumulative = model.cumulative {
                 VStack(alignment: .leading, spacing: 4) {
                     LabeledContent("累計收益（估算）", value: EarningsText.twd(cumulative.totalTwd)).font(.headline)

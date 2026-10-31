@@ -85,6 +85,27 @@ final class EarningsTests: XCTestCase {
         XCTAssertThrowsError(try feed(cumulative: cumulativeJSON.merging(["machines": Array(repeating: rows[0], count: 9)]) { $1 }))
     }
 
+    private func feed(poolBalance: Any) throws -> MinerStatusFeed {
+        var object = feedJSON([SampleSpec(sequence: 1, at: Date(timeIntervalSince1970: 1_792_800_000), accepted: 1).json])
+        object["poolBalance"] = poolBalance
+        return try decodeFeed(object)
+    }
+
+    func testPoolBalanceDecodesAndIsOptional() throws {
+        let balance: [String: Any] = ["balanceBtc": 0.00012345, "twd": 321.0, "observedAt": "2026-11-01T10:07:00.000+08:00"]
+        XCTAssertNil(try feed().poolBalance)
+        XCTAssertNil(try feed(poolBalance: NSNull()).poolBalance)
+        let decoded = try XCTUnwrap(try feed(poolBalance: balance).poolBalance)
+        XCTAssertEqual(decoded.balanceBtc, 0.00012345)
+        XCTAssertEqual(decoded.twd, 321)
+        XCTAssertNil(try feed(poolBalance: balance.merging(["twd": NSNull()]) { $1 }).poolBalance?.twd)
+        let again = try JSONDecoder().decode(MinerStatusFeed.self, from: JSONEncoder().encode(try feed(poolBalance: balance)))
+        XCTAssertEqual(again.poolBalance, decoded)
+        XCTAssertThrowsError(try feed(poolBalance: balance.merging(["address": "x"]) { $1 }))  // an amount only
+        XCTAssertThrowsError(try feed(poolBalance: balance.merging(["balanceBtc": -1]) { $1 }))
+        XCTAssertThrowsError(try feed(poolBalance: balance.filter { $0.key != "observedAt" }))
+    }
+
     func testTimeOfUseRates() {
         let tariff = TouTariff()
         XCTAssertEqual(tariff.rate(at: date(2026, 7, 15, 10), calendar: calendar), 5.16)  // summer Wednesday, peak
