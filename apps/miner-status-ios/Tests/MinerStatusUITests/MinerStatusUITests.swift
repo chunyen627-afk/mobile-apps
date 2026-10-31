@@ -157,6 +157,17 @@ final class MinerStatusUITests: XCTestCase {
         snapshot("21-running-total-detail")
     }
 
+    func test22PoolBalanceShowsBtcAndWhenItWasRead() throws {
+        // The demo source's fictional pool balance: 0.00012345 BTC ≈ NT$432, read an hour earlier.
+        let balance = element("earnings-pool-balance")
+        XCTAssertTrue(reveal(balance), "pool balance missing")
+        XCTAssertTrue(waitFor(balance, labelContains: "0.00012345 BTC", timeout: 3), "pool balance says \(balance.label)")
+        XCTAssertTrue(balance.label.contains("NT$432"), "pool balance has no NT$: \(balance.label)")
+        XCTAssertTrue(balance.label.contains("每 2 小時更新"), "pool balance does not say how fresh it is: \(balance.label)")
+        app.swipeUp()
+        snapshot("22-pool-balance")
+    }
+
     func test13ElectricityToggleChangesTotals() throws {
         let summary = element("earnings-summary")
         XCTAssertTrue(reveal(summary), "earnings summary missing")
