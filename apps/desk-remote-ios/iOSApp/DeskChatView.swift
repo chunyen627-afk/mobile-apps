@@ -792,7 +792,9 @@ struct DeskBubble: View {
                 Button { UIPasteboard.general.string = event.text } label: { Label("拷貝全部", systemImage: "doc.on.doc") }
                 Button { selecting = true } label: { Label("選取文字", systemImage: "selection.pin.in.out") }
             }
-            .accessibilityElement(children: .combine)
+            // One element for the words; with pictures, each thumbnail stays its own (tappable,
+            // and found by the UI tests: combined, they vanished, CI 10/31).
+            .accessibilityElement(children: event.pictures.isEmpty ? .combine : .contain)
             .accessibilityIdentifier(mine ? "bubble-user" : "bubble-reply")
             if !mine { Spacer(minLength: 24) }
         }
