@@ -120,6 +120,16 @@ UI 測試與截圖找到並修正的畫面問題：
 - App：清單的「開挖建議」區塊、資料格式加選填 `advice`（feature `advice`）
 - [run 40279093799](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40279093799)（`1cd5dc9`）：單元測試 `Executed 121 tests, with 0 failures`、UI 測試 `Executed 17 tests, with 0 failures`；截圖確認「開挖建議」區塊顯示關機中的示範筆電「建議挖礦」（綠）與虧損機器「建議停挖」（橘、NT$-35）。IPA 393,533 bytes（runner 內，未上傳）
 
+## 0.6.4（build 12）：錢包餘額
+
+- 使用者要求（2026-11-01）：顯示礦池帳號目前有多少錢。礦池沒有讀餘額的公開 API，所以電腦端每 2 小時從登入後的礦池網頁讀一次帳上餘額（只讀），存成檔案。
+- 資料格式：feed 加選填 `poolBalance`（feature `balance`）：`balanceBtc`、`twd`（依目前 BTC 價格換算，算不出來時是 null）、`observedAt`（讀取時間）。只有金額，不含地址或帳號。舊版 App 不會要這個 feature，收到的資料不變。
+- App：清單「今日估算」區塊加「錢包（礦池帳上餘額）」、約等於台幣，以及讀取時間與「每 2 小時更新」。
+- 示範資料：虛構的 0.00012345 BTC ≈ NT$432，一小時前讀取。
+- 測試：單元測試多一項（餘額的解碼與格式檢查），UI 測試多一項（test22）。
+- [run 41220944840](https://github.com/chunyen627-afk/mobile-apps/actions/runs/41220944840)（`301d047`）：單元與 UI 測試全部通過（UI `Executed 22 tests, with 0 failures`），但 `build.sh` 預期的數量還是 125／21，所以判失敗；下一個 commit 改成 126／22。截圖確認錢包區塊顯示 0.00012345 BTC、NT$432 與讀取時間。
+- [run 41222446763](https://github.com/chunyen627-afk/mobile-apps/actions/runs/41222446763)（`66c275a`）：單元 126、UI 22，全部 0 失敗。
+
 ## 0.6.3（build 11，已併入工具箱 0.4.2 build 8 發布）：累計收益（估算）
 
 - 使用者要求：顯示從開挖以來累計的估算收益（新台幣），標明是估算，月底再拿礦池網頁的帳號數字對帳。礦池把每種幣自動換成 BTC 存在帳號裡，帳號餘額沒有公開 API 可讀，所以只能估算。
