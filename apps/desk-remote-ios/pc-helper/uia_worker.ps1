@@ -1032,6 +1032,17 @@ function Popup-Buttons($win) {
   return $out
 }
 
+# Every enabled, named button, drawn on screen or not: a Chrome window covered by another one
+# reports its buttons as off screen (the extension's card went unseen that way, 10/31).
+function Any-Buttons($win) {
+  $out = @()
+  foreach ($b in $win.FindAll($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Button)))) {
+    $name = "$($b.Current.Name)".Trim()
+    if ($name -and $b.Current.IsEnabled) { $out += $b }
+  }
+  return $out
+}
+
 function Dialog-Buttons($hwnd) {
   return @([DeskWin]::Children($hwnd, 'Button') | Where-Object { [DeskWin]::IsWindowEnabled($_) -and [DeskWin]::Text($_) })
 }
@@ -1103,8 +1114,9 @@ function Find-ExtensionCards($windows) {
   foreach ($w in $windows) {
     try {
       $cur = $w.Current
-      if ($cur.IsOffscreen -or $cur.ClassName -ne 'Chrome_WidgetWin_1' -or -not "$($cur.Name)".StartsWith($ExtensionTitle)) { continue }
-      $names = @(Popup-Buttons $w | ForEach-Object { $_.Current.Name.Trim() } | Select-Object -Unique)
+      # Not skipped when covered by another window: the card is still there to answer.
+      if ($cur.ClassName -ne 'Chrome_WidgetWin_1' -or -not "$($cur.Name)".StartsWith($ExtensionTitle)) { continue }
+      $names = @(Any-Buttons $w | ForEach-Object { $_.Current.Name.Trim() } | Select-Object -Unique)
       if (-not (($names -contains $ExtensionAllow) -and ($names -contains $ExtensionDecline))) { continue }
       # The buttons are drawn before the words (live 10/31): wait up to 2 s for the "wants to"
       # line, so the helper can answer in this same look (a slow answer gets the request cancelled).
@@ -1135,7 +1147,7 @@ function Page-Dialog($c) {
     # window itself, while it still shows the card's buttons.
     if ($c.title -eq $ExtensionTitle) {
       if (-not "$($w.Current.Name)".StartsWith($ExtensionTitle)) { return $null }
-      $names = @(Popup-Buttons $w | ForEach-Object { $_.Current.Name.Trim() })
+      $names = @(Any-Buttons $w | ForEach-Object { $_.Current.Name.Trim() })
       if (($names -contains $ExtensionAllow) -and ($names -contains $ExtensionDecline)) { return $w }
       return $null
     }
@@ -1152,9 +1164,15 @@ function Press-Popup($c) {
   if ($c.page) {
     $d = Page-Dialog $c
     if (-not $d) { Fail 'popup-gone' 'the dialog is gone' }
-    $button = @(Popup-Buttons $d | Where-Object { $_.Current.Name.Trim() -eq $c.button }) | Select-Object -First 1
+    $button = @(Any-Buttons $d | Where-Object { $_.Current.Name.Trim() -eq $c.button }) | Select-Object -First 1
     if (-not $button) { Fail 'not-found' 'no such button in the dialog' }
-    if (-not (Invoke-Element $button)) { Fail 'press-failed' 'the button did not take the press' }
+    # The extension's window may sit under another one: in front first, then the press, and a
+    # real click when the press is not taken.
+    if ($c.title -eq $ExtensionTitle) { try { Bring-Front $d; Start-Sleep -Milliseconds 150 } catch { } }
+    if (-not (Invoke-Element $button)) {
+      if ($c.title -ne $ExtensionTitle) { Fail 'press-failed' 'the button did not take the press' }
+      Click-Element $d $button 'the card button'
+    }
     for ($i = 0; $i -lt 12; $i++) {
       Start-Sleep -Milliseconds 250
       if (-not (Page-Dialog $c)) { return $true }
