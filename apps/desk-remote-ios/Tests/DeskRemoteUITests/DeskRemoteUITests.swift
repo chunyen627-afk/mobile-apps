@@ -995,13 +995,15 @@ final class DeskRemoteUITests: XCTestCase {
         row.tap()
     }
 
-    /// Opens every folded run of tool calls on the screen (scrolling up to find them).
+    /// Opens the folded runs of tool calls that are on the screen now (no scrolling: a search
+    /// that scrolls the whole chat left the next `reveal` short of its row, CI 10/31).
     private func openToolGroups() {
         for _ in 0 ..< 3 {
             let group = element("tool-group")
-            guard reveal(group) else { return }
+            guard group.exists, group.isHittable else { return }
+            let label = group.label
             group.tap()
-            _ = poll(timeout: 2) { !group.exists || group.label != self.element("tool-group").label }
+            _ = poll(timeout: 2) { !group.exists || group.label != label }
         }
     }
 
