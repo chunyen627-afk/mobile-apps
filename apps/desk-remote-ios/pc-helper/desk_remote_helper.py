@@ -37,7 +37,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.20'
+VERSION = '0.5.21'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -90,6 +90,12 @@ def folder_name(cwd):
 
 def is_noise(text):
     return text.lstrip().startswith(NOISE_PREFIXES)
+
+
+# Claude for Chrome's permission card (the worker lists it under this title, photo 10/31).
+EXTENSION_TITLE = 'Claude for Chrome'
+EXTENSION_ALLOW = 'Allow this action'
+EXTENSION_READ = 'read page content'
 
 
 EFFORT_LABELS = {'low': '低', 'medium': '中', 'high': '高', 'xhigh': '超高', 'max': '最高'}
@@ -2156,6 +2162,8 @@ class UiWatcher:
         for raw in found:
             if not isinstance(raw, dict) or not raw.get('buttons'):
                 continue
+            if self.allow_extension_read(raw):
+                continue
             key = f"{raw.get('hwnd')}\n{raw.get('title')}\n{raw.get('process')}"
             listed.append({'id': hashlib.sha256(key.encode('utf-8')).hexdigest()[:12], 'hwnd': raw.get('hwnd'),
                            'title': str(raw.get('title') or ''), 'process': str(raw.get('process') or ''),
@@ -2176,6 +2184,25 @@ class UiWatcher:
                 self.send(f'🪟 電腦跳出視窗：{name}', f'{self.pc_name}・{detail}；打開桌面遙控選要按的按鈕', 4, ['window'],
                           open_link(self.pc_name))
         return listed
+
+    def allow_extension_read(self, raw):
+        """Claude for Chrome's "wants to read page content on <site>" card is allowed by the helper
+        itself (the user's choice 10/31: it came up on every site while Claude Code browsed, and
+        answering each one from the phone was a chore). Only that wording: a card asking anything
+        else goes to the phone as usual. True when it was pressed (so it is not listed)."""
+        if str(raw.get('title') or '') != EXTENSION_TITLE or EXTENSION_READ not in str(raw.get('text') or ''):
+            return False
+        if EXTENSION_ALLOW not in [str(b) for b in raw['buttons']]:
+            return False
+        site = next((line.strip() for line in str(raw.get('text')).splitlines()
+                     if re.fullmatch(r'[a-z0-9.-]+\.[a-z]{2,}', line.strip().lower())), '?')
+        try:
+            gone = self.driver.press_popup(raw, EXTENSION_ALLOW)
+        except ActionError as exc:
+            logging.warning('chrome extension: allowing reading %s failed: %s %s', site, exc.code, exc.message)
+            return False
+        logging.info('chrome extension: allowed reading %s (%s)', site, 'card gone' if gone else 'card still there')
+        return True
 
     def popup_list(self):
         """The pop-ups for the phone (without the window handle)."""
@@ -4000,6 +4027,11 @@ FAKE_POPUP = {'hwnd': 4242, 'title': 'Windows 安全性', 'process': 'SecurityHe
 FAKE_QUIT_GUARD = {'hwnd': 4343, 'title': 'Claude 仍在處理中', 'process': 'claude', 'page': True,
                    'text': 'Claude 仍在處理中\nClaude 正在 1 個工作階段中執行作業。立即重新啟動將會中斷該作業。',
                    'buttons': ['取消', '等待 Claude', '仍要更新']}
+# Claude for Chrome's card before reading a site (photo 10/31).
+FAKE_EXTENSION_READ = {'hwnd': 4346, 'title': 'Claude for Chrome', 'process': 'chrome', 'page': True,
+                       'text': 'New permissions required\nClaude wants to read page content on:\ns.example.com\n'
+                               'Site-level permissions are disabled for this site.',
+                       'buttons': ['Allow this action', 'Decline']}
 
 
 def fake_fresh_usage(read, app, percent):

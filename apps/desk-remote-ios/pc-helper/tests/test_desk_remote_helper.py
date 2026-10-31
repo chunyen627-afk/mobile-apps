@@ -1349,6 +1349,22 @@ class VersionTests(FakeEnvironment):
         self.assertEqual(h.downloaded_version(log), '4.4212.0')
         self.assertIsNone(h.downloaded_version('2026-10-30 [info] [updater] Checking for updates\n'))
 
+    def test_claude_for_chromes_read_permission_is_allowed_by_the_helper(self):
+        """The extension asks before reading every site (10/31): the helper presses "Allow this
+        action" itself, tells nobody and lists nothing; a card with other words goes to the phone."""
+        hub, driver, watcher, sent, _ = self.version_setup(idle=900)
+        driver.fake_popups = [dict(h.FAKE_EXTENSION_READ)]
+        self.assertEqual(watcher.check_popups(), [])
+        self.assertIn(('press_popup', 'Claude for Chrome', 'Allow this action'), driver.calls)
+        self.assertEqual((sent, hub.state()['popups']), ([], []))
+        self.assertEqual(driver.fake_popups, [], 'the card was pressed away')
+        # Another request of the extension (not reading) is the phone's to decide.
+        driver.fake_popups = [dict(h.FAKE_EXTENSION_READ, hwnd=4347, text='New permissions required\nClaude wants to fill forms on:\ns.example.com')]
+        listed = watcher.check_popups()
+        self.assertEqual([p['buttons'] for p in listed], [['Allow this action', 'Decline']])
+        self.assertEqual(len(sent), 1, sent)
+        self.assertEqual(driver.calls.count(('press_popup', 'Claude for Chrome', 'Allow this action')), 1)
+
     def test_a_question_inside_an_apps_page_is_told_only_when_nobody_is_at_the_pc(self):
         _, driver, watcher, sent, presence = self.version_setup(idle=30)
         driver.fake_popups = [dict(h.FAKE_QUIT_GUARD)]
