@@ -516,6 +516,17 @@ function Open-Other($w, $card, $s) {
   Fail 'toggle-failed' 'no text box after choosing other'
 }
 
+# True once the question's card (or its button) has left the screen, within $ms.
+function Card-Gone($page, $question, $button, $ms) {
+  for ($i = 0; $i -lt ($ms / 250); $i++) {
+    Start-Sleep -Milliseconds 250
+    $card = Find-QuestionCard $page $question
+    if (-not $card) { return $true }
+    try { if ($button.Current.IsOffscreen -and -not (Find-ByName $card $CT::Button $button.Current.Name)) { return $true } } catch { return $true }
+  }
+  return $false
+}
+
 function Answer-Questions($w, $page, $s, $questions) {
   $before = [DeskWin]::GetForegroundWindow()
   $cursor = New-Object DeskWin+POINT
@@ -548,7 +559,16 @@ function Answer-Questions($w, $page, $s, $questions) {
       if (-not $button) { Fail 'not-found' "no '$name' button on the card" }
       Scroll-To $button
       if (-not (Invoke-Element $button)) { Fail 'not-invokable' 'the card button could not be pressed' }
-      Start-Sleep -Milliseconds 600
+      # Claude 4.4212's card ignores the Invoke (the options toggled, the question stayed; phone
+      # 10/31): when the button is still there after a moment, one real click on it.
+      if (-not (Card-Gone $page $q.question $button 1500)) {
+        Scroll-To $button
+        Click-Element $w $button 'the card button'
+        $hows += 'submit:click'
+        $null = Card-Gone $page $q.question $button 1500
+      } else {
+        $hows += 'submit:invoke'
+      }
     }
     return ($hows -join ',')
   } finally {
