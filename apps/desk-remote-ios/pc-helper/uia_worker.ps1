@@ -1088,8 +1088,15 @@ function Find-Popups {
       if ($cur.IsOffscreen -or $cur.ClassName -ne 'Chrome_WidgetWin_1' -or -not "$($cur.Name)".StartsWith($ExtensionTitle)) { continue }
       $names = @(Popup-Buttons $w | ForEach-Object { $_.Current.Name.Trim() } | Select-Object -Unique)
       if (-not (($names -contains $ExtensionAllow) -and ($names -contains $ExtensionDecline))) { continue }
-      $texts = @($w.FindAll($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Text))) |
-        ForEach-Object { "$($_.Current.Name)".Trim() } | Where-Object { $_ -and $_ -ne $ExtensionAllow -and $_ -ne $ExtensionDecline } | Select-Object -Unique)
+      # The buttons are drawn before the words (live 10/31): wait up to 2 s for the "wants to"
+      # line, so the helper can answer in this same look (a slow answer gets the request cancelled).
+      $texts = @()
+      for ($try = 0; $try -lt 8; $try++) {
+        $texts = @($w.FindAll($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Text))) |
+          ForEach-Object { "$($_.Current.Name)".Trim() } | Where-Object { $_ -and $_ -ne $ExtensionAllow -and $_ -ne $ExtensionDecline } | Select-Object -Unique)
+        if (@($texts | Where-Object { $_ -match 'wants to' }).Count -gt 0) { break }
+        Start-Sleep -Milliseconds 250
+      }
       $text = $texts -join "`n"
       if ($text.Length -gt 600) { $text = $text.Substring(0, 600) }
       $proc = 'chrome'
