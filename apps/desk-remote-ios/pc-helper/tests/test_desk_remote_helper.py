@@ -1358,22 +1358,23 @@ class VersionTests(FakeEnvironment):
         self.assertIn(('press_popup', 'Claude for Chrome', 'Allow this action'), driver.calls)
         self.assertEqual((sent, hub.state()['popups']), ([], []))
         self.assertEqual(driver.fake_popups, [], 'the card was pressed away')
-        # A card seen before its words are drawn is given one more look (live 10/31: told too
-        # early, then allowed; the phone pressed a card that was gone).
-        driver.fake_popups = [dict(h.FAKE_EXTENSION_READ, hwnd=4348, text='New permissions required')]
-        self.assertEqual(watcher.check_popups(), [])
+        # Every card of the extension's window is allowed, words drawn or not (some still reached
+        # the phone when only the "read page content" wording counted, 10/31 evening).
+        for text in ('New permissions required', 'New permissions required\nClaude wants to fill forms on:\ns.example.com'):
+            driver.fake_popups = [dict(h.FAKE_EXTENSION_READ, hwnd=4348, text=text)]
+            self.assertEqual(watcher.check_popups(), [])
         self.assertEqual(sent, [])
-        driver.fake_popups = [dict(h.FAKE_EXTENSION_READ, hwnd=4348)]
-        self.assertEqual(watcher.check_popups(), [])
-        self.assertEqual(driver.calls.count(('press_popup', 'Claude for Chrome', 'Allow this action')), 2)
-        # Another request of the extension (not reading) is the phone's to decide, once it has
-        # been seen twice with those words.
-        driver.fake_popups = [dict(h.FAKE_EXTENSION_READ, hwnd=4347, text='New permissions required\nClaude wants to fill forms on:\ns.example.com')]
-        self.assertEqual(watcher.check_popups(), [])
+        self.assertEqual(driver.calls.count(('press_popup', 'Claude for Chrome', 'Allow this action')), 3)
+        # A window of the extension without the allow button is an ordinary pop-up.
+        driver.fake_popups = [dict(h.FAKE_EXTENSION_READ, hwnd=4349, buttons=['OK'])]
         listed = watcher.check_popups()
-        self.assertEqual([p['buttons'] for p in listed], [['Allow this action', 'Decline']])
+        self.assertEqual([p['buttons'] for p in listed], [['OK']])
         self.assertEqual(len(sent), 1, sent)
-        self.assertEqual(driver.calls.count(('press_popup', 'Claude for Chrome', 'Allow this action')), 2)
+        # The quick look between full ones (every second or two) presses it too.
+        driver.fake_popups = [dict(h.FAKE_EXTENSION_READ, hwnd=4350)]
+        watcher.check_extension()
+        self.assertEqual(driver.fake_popups, [])
+        self.assertEqual(driver.calls.count(('press_popup', 'Claude for Chrome', 'Allow this action')), 4)
 
     def test_a_question_inside_an_apps_page_is_told_only_when_nobody_is_at_the_pc(self):
         _, driver, watcher, sent, presence = self.version_setup(idle=30)

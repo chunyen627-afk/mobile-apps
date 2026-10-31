@@ -1091,7 +1091,15 @@ function Find-Popups {
       }
     } catch { continue }
   }
-  # Claude for Chrome's permission card, in its own window.
+  $found += @(Find-ExtensionCards $windows)
+  return $found
+}
+
+# Claude for Chrome's permission card, in its own window: looked for on its own every second or
+# two as well (the request is cancelled when the answer is slow), so this stays cheap: only
+# windows with the extension's title are searched.
+function Find-ExtensionCards($windows) {
+  $found = @()
   foreach ($w in $windows) {
     try {
       $cur = $w.Current
@@ -1312,6 +1320,10 @@ function Run-Command($c) {
       return @{ ok = $true; replaced = "$replaced" }
     }
     'popups' { return @{ ok = $true; popups = @(Find-Popups) } }
+    'extension' {
+      $windows = @($AE::RootElement.FindAll($Tree::Children, [System.Windows.Automation.Condition]::TrueCondition))
+      return @{ ok = $true; popups = @(Find-ExtensionCards $windows) }
+    }
     'press_popup' { return @{ ok = $true; gone = (Press-Popup $c) } }
     'new_send' {
       $w = Need-Window $c.app

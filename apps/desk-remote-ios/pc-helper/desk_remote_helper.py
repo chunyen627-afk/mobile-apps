@@ -37,7 +37,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.24'
+VERSION = '0.5.25'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -1722,6 +1722,11 @@ class WindowsDriver:
         found = self.worker.request({'cmd': 'popups'}).get('popups') or []
         return [found] if isinstance(found, dict) else found
 
+    def extension_popups(self):
+        """Only Claude for Chrome's permission cards (a cheap look, taken every second or two)."""
+        found = self.worker.request({'cmd': 'extension'}, timeout=10).get('popups') or []
+        return [found] if isinstance(found, dict) else found
+
     installed_cache = (0.0, {})
 
     def versions(self):
@@ -2072,7 +2077,6 @@ class UiWatcher:
         self.context_alerted, self.usage_alerted = set(), set()
         self.popups = []        # pop-up windows on the desktop at the last look, each with an id
         self.quiet_popups_until = 0.0  # no pop-up notifications before then (the phone opened one)
-        self.extension_seen = set()    # Claude for Chrome cards seen once without their words yet
         self.uac_since = self.uac_told = None  # when a UAC prompt was first seen; whether the phone was told
         self.versions, self.versions_checked = {}, None  # each app's installed and running version
         self.update_told, self.restart_tried = set(), {}  # (app, version) told; Codex version -> when restarted
@@ -2166,18 +2170,10 @@ class UiWatcher:
             if self.allow_extension_read(raw):
                 continue
             key = f"{raw.get('hwnd')}\n{raw.get('title')}\n{raw.get('process')}"
-            if str(raw.get('title') or '') == EXTENSION_TITLE and key not in self.extension_seen:
-                # The card's words come a moment after its buttons (10/31: listed and told once
-                # without the "read page content" line, then allowed 4 s later; the phone pressed a
-                # card that was gone): one more look before it counts.
-                self.extension_seen.add(key)
-                continue
             listed.append({'id': hashlib.sha256(key.encode('utf-8')).hexdigest()[:12], 'hwnd': raw.get('hwnd'),
                            'title': str(raw.get('title') or ''), 'process': str(raw.get('process') or ''),
                            'text': str(raw.get('text') or '')[:600],
                            'buttons': [str(b) for b in raw['buttons']][:8], 'page': bool(raw.get('page'))})
-        present = {f"{raw.get('hwnd')}\n{raw.get('title')}\n{raw.get('process')}" for raw in found if isinstance(raw, dict)}
-        self.extension_seen &= present
         with self.lock:
             known = {p['id'] for p in self.popups}
             self.popups = listed
@@ -2195,22 +2191,24 @@ class UiWatcher:
         return listed
 
     def allow_extension_read(self, raw):
-        """Claude for Chrome's "wants to read page content on <site>" card is allowed by the helper
-        itself (the user's choice 10/31: it came up on every site while Claude Code browsed, and
-        answering each one from the phone was a chore). Only that wording: a card asking anything
-        else goes to the phone as usual. True when it was pressed (so it is not listed)."""
-        if str(raw.get('title') or '') != EXTENSION_TITLE or EXTENSION_READ not in str(raw.get('text') or ''):
+        """Claude for Chrome's permission card ("Claude wants to ... on <site>") is allowed by the
+        helper itself (the user's choice 10/31: it came up on every site while Claude Code browsed,
+        and answering each one from the phone was a chore). Every card of the extension's window
+        with its allow button: at first only the "read page content" wording was, but some cards
+        still reached the phone (10/31 evening; their words are not always drawn, or drawn in
+        pieces), and the extension itself never buys, signs up or passes captchas. What it asked
+        is logged. True when it was pressed (so it is not listed)."""
+        if str(raw.get('title') or '') != EXTENSION_TITLE or EXTENSION_ALLOW not in [str(b) for b in raw['buttons']]:
             return False
-        if EXTENSION_ALLOW not in [str(b) for b in raw['buttons']]:
-            return False
-        site = next((line.strip() for line in str(raw.get('text')).splitlines()
-                     if re.fullmatch(r'[a-z0-9.-]+\.[a-z]{2,}', line.strip().lower())), '?')
+        lines = [line.strip() for line in str(raw.get('text') or '').splitlines() if line.strip()]
+        asked = next((line for line in lines if 'wants to' in line), lines[0] if lines else '(no words yet)')
+        site = next((line for line in lines if re.fullmatch(r'[a-z0-9.-]+\.[a-z]{2,}', line.lower())), '?')
         try:
             gone = self.driver.press_popup(raw, EXTENSION_ALLOW)
         except ActionError as exc:
-            logging.warning('chrome extension: allowing reading %s failed: %s %s', site, exc.code, exc.message)
+            logging.warning('chrome extension: allowing "%s" on %s failed: %s %s', asked[:80], site, exc.code, exc.message)
             return False
-        logging.info('chrome extension: allowed reading %s (%s)', site, 'card gone' if gone else 'card still there')
+        logging.info('chrome extension: allowed "%s" on %s (%s)', asked[:80], site, 'card gone' if gone else 'card still there')
         return True
 
     def popup_list(self):
@@ -2430,13 +2428,33 @@ class UiWatcher:
             self.last_turn_check = time.monotonic()
             self.check_turns()
 
+    def check_extension(self):
+        """Claude for Chrome's card, allowed within a second or two of showing: the full look
+        every `interval` seconds (and a phone action holding the worker) left it waiting long
+        enough for the request to be cancelled (10/31)."""
+        if not hasattr(self.driver, 'extension_popups'):
+            return
+        try:
+            found = self.driver.extension_popups()
+        except ActionError:
+            return
+        for raw in found:
+            if isinstance(raw, dict) and raw.get('buttons'):
+                self.allow_extension_read(raw)
+
     def run_forever(self):
         while True:
             try:
                 self.tick()
             except Exception:
                 logging.exception('watcher failed')
-            time.sleep(self.interval)
+            # Between full looks, the extension's card is checked about every 1.3 s.
+            for _ in range(3):
+                time.sleep(self.interval / 3)
+                try:
+                    self.check_extension()
+                except Exception:
+                    logging.exception('extension check failed')
 
 
 APP_NAMES = {'claude': 'Claude', 'codex': 'Codex'}
@@ -3815,6 +3833,10 @@ class FakeDriver:
     def downloaded_update(self, app):
         """As WindowsDriver.downloaded_update; `fake_downloaded` is Claude's downloaded version."""
         return getattr(self, 'fake_downloaded', None) if app == 'claude' else None
+
+    def extension_popups(self):
+        self.calls.append(('extension',))
+        return [dict(p) for p in self.fake_popups if p.get('title') == EXTENSION_TITLE]
 
     def versions(self):
         """As WindowsDriver.versions; `fake_versions` sets {app: (installed, running)}."""
