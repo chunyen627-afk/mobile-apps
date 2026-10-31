@@ -210,17 +210,37 @@ struct DeskChatView: View {
     private func rowView(_ row: TranscriptRow) -> some View {
         switch row {
         case .message(let event):
-            DeskBubble(event: event, app: app)
+            DeskBubble(event: event, app: app, loadImage: loadImage)
         case .status(let event):
             Text(event.text)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity)
         case .tool(let call, let result):
-            DeskToolRow(call: call, result: result, expanded: expanded.contains(row.id),
-                        fullText: result?.itemId.flatMap { fullTexts[$0] },
-                        toggle: { toggle(row.id) },
-                        loadFull: { itemId in Task { await loadItem(itemId) } })
+            toolRow(row.id, call: call, result: result)
+        case .tools(let inner):
+            // Several tool calls in a row: one line like the desktop's, opened to see each.
+            DeskToolGroupRow(row: row, expanded: expanded.contains(row.id), toggle: { toggle(row.id) }) {
+                ForEach(inner) { child in
+                    if case .tool(let call, let result) = child { toolRow(child.id, call: call, result: result) }
+                }
+            }
+        }
+    }
+
+    private func toolRow(_ id: String, call: TranscriptEvent?, result: TranscriptEvent?) -> some View {
+        DeskToolRow(call: call, result: result, expanded: expanded.contains(id),
+                    fullText: result?.itemId.flatMap { fullTexts[$0] },
+                    toggle: { toggle(id) },
+                    loadFull: { itemId in Task { await loadItem(itemId) } },
+                    loadImage: loadImage)
+    }
+
+    /// A picture of this conversation, from the phone's cache or the PC.
+    private func loadImage(_ imageId: String) async -> UIImage? {
+        guard let client = store.client(pcID) else { return nil }
+        return await DeskImageCache.shared.image(pc: pcID, app: app, session: session.id, id: imageId) {
+            try await client.image(app, session: session.id, image: imageId)
         }
     }
 
@@ -726,14 +746,20 @@ struct DeskPendingBubble: View {
 struct DeskBubble: View {
     let event: TranscriptEvent
     let app: DeskApp
+    var loadImage: ((String) async -> UIImage?)?
 
     private var mine: Bool { event.kind == "user" }
+    /// The words, except the "[圖片]" stand-in once the picture itself is shown.
+    private var shownText: String { event.pictures.isEmpty || event.text != "[圖片]" ? event.text : "" }
 
     var body: some View {
         HStack {
             if mine { Spacer(minLength: 40) }
             VStack(alignment: .leading, spacing: 6) {
-                ForEach(Array(DeskText.blocks(event.text).enumerated()), id: \.offset) { _, block in
+                if !event.pictures.isEmpty, let loadImage {
+                    DeskPictureStrip(ids: event.pictures, loadImage: loadImage)
+                }
+                ForEach(Array(DeskText.blocks(shownText).enumerated()), id: \.offset) { _, block in
                     switch block {
                     case .code(let code):
                         Text(code)
@@ -850,6 +876,7 @@ struct DeskToolRow: View {
     let fullText: String?
     let toggle: () -> Void
     let loadFull: (String) -> Void
+    var loadImage: ((String) async -> UIImage?)?
 
     private var tool: String { call?.tool ?? result?.tool ?? "工具" }
     private var summary: String {
@@ -866,6 +893,9 @@ struct DeskToolRow: View {
                         .foregroundStyle(result?.isError == true ? Color.red : Color.secondary)
                     Text(tool).font(.caption.bold())
                     Text(summary).font(.caption).lineLimit(1).truncationMode(.middle)
+                    if result?.pictures.isEmpty == false {
+                        Image(systemName: "photo").font(.caption)  // a screenshot came back
+                    }
                     Spacer(minLength: 0)
                 }
                 .foregroundStyle(.secondary)
@@ -876,6 +906,9 @@ struct DeskToolRow: View {
                 if let call, !call.text.isEmpty {
                     DeskSelectableText(call.text, style: .caption1, monospaced: true)
                         .accessibilityLabel(call.text)
+                }
+                if let result, !result.pictures.isEmpty, let loadImage {
+                    DeskPictureStrip(ids: result.pictures, loadImage: loadImage)
                 }
                 if let result {
                     let output = fullText ?? (result.text.isEmpty ? "（沒有輸出）" : result.text)

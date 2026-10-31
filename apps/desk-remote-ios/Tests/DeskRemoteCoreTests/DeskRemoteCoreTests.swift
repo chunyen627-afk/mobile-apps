@@ -201,13 +201,21 @@ final class TranscriptLogTests: XCTestCase {
             event(4, "tool_result", tool: "Bash"), event(5, "tool_result", tool: "Read"),
             event(6, "tool_result", tool: "Grep"), event(7, "status"), event(8),
         ]))
-        XCTAssertEqual(log.rows.map(\.id), ["m1", "t2", "t3", "t6", "s7", "m8"])
-        guard case .tool(let call, let result) = log.rows[1] else { return XCTFail("row 1 is not a tool") }
+        // Three tool rows in a row fold into one line (asked 10/31), as the desktop shows them.
+        XCTAssertEqual(log.rows.map(\.id), ["m1", "gt2", "s7", "m8"])
+        guard case .tools(let inner) = log.rows[1] else { return XCTFail("row 1 is not a fold") }
+        XCTAssertEqual(inner.map(\.id), ["t2", "t3", "t6"])
+        guard case .tool(let call, let result) = inner[0] else { return XCTFail("inner 0 is not a tool") }
         XCTAssertEqual(call?.seq, 2)
         XCTAssertEqual(result?.seq, 5)
-        guard case .tool(let orphanCall, let orphan) = log.rows[3] else { return XCTFail("row 3 is not a tool") }
+        guard case .tool(let orphanCall, let orphan) = inner[2] else { return XCTFail("inner 2 is not a tool") }
         XCTAssertNil(orphanCall)
         XCTAssertEqual(orphan?.seq, 6)
+        XCTAssertEqual(log.rows[1].toolCounts.map { "\($0.tool)×\($0.count)" }, ["Read×1", "Bash×1", "Grep×1"])
+        // A lone tool row stays as it is.
+        var single = TranscriptLog()
+        single.apply(page("a", reset: true, [event(1, "user"), event(2, "tool_call", tool: "Read"), event(3)]))
+        XCTAssertEqual(single.rows.map(\.id), ["m1", "t2", "m3"])
     }
 
     func testPendingTextMatchesOnlyNewerUserMessages() {

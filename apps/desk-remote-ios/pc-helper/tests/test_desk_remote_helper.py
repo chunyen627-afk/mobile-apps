@@ -1646,6 +1646,40 @@ class PopupTests(FakeEnvironment):
         self.assertIn('覆蓋了電腦輸入框裡原本沒送出的 8 個字', status['message'])
         self.assertNotIn('半句話', status['message'])
 
+    def test_pictures_in_the_transcript_are_kept_for_the_phone(self):
+        """A photo the person sent and a screenshot a tool returned (10/31: the phone showed only
+        "[圖片]") travel as image ids on the events; the bytes come from the images endpoint."""
+        transcript = h.Transcript(self.fake.root / 'nowhere.jsonl', h.ClaudeParser)
+        png = h.FAKE_PNG
+        for obj in [
+            {'type': 'user', 'message': {'role': 'user', 'content': [
+                {'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/png', 'data': png}},
+                {'type': 'text', 'text': '這張是什麼'}]}},
+            {'type': 'assistant', 'message': {'role': 'assistant', 'content': [
+                {'type': 'tool_use', 'id': 'tu1', 'name': 'screenshot', 'input': {}}]}},
+            {'type': 'user', 'message': {'role': 'user', 'content': [
+                {'type': 'tool_result', 'tool_use_id': 'tu1', 'content': [
+                    {'type': 'text', 'text': 'shot taken'},
+                    {'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/png', 'data': png}}]}]}},
+        ]:
+            for event in transcript.parser.feed(obj):
+                transcript.add(event)
+        events = transcript.page(0, '')['events']
+        photo = next(e for e in events if e['kind'] == 'user' and e['text'] == '[圖片]')
+        shot = next(e for e in events if e['kind'] == 'tool_result')
+        self.assertEqual((photo['images'], shot['images']), (['g1-0'], ['g4-0']))
+        self.assertNotIn('images', next(e for e in events if e['text'] == '這張是什麼'))
+        media, data = transcript.image('g1-0')
+        self.assertEqual((media, data[:8]), ('image/png', b'\x89PNG\r\n\x1a\n'))
+        self.assertIsNone(transcript.image('g9-0'))
+        self.assertTrue(h.IMAGE_ID.match('g12-3') and not h.IMAGE_ID.match('../x'))
+        # Codex writes the picture as a data URL.
+        codex = h.CodexParser()
+        out = codex.feed({'type': 'event_msg', 'payload': {'type': 'item_completed', 'item': {
+            'type': 'UserMessage', 'content': [{'type': 'input_text', 'text': '看圖'},
+                                                {'type': 'input_image', 'image_url': 'data:image/jpeg;base64,' + png}]}}})
+        self.assertEqual(out[0]['images'], [{'media': 'image/jpeg', 'data': png}])
+
     def test_an_interrupted_turn_ends_as_a_status_not_a_message(self):
         parser = h.ClaudeParser()
         parser.feed({'type': 'user', 'message': {'role': 'user', 'content': '請寫長文'}})
@@ -1680,7 +1714,8 @@ class PopupTests(FakeEnvironment):
                 {'type': 'text', 'text': '<system-reminder>\nLinked sessions now\n</system-reminder>'},
                 {'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/png', 'data': 'AAAA'}},
                 {'type': 'text', 'text': 'app要更新嗎'}]}})
-        self.assertEqual(out, [{'kind': 'user', 'text': '[圖片]', 'ts': '2026-10-28T16:30:30Z'},
+        self.assertEqual(out, [{'kind': 'user', 'text': '[圖片]', 'ts': '2026-10-28T16:30:30Z',
+                                'images': [{'media': 'image/png', 'data': 'AAAA'}]},
                                {'kind': 'user', 'text': 'app要更新嗎', 'ts': '2026-10-28T16:30:30Z'}])
         self.assertEqual(parser.feed({'type': 'attachment', 'attachment': {'type': 'queued_command', 'prompt': '純文字'}})[0]['text'], '純文字')
         # Other attachments, and queued commands that no person sent, are not messages.

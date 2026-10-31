@@ -260,11 +260,14 @@ public struct TranscriptEvent: Codable, Equatable, Identifiable, Sendable {
     public let isError: Bool?
     public let truncated: Bool?
     public let itemId: String?
+    /// Ids of the pictures in this event (a photo sent from the phone, a tool's screenshot),
+    /// fetched one by one with `HelperClient.image`; helpers before 0.5.27 send none.
+    public let images: [String]?
 
     public var id: Int { seq }
 
     public init(seq: Int, kind: String, text: String, tool: String? = nil, ts: String? = nil,
-                isError: Bool? = nil, truncated: Bool? = nil, itemId: String? = nil) {
+                isError: Bool? = nil, truncated: Bool? = nil, itemId: String? = nil, images: [String]? = nil) {
         self.seq = seq
         self.ts = ts
         self.kind = kind
@@ -273,7 +276,11 @@ public struct TranscriptEvent: Codable, Equatable, Identifiable, Sendable {
         self.isError = isError
         self.truncated = truncated
         self.itemId = itemId
+        self.images = images
     }
+
+    /// The pictures, never nil.
+    public var pictures: [String] { images ?? [] }
 }
 
 /// A permission question the desktop app is showing now.

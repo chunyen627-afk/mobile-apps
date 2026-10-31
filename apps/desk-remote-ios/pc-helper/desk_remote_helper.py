@@ -10,6 +10,7 @@ Run at login in the user's interactive session:  pythonw desk_remote_helper.py [
 Simulator tests:  python3 desk_remote_helper.py --fake ../fixtures/fake-helper
 """
 import argparse
+import base64
 import ctypes
 import glob
 import hashlib
@@ -37,7 +38,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.26'
+VERSION = '0.5.27'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -53,6 +54,8 @@ TEXT_LIMITS = {'user': 12000, 'assistant': 12000, 'tool_call': 600, 'tool_result
 CLAUDE_ID = re.compile(r'^local_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
 CODEX_ID = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
 ITEM_ID = re.compile(r'^i[0-9]{1,9}$')
+IMAGE_ID = re.compile(r'^g[0-9]{1,9}-[0-7]$')
+IMAGE_BYTES = 48 * 1024 * 1024    # base64 of a conversation's pictures kept for the phone
 # Text the desktop app injects as a user turn but the user never typed.
 NOISE_PREFIXES = ('<command-name>', '<command-message>', '<local-command-', '<system-reminder>',
                   '<task-notification>', '<side-sessions-event>', '<ci-monitor-event>',
@@ -275,6 +278,25 @@ def open_link(pc_name, app=None, session_id=None, title=None, elevate=False):
     return 'deskremote://open?' + urllib.parse.urlencode(query, quote_via=urllib.parse.quote)
 
 
+def images_of(content):
+    """The pictures in a message body or tool result: [{'media': 'image/png', 'data': <base64>}].
+    Claude writes {'type': 'image', 'source': {'type': 'base64', 'media_type', 'data'}}; Codex
+    {'type': 'input_image', 'image_url': 'data:image/png;base64,...'}."""
+    found = []
+    for block in content if isinstance(content, list) else []:
+        if not isinstance(block, dict):
+            continue
+        if block.get('type') == 'image' and isinstance(block.get('source'), dict):
+            source = block['source']
+            if source.get('type') == 'base64' and isinstance(source.get('data'), str) and source['data']:
+                found.append({'media': str(source.get('media_type') or 'image/jpeg'), 'data': source['data']})
+        elif block.get('type') == 'input_image' and isinstance(block.get('image_url'), str):
+            match = re.match(r'data:(image/[a-z0-9.+-]+);base64,(.+)$', block['image_url'], re.S)
+            if match:
+                found.append({'media': match.group(1), 'data': match.group(2)})
+    return found
+
+
 def flatten(content):
     """Text of a tool result or message body that may be a string or a list of blocks."""
     if content is None:
@@ -420,7 +442,8 @@ class ClaudeParser:
                     self.status = 'working'
                     self.suggestions = None
                 elif block.get('type') == 'image':
-                    out.append({'kind': 'user', 'text': '[圖片]', 'ts': ts})
+                    # The picture itself goes along (phones from 0.6.2 show it; older ones the words).
+                    out.append({'kind': 'user', 'text': '[圖片]', 'ts': ts, 'images': images_of([block])})
                     self.status = 'working'
                     self.suggestions = None
                 elif block.get('type') == 'tool_result':
@@ -431,7 +454,8 @@ class ClaudeParser:
                         out.append({'kind': 'status', 'text': '已回答選項題', 'ts': ts})
                     elif not is_wrap_up(tool):
                         out.append({'kind': 'tool_result', 'text': flatten(block.get('content')), 'ts': ts,
-                                    'tool': tool, 'isError': bool(block.get('is_error'))})
+                                    'tool': tool, 'isError': bool(block.get('is_error')),
+                                    'images': images_of(block.get('content'))})  # e.g. a browser screenshot
             return out
         usage = message.get('usage')
         if isinstance(usage, dict):
@@ -539,7 +563,10 @@ class CodexParser:
         itype = item.get('type')
         if itype == 'UserMessage':
             text = flatten(item.get('content'))
-            return [{'kind': 'user', 'text': text, 'ts': ts}] if text.strip() and not is_noise(text) else []
+            images = images_of(item.get('content'))
+            if not (text.strip() and not is_noise(text)):
+                return []
+            return [{'kind': 'user', 'text': text, 'ts': ts, 'images': images}]
         if itype == 'AgentMessage':
             text = flatten(item.get('content'))  # Automation heartbeats are echoed back; hide those too.
             return [{'kind': 'assistant', 'text': text, 'ts': ts}] if text.strip() and not is_noise(text) else []
@@ -592,6 +619,8 @@ class Transcript:
         self.offset = None
         self.events = []
         self.items = {}
+        self.images = {}       # image id -> (media type, base64 data), for the events still kept
+        self.image_bytes = 0   # of the base64 kept, capped at IMAGE_BYTES
         self.seq = 0
         self.earlier = False
         self.skipped = 0
@@ -654,6 +683,19 @@ class Transcript:
             event['text'] = event['text'][:limit]
             event['truncated'] = True
             event['itemId'] = item_id
+        pictures = [p for p in raw.get('images') or [] if isinstance(p, dict) and p.get('data')]
+        if pictures:
+            # Kept apart from the event (the phone fetches each by id when it is on screen), the
+            # newest IMAGE_BYTES of them.
+            event['images'] = []
+            for n, picture in enumerate(pictures[:8]):
+                image_id = f'g{self.seq}-{n}'
+                self.images[image_id] = (picture['media'], picture['data'])
+                self.image_bytes += len(picture['data'])
+                event['images'].append(image_id)
+            while self.image_bytes > IMAGE_BYTES and self.images:
+                oldest = next(iter(self.images))
+                self.image_bytes -= len(self.images.pop(oldest)[1])
         self.events.append(event)
         if len(self.events) > MAX_EVENTS:
             dropped = self.events[:-MAX_EVENTS]
@@ -661,6 +703,10 @@ class Transcript:
             self.earlier = True
             for old in dropped:
                 self.items.pop(old.get('itemId'), None)
+                for image_id in old.get('images') or []:
+                    gone = self.images.pop(image_id, None)
+                    if gone:
+                        self.image_bytes -= len(gone[1])
 
     def page(self, after, epoch):
         """Events after `after` in the same epoch, or the latest page with reset=True."""
@@ -687,6 +733,17 @@ class Transcript:
     def item(self, item_id):
         with self.lock:
             return self.items.get(item_id)
+
+    def image(self, image_id):
+        """(media type, bytes) of a picture still kept, or None."""
+        with self.lock:
+            kept = self.images.get(image_id)
+        if not kept:
+            return None
+        try:
+            return kept[0], base64.b64decode(kept[1], validate=False)
+        except ValueError:  # binascii.Error is one
+            return None
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1541,6 +1598,10 @@ class Hub:
     def item(self, app, session_id, item_id):
         transcript = self.transcript(app, session_id)
         return transcript.item(item_id) if transcript is not None and ITEM_ID.match(item_id) else None
+
+    def image(self, app, session_id, image_id):
+        transcript = self.transcript(app, session_id)
+        return transcript.image(image_id) if transcript is not None and IMAGE_ID.match(image_id) else None
 
     def info(self, app, session_id):
         """Title, link and expected page title, cached for a few seconds (long-polls ask often)."""
@@ -3407,9 +3468,12 @@ def handler_for(hub, gate, networks, runner=None):
                 return self.send_json(500, error('internal', '電腦端發生錯誤'))
 
         def send_jpeg(self, data):
+            self.send_bytes(data, 'image/jpeg')
+
+        def send_bytes(self, data, content_type):
             try:
                 self.send_response(200)
-                self.send_header('Content-Type', 'image/jpeg')
+                self.send_header('Content-Type', content_type if re.fullmatch(r'image/[a-z0-9.+-]+', content_type) else 'application/octet-stream')
                 self.send_header('Content-Length', str(len(data)))
                 self.send_header('Cache-Control', 'no-store')
                 self.send_header('X-Content-Type-Options', 'nosniff')
@@ -3516,6 +3580,11 @@ def handler_for(hub, gate, networks, runner=None):
                     if text is None:
                         return self.send_json(404, error('not-found', '這段內容已不在電腦端快取'))
                     return self.send_json(200, {'ok': True, 'text': text})
+                if len(parts) == 5 and parts[3] == 'images':
+                    picture = hub.image(app, parts[2], parts[4])
+                    if picture is None:
+                        return self.send_json(404, error('not-found', '這張圖已不在電腦端快取'))
+                    return self.send_bytes(picture[1], picture[0])
             return self.send_json(404, error('not-found', '沒有這個路徑'))
 
         def denied(self):
@@ -3930,6 +3999,8 @@ class FakeDriver:
         reply = f'（示範）收到：{text[:30] or "照片"}'
         if '表格' in text:  # a reply with a Markdown table, as the desktop apps write them
             reply += FAKE_TABLE
+        if '多工具' in text and app == 'claude':  # a few tool calls before the reply (folded on the phone)
+            self.write(app, path, 'tools', text)
         self.later(app, path, reply, delay, doc)
         return replaced
 
@@ -3979,7 +4050,7 @@ class FakeDriver:
     def write(self, app, path, role, text, photos=1):
         ts = datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%S.000Z')
         if role == 'user-image':  # pasted photos and an optional caption, as each app records them
-            blocks = [{'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/jpeg', 'data': ''}}] * photos
+            blocks = [{'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/png', 'data': FAKE_PNG}}] * photos
             if text.strip():
                 blocks.append({'type': 'text', 'text': text})
             if app == 'claude':
@@ -3988,6 +4059,17 @@ class FakeDriver:
                 lines = [{'timestamp': ts, 'type': 'event_msg', 'payload': {'type': 'task_started'}},
                          {'timestamp': ts, 'type': 'event_msg', 'payload': {'type': 'item_completed', 'item': {
                              'type': 'UserMessage', 'content': [{'type': 'input_image'}] * photos + blocks[photos:]}}}]
+        elif role == 'tools' and app == 'claude':
+            # Three tool calls in a row with their results (the phone folds them into one line).
+            lines = []
+            batch = secrets.token_hex(3)
+            for n, (name, data, output) in enumerate([('Bash', {'command': 'ls'}, 'a.txt\nb.txt'),
+                                                      ('Read', {'file_path': 'a.txt'}, 'hello'),
+                                                      ('Bash', {'command': 'cat b.txt'}, 'world')]):
+                lines.append({'type': 'assistant', 'timestamp': ts, 'message': {'role': 'assistant', 'content': [
+                    {'type': 'tool_use', 'id': f'fake-tool-{batch}-{n}', 'name': name, 'input': data}]}})
+                lines.append({'type': 'user', 'timestamp': ts, 'message': {'role': 'user', 'content': [
+                    {'type': 'tool_result', 'tool_use_id': f'fake-tool-{batch}-{n}', 'content': output}]}})
         elif app == 'claude':
             if role == 'user':
                 lines = [{'type': 'user', 'timestamp': ts, 'message': {'role': 'user', 'content': text}}]
@@ -4067,6 +4149,21 @@ FAKE_POPUP = {'hwnd': 4242, 'title': 'Windows 安全性', 'process': 'SecurityHe
 FAKE_QUIT_GUARD = {'hwnd': 4343, 'title': 'Claude 仍在處理中', 'process': 'claude', 'page': True,
                    'text': 'Claude 仍在處理中\nClaude 正在 1 個工作階段中執行作業。立即重新啟動將會中斷該作業。',
                    'buttons': ['取消', '等待 Claude', '仍要更新']}
+# A 24 x 24 gradient PNG (981 bytes): the picture in fake mode's photo messages, so the phone has
+# something to show.
+FAKE_PNG = ('iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAIAAABvFaqvAAADnElEQVR42hXToRpFERCF0ZNlWZZlWZZlWf6zLMuyLMuyLHuO63qA9Zk9e76PT/BJ'
+            'PsWn+Qyf5XN8ni/wRb7EB1/mK3yVr/F1vsE3+Rbf5jt8l+/7EAIhEQqhEQZhEQ7hEQEREQkBIiMKoiIaoiMGYiIWYiMO4iIeJAVSIhVSIw3S'
+            'Ih3SIwMyIhMSZEYWZEU2ZEcO5EQu5EYe5EU+SAmURCmURhmURTmURwVURCUUqIwqqIpqqI4aqIlaqI06qIt6kBZoiVZojTZoi3Zojw7oiE5o'
+            '0Bld0BXd0B090BO90Bt90Bf9ICMwEqMwGmMwFuMwHhMwEZMwYDKmYCqmYTpmYCZmYTbmYC7mQVZgJVZhNdZgLdZhPTZgIzZhwWZswVZsw3bs'
+            'wE7swm7swV7sg5zASZzCaZzBWZzDeVzARVzCgcu4gqu4huu4gZu4hdu4g7u4B3mBl3iF13iDt3iH9/iAj/iEB5/xBV/xDd/xAz/xC7/xB3/x'
+            'DwqCIAmKoAmGYAmO4AmBEAmJACETCqESGqETBmESFmETDuESHhQFURIVURMN0RId0RMDMRITEWImFmIlNmInDuIkLuImHuIlPigJkiQpkiYZ'
+            'kiU5kicFUiQlEqRMKqRKaqROGqRJWqRNOqRLetD/BF55X+1eYd6q35JevC+YN9L7zGPey1CgQoMOAyYs2HDgvmv8yIIsyYqsyYZsyY7syYEc'
+            'yemP5Ewu5Epu5E4e5Ele5E0+5Et+UBEUSVEUTTEUS3EUTwmUSEn/r5RMKZRKaZROGZRJWZRNOZRLeVAVVElVVE01VEt1VE8N1EhN/4FqphZq'
+            'pTZqpw7qpC7qph7qpT6oCZqkKZqmGZqlOZqnBVqkpX8sLdMKrdIardMGbdIWbdMO7dIe1AVd0hVd0w3d0h3d0wM90tM/3J7phV7pjd7pgz7p'
+            'i77ph37pDxqCIRmKoRmGYRmO4RmBERnpv6KRGYVRGY3RGYMxGYuxGYdxGQ+agimZiqmZhmmZjumZgRmZ6b/omZmFWZmN2ZmDOZmLuZmHeZkP'
+            'WoIlWYqlWYZlWY7lWYEVWelfl5VZhVVZjdVZgzVZi7VZh3VZD9qCLdmKrdmGbdmO7dmBHdnpX7qd2YVd2Y3d2YM92Yu92Yd92Q86giM5iqM5'
+            'hmM5juM5gRM56V/dkzmFUzmN0zmDMzmLszmHczkPuoIruYqruYZruY7ruYEbuel/ADdzC7dyG7dzB3dyF3dzD/dyfzqBE663RbzJAAAAAElF'
+            'TkSuQmCC')
 # Claude for Chrome's card before reading a site (photo 10/31).
 FAKE_EXTENSION_READ = {'hwnd': 4346, 'title': 'Claude for Chrome', 'process': 'chrome', 'page': True,
                        'text': 'New permissions required\nClaude wants to read page content on:\ns.example.com\n'

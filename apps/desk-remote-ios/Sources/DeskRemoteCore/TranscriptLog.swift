@@ -2,17 +2,42 @@ import Foundation
 
 /// One row of the chat screen: a message, a tool call with its result folded under it, or a
 /// short status line such as "完成".
-public enum TranscriptRow: Identifiable, Equatable, Sendable {
+public indirect enum TranscriptRow: Identifiable, Equatable, Sendable {
     case message(TranscriptEvent)
     case tool(call: TranscriptEvent?, result: TranscriptEvent?)
     case status(TranscriptEvent)
+    /// Two or more tool calls in a row, folded into one line as the desktop shows them (asked
+    /// 10/31); each inner row is a `.tool`.
+    case tools([TranscriptRow])
 
     public var id: String {
         switch self {
         case .message(let event): return "m\(event.seq)"
         case .tool(let call, let result): return "t\(call?.seq ?? result?.seq ?? 0)"
         case .status(let event): return "s\(event.seq)"
+        case .tools(let rows): return "g" + (rows.first?.id ?? "0")
         }
+    }
+
+    /// For a `.tools` row: how many calls of each tool, in order of first use, e.g.
+    /// [("Bash", 3), ("Read", 2)].
+    public var toolCounts: [(tool: String, count: Int)] {
+        guard case .tools(let rows) = self else { return [] }
+        var order: [String] = []
+        var counts: [String: Int] = [:]
+        for row in rows {
+            guard case .tool(let call, let result) = row else { continue }
+            let name = call?.tool ?? result?.tool ?? "工具"
+            if counts[name] == nil { order.append(name) }
+            counts[name, default: 0] += 1
+        }
+        return order.map { ($0, counts[$0] ?? 0) }
+    }
+
+    /// Whether any inner result failed (a `.tools` row).
+    public var hasError: Bool {
+        guard case .tools(let rows) = self else { return false }
+        return rows.contains { if case .tool(_, let result) = $0 { return result?.isError == true } else { return false } }
     }
 }
 
@@ -133,6 +158,21 @@ public struct TranscriptLog: Equatable, Sendable, Codable {
                 rows.append(.message(event))
             }
         }
-        return rows
+        return fold(rows)
+    }
+
+    /// Runs of two or more `.tool` rows become one `.tools` row.
+    static func fold(_ rows: [TranscriptRow]) -> [TranscriptRow] {
+        var out: [TranscriptRow] = []
+        var run: [TranscriptRow] = []
+        func flush() {
+            if run.count >= 2 { out.append(.tools(run)) } else { out.append(contentsOf: run) }
+            run = []
+        }
+        for row in rows {
+            if case .tool = row { run.append(row) } else { flush(); out.append(row) }
+        }
+        flush()
+        return out
     }
 }

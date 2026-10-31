@@ -164,7 +164,17 @@ public struct HelperClient: Sendable {
 
     /// A JPEG of the PC's whole desktop right now.
     public func screen() async throws -> Data {
-        guard let url = endpoint.url(["v1", "screen"]) else { throw HelperFailure.badResponse }
+        try await imageBytes(["v1", "screen"])
+    }
+
+    /// A picture from a conversation (a photo sent from here, a screenshot a tool took), by the
+    /// id an event carries in `images`.
+    public func image(_ app: DeskApp, session id: String, image imageId: String) async throws -> Data {
+        try await imageBytes(["v1", app.rawValue, "sessions", id, "images", imageId])
+    }
+
+    private func imageBytes(_ path: [String]) async throws -> Data {
+        guard let url = endpoint.url(path) else { throw HelperFailure.badResponse }
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
         request.httpMethod = "GET"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -176,7 +186,7 @@ public struct HelperClient: Sendable {
             throw Self.failure(for: error)
         }
         guard let http = response as? HTTPURLResponse, data.count <= Self.maxBytes else { throw HelperFailure.badResponse }
-        if http.statusCode == 200, (http.value(forHTTPHeaderField: "Content-Type") ?? "").hasPrefix("image/jpeg") {
+        if http.statusCode == 200, (http.value(forHTTPHeaderField: "Content-Type") ?? "").hasPrefix("image/") {
             return data
         }
         let _: HelperErrorBody = try Self.decode(HelperErrorBody.self, status: http.statusCode == 200 ? 500 : http.statusCode,

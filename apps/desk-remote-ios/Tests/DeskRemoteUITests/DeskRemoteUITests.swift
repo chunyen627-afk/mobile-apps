@@ -97,6 +97,8 @@ final class DeskRemoteUITests: XCTestCase {
         openChat("claude", claudeA)
         XCTAssertTrue(text("整理好了，安裝段落改成三步").waitForExistence(timeout: 10), "reply missing")
         // The chat is a lazy stack scrolled to the bottom: earlier rows are revealed by scrolling.
+        // Tool calls in a row are folded into one line (asked 10/31): opened first.
+        openToolGroups()
         XCTAssertTrue(reveal(element("tool-Bash")), "Bash tool row missing")
         XCTAssertTrue(reveal(element("tool-Read")), "Read tool row missing")
         XCTAssertTrue(reveal(text("請整理 README 的安裝段落")), "user message missing")
@@ -115,6 +117,7 @@ final class DeskRemoteUITests: XCTestCase {
         try launchWithHelper()
         openChat("claude", claudeA)
         XCTAssertTrue(text("整理好了，安裝段落改成三步").waitForExistence(timeout: 10), "chat did not load")
+        openToolGroups()
         let tool = element("tool-Read")
         XCTAssertTrue(reveal(tool), "Read tool row missing")
         tool.tap()
@@ -615,7 +618,15 @@ final class DeskRemoteUITests: XCTestCase {
         app.buttons["chat-send"].tap()
         XCTAssertTrue(text("（示範）收到：three shots").waitForExistence(timeout: 30), "the photos were not sent")
         XCTAssertEqual(userPhotos(helper, session: claudeA), before + 3, "the PC did not get three photos")
+        // The photos come back as pictures in the conversation, not as "[圖片]" (asked 10/31).
+        XCTAssertTrue(poll(timeout: 15) {
+            self.app.descendants(matching: .any).matching(identifier: "picture").count >= 3
+        }, "thumbnails: \(app.descendants(matching: .any).matching(identifier: "picture").count), loading: \(app.descendants(matching: .any).matching(identifier: "picture-loading").count)")
         snapshot("33-three-photos-sent")
+        app.descendants(matching: .any).matching(identifier: "picture").firstMatch.tap()
+        XCTAssertTrue(element("picture-viewer").waitForExistence(timeout: 5), "the picture did not open")
+        snapshot("33b-picture-open")
+        app.buttons["關閉"].tap()
     }
 
     /// A reply with a Markdown table, a heading and a list is laid out as the desktop apps show
@@ -849,6 +860,26 @@ final class DeskRemoteUITests: XCTestCase {
         XCTAssertTrue(landed, "it did not end at the newest message after the huge ones")
     }
 
+    func test40ToolCallsInARowFoldIntoOneLine() throws {
+        try launchWithHelper()
+        openChat("claude", claudeA)
+        XCTAssertTrue(text("整理好了，安裝段落改成三步").waitForExistence(timeout: 10), "chat did not load")
+        let input = element("chat-input")
+        input.tap()
+        input.typeText("多工具 列出檔案")
+        app.buttons["chat-send"].tap()
+        XCTAssertTrue(text("（示範）收到：多工具 列出檔案").waitForExistence(timeout: 30), "the reply did not come")
+        let group = element("tool-group")
+        XCTAssertTrue(reveal(group), "the tool calls were not folded into one line")
+        XCTAssertTrue(group.label.contains("已執行 2 個指令") && group.label.contains("已讀取 1 個檔案"), "the fold says: \(group.label)")
+        XCTAssertFalse(element("tool-Read").exists, "the inner rows show while folded")
+        snapshot("40-tools-folded")
+        group.tap()
+        XCTAssertTrue(element("tool-Read").waitForExistence(timeout: 5), "opening the fold did not show the rows")
+        XCTAssertEqual(app.descendants(matching: .any).matching(identifier: "tool-Bash").count, 2, "two Bash rows expected")
+        snapshot("40-tools-open")
+    }
+
     // MARK: - Helpers
 
     /// How many photos the fake helper's transcript of `session` holds from the user.
@@ -962,6 +993,16 @@ final class DeskRemoteUITests: XCTestCase {
         let row = element("app-row-\(app)")
         XCTAssertTrue(row.waitForExistence(timeout: 10), "\(app) row missing")
         row.tap()
+    }
+
+    /// Opens every folded run of tool calls on the screen (scrolling up to find them).
+    private func openToolGroups() {
+        for _ in 0 ..< 3 {
+            let group = element("tool-group")
+            guard reveal(group) else { return }
+            group.tap()
+            _ = poll(timeout: 2) { !group.exists || group.label != self.element("tool-group").label }
+        }
     }
 
     private func openChat(_ app: String, _ id: String) {
