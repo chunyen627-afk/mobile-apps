@@ -155,7 +155,16 @@ public struct TranscriptLog: Equatable, Sendable, Codable {
             case "status":
                 rows.append(.status(event))
             default:
-                rows.append(.message(event))
+                // Photos sent together are written one block each: one bubble for all of them.
+                if event.kind == "user", event.text == "[圖片]", !event.pictures.isEmpty,
+                   case .message(let last)? = rows.last, last.kind == "user", last.text == "[圖片]", !last.pictures.isEmpty {
+                    rows[rows.count - 1] = .message(TranscriptEvent(
+                        seq: last.seq, kind: last.kind, text: last.text, tool: last.tool, ts: last.ts,
+                        isError: last.isError, truncated: last.truncated, itemId: last.itemId,
+                        images: last.pictures + event.pictures))
+                } else {
+                    rows.append(.message(event))
+                }
             }
         }
         return fold(rows)

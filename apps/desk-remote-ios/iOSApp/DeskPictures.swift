@@ -50,6 +50,9 @@ struct DeskPictureStrip: View {
                 }
             }
         }
+        // As wide as the pictures (two at most), so the bubble hugs them instead of the screen
+        // (CI screenshot 10/31: a thumbnail in a bubble the width of the screen).
+        .frame(maxWidth: CGFloat(min(ids.count, 2)) * 150 + CGFloat(min(ids.count, 2) - 1) * 6, alignment: .leading)
         .sheet(item: Binding(get: { shown.map(DeskShownPicture.init) }, set: { shown = $0?.id })) { picked in
             DeskPictureViewer(id: picked.id, loadImage: loadImage)
         }

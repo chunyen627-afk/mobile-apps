@@ -218,6 +218,19 @@ final class TranscriptLogTests: XCTestCase {
         XCTAssertEqual(single.rows.map(\.id), ["m1", "t2", "m3"])
     }
 
+    func testPhotosSentTogetherShareOneBubble() {
+        var log = TranscriptLog()
+        log.apply(page("a", reset: true, [
+            TranscriptEvent(seq: 1, kind: "user", text: "[圖片]", images: ["g1-0"]),
+            TranscriptEvent(seq: 2, kind: "user", text: "[圖片]", images: ["g2-0"]),
+            TranscriptEvent(seq: 3, kind: "user", text: "three shots"),
+            TranscriptEvent(seq: 4, kind: "user", text: "[圖片]", images: ["g4-0"]),
+        ]))
+        XCTAssertEqual(log.rows.map(\.id), ["m1", "m3", "m4"])
+        guard case .message(let first) = log.rows[0] else { return XCTFail("row 0 is not a message") }
+        XCTAssertEqual(first.pictures, ["g1-0", "g2-0"])
+    }
+
     func testPendingTextMatchesOnlyNewerUserMessages() {
         var log = TranscriptLog()
         log.apply(page("a", reset: true, [
