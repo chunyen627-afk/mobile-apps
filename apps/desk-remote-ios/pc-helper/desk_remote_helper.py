@@ -37,7 +37,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.21'
+VERSION = '0.5.22'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -2072,6 +2072,7 @@ class UiWatcher:
         self.context_alerted, self.usage_alerted = set(), set()
         self.popups = []        # pop-up windows on the desktop at the last look, each with an id
         self.quiet_popups_until = 0.0  # no pop-up notifications before then (the phone opened one)
+        self.extension_seen = set()    # Claude for Chrome cards seen once without their words yet
         self.uac_since = self.uac_told = None  # when a UAC prompt was first seen; whether the phone was told
         self.versions, self.versions_checked = {}, None  # each app's installed and running version
         self.update_told, self.restart_tried = set(), {}  # (app, version) told; Codex version -> when restarted
@@ -2165,10 +2166,18 @@ class UiWatcher:
             if self.allow_extension_read(raw):
                 continue
             key = f"{raw.get('hwnd')}\n{raw.get('title')}\n{raw.get('process')}"
+            if str(raw.get('title') or '') == EXTENSION_TITLE and key not in self.extension_seen:
+                # The card's words come a moment after its buttons (10/31: listed and told once
+                # without the "read page content" line, then allowed 4 s later; the phone pressed a
+                # card that was gone): one more look before it counts.
+                self.extension_seen.add(key)
+                continue
             listed.append({'id': hashlib.sha256(key.encode('utf-8')).hexdigest()[:12], 'hwnd': raw.get('hwnd'),
                            'title': str(raw.get('title') or ''), 'process': str(raw.get('process') or ''),
                            'text': str(raw.get('text') or '')[:600],
                            'buttons': [str(b) for b in raw['buttons']][:8], 'page': bool(raw.get('page'))})
+        present = {f"{raw.get('hwnd')}\n{raw.get('title')}\n{raw.get('process')}" for raw in found if isinstance(raw, dict)}
+        self.extension_seen &= present
         with self.lock:
             known = {p['id'] for p in self.popups}
             self.popups = listed
