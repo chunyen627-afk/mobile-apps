@@ -276,9 +276,18 @@ function Paste-Send($w, $scope, $editName, $text, $imagePaths = @()) {
     Start-Sleep -Milliseconds 300
     if (-not $edit.Current.HasKeyboardFocus) { Fail 'focus-failed' 'the message box did not take focus' }
     # An empty Codex box reads back its placeholder, which is also its name (found live 10/27).
+    # Unsent text already there is replaced: the phone's message always wins (the user's rule
+    # 10/31; before that the send stopped with box-not-empty).
+    $replaced = $null
     $already = Box-Text $edit
     if ($already -and $already.Trim() -and $already.Trim() -ne $editName.Trim()) {
-      Fail 'box-not-empty' 'the message box already holds unsent text'
+      $replaced = $already.Trim()
+      [System.Windows.Forms.SendKeys]::SendWait('^a{DEL}')
+      Start-Sleep -Milliseconds 300
+      $still = Box-Text $edit
+      if ($still -and $still.Trim() -and $still.Trim() -ne $editName.Trim()) {
+        Fail 'box-not-empty' 'the unsent text in the message box could not be cleared'
+      }
     }
     $imagePaths = @($imagePaths | Where-Object { $_ })
     if ($imagePaths) {
@@ -315,6 +324,7 @@ function Paste-Send($w, $scope, $editName, $text, $imagePaths = @()) {
     }
     [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
     Start-Sleep -Milliseconds 300
+    return $replaced
   } finally {
     Restore-Clipboard $saved
     if ($before -ne [IntPtr]::Zero) { [DeskWin]::SetForegroundWindow($before) | Out-Null }
@@ -1298,8 +1308,8 @@ function Run-Command($c) {
     'send' {
       $w = Need-Window $c.app
       $page = Need-Doc $w $c.doc
-      Paste-Send $w $page $s.edit $c.text @($c.images)
-      return @{ ok = $true }
+      $replaced = Paste-Send $w $page $s.edit $c.text @($c.images)
+      return @{ ok = $true; replaced = "$replaced" }
     }
     'popups' { return @{ ok = $true; popups = @(Find-Popups) } }
     'press_popup' { return @{ ok = $true; gone = (Press-Popup $c) } }

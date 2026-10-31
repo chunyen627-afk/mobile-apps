@@ -37,7 +37,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.23'
+VERSION = '0.5.24'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -1712,7 +1712,7 @@ class WindowsDriver:
 
     def send(self, app, doc, text, images=None):
         """Pastes each of `images` (file paths) first, then `text`, then Enter."""
-        self.ask(app, cmd='send', doc=doc, text=text, images=list(images or []))
+        return self.ask(app, cmd='send', doc=doc, text=text, images=list(images or [])).get('replaced') or None
 
     def new_send(self, app, button, text):
         self.ask(app, cmd='new_send', name=button, text=text)
@@ -2883,7 +2883,7 @@ class ActionRunner:
                 with os.fdopen(handle, 'wb') as out:
                     out.write(image)
             self.presence.begin_own()
-            self.driver.send(app, info['doc'], text, paths)
+            replaced = self.driver.send(app, info['doc'], text, paths)
         finally:
             self.presence.end_own()
             for path in paths:
@@ -2892,10 +2892,16 @@ class ActionRunner:
                 except OSError:
                     logging.warning('could not remove the photo file')
             action['images'] = []
+        if replaced:
+            # The phone's message always wins over unsent text in the box (the user's rule 10/31);
+            # only its length is logged, never the text.
+            logging.info('send %s replaced %d unsent characters in the box', app, len(replaced))
         self.update(action, message='已送出，確認中')
         verified = self.verify(transcript, mark, text if text.strip() else '[圖片]')
         message = {True: '已送出', 'queued': '已送出，排在等待中的權限詢問之後'}.get(
             verified, f'已送出，但 {self.verify_seconds} 秒內還沒在對話紀錄看到')
+        if replaced:
+            message += f'（覆蓋了電腦輸入框裡原本沒送出的 {len(replaced)} 個字）'
         self.update(action, state='done', verified=bool(verified), message=message)
 
     def do_popup(self, action):
@@ -3246,7 +3252,7 @@ FAILURE_TEXT = {
     'no-prompt-box': '找不到輸入框（可能正在詢問權限）',
     'focus-failed': '無法把視窗切到前面，已中止（沒有送出任何字）',
     'clipboard-unsafe': '剪貼簿裡的內容無法安全保存，已中止',
-    'box-not-empty': '電腦上的輸入框裡已經有沒送出的字，為免混在一起已中止',
+    'box-not-empty': '電腦輸入框裡沒送出的字清不掉，已中止（沒有送出）',
     'paste-failed': '貼上後輸入框沒有出現這段文字，已清掉並中止（沒有送出）',
     'prompt-changed': '權限詢問已經不一樣了',
     'menu-failed': '打不開「允許一次」選單',
@@ -3888,6 +3894,8 @@ class FakeDriver:
         self.calls.append(('send', app, doc) + tuple(('image', Path(path).stat().st_size) for path in images or []))
         if self.open_doc.get(app) != doc:
             raise ActionError('title-mismatch', '')
+        replaced = getattr(self, 'fake_box_text', None)  # unsent text in the box is replaced, as the worker does
+        self.fake_box_text = None
         session_id = self.session_for_doc(app, doc)
         path = self.hub.sources[app].transcript_path(session_id)
         if images:
@@ -3901,6 +3909,7 @@ class FakeDriver:
         if '表格' in text:  # a reply with a Markdown table, as the desktop apps write them
             reply += FAKE_TABLE
         self.later(app, path, reply, delay, doc)
+        return replaced
 
     def new_send(self, app, button, text):
         self.calls.append(('new_send', app, button))

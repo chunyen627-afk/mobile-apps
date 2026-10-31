@@ -1632,6 +1632,19 @@ class PopupTests(FakeEnvironment):
         run_all(runner)
         self.assertEqual(runner.status(body['id'])['message'], '已停止')
 
+    def test_unsent_text_in_the_box_is_replaced_by_the_phones_message(self):
+        """The phone's message always wins (the user's rule 10/31): leftover text in the PC's box
+        is cleared first, and the result says how much was replaced (never what)."""
+        _, driver, _, runner = drive(self.fake)
+        driver.fake_box_text = '還沒送出的半句話'
+        code, body = runner.submit('send', 'claude', A, {'text': '手機來的', 'clientMsgId': 'r1'})
+        self.assertEqual(code, 202, body)
+        run_all(runner)
+        status = runner.status(body['id'])
+        self.assertEqual(status['state'], 'done', status)
+        self.assertIn('覆蓋了電腦輸入框裡原本沒送出的 8 個字', status['message'])
+        self.assertNotIn('半句話', status['message'])
+
     def test_an_interrupted_turn_ends_as_a_status_not_a_message(self):
         parser = h.ClaudeParser()
         parser.feed({'type': 'user', 'message': {'role': 'user', 'content': '請寫長文'}})
