@@ -1002,6 +1002,12 @@ function Read-UsageCard($w, $s) {
 # have buttons. Main windows, the shell's own pop-ups and notifications are not listed.
 $PageDialogApps = @('claude', 'ChatGPT')
 $PopupSkip = @('ShellExperienceHost', 'StartMenuExperienceHost', 'SearchHost', 'TextInputHost', 'LockApp', 'cua-driver')
+# Claude for Chrome (the browser extension) asks in a window of its own before reading a site
+# ("New permissions required ... Allow this action / Decline", seen 10/31 while Claude Code
+# browsed); only windows with that title are searched, not every Chrome window.
+$ExtensionTitle = 'Claude for Chrome'
+$ExtensionAllow = 'Allow this action'
+$ExtensionDecline = 'Decline'
 
 function Popup-Buttons($win) {
   $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
@@ -1075,6 +1081,23 @@ function Find-Popups {
       }
     } catch { continue }
   }
+  # Claude for Chrome's permission card, in its own window.
+  foreach ($w in $windows) {
+    try {
+      $cur = $w.Current
+      if ($cur.IsOffscreen -or $cur.ClassName -ne 'Chrome_WidgetWin_1' -or -not "$($cur.Name)".StartsWith($ExtensionTitle)) { continue }
+      $names = @(Popup-Buttons $w | ForEach-Object { $_.Current.Name.Trim() } | Select-Object -Unique)
+      if (-not (($names -contains $ExtensionAllow) -and ($names -contains $ExtensionDecline))) { continue }
+      $texts = @($w.FindAll($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Text))) |
+        ForEach-Object { "$($_.Current.Name)".Trim() } | Where-Object { $_ -and $_ -ne $ExtensionAllow -and $_ -ne $ExtensionDecline } | Select-Object -Unique)
+      $text = $texts -join "`n"
+      if ($text.Length -gt 600) { $text = $text.Substring(0, 600) }
+      $proc = 'chrome'
+      try { $proc = (Get-Process -Id $cur.ProcessId -ErrorAction Stop).ProcessName } catch { }
+      $found += @{ hwnd = [int64]$cur.NativeWindowHandle; title = $ExtensionTitle; process = $proc; text = $text
+                   buttons = @($ExtensionAllow, $ExtensionDecline); page = $true }
+    } catch { continue }
+  }
   return $found
 }
 
@@ -1083,6 +1106,14 @@ function Page-Dialog($c) {
   $w = $null
   try { $w = $AE::FromHandle([IntPtr][int64]$c.hwnd) } catch { return $null }
   try {
+    # Claude for Chrome's permission card is the whole extension window (no inner dialog): the
+    # window itself, while it still shows the card's buttons.
+    if ($c.title -eq $ExtensionTitle) {
+      if (-not "$($w.Current.Name)".StartsWith($ExtensionTitle)) { return $null }
+      $names = @(Popup-Buttons $w | ForEach-Object { $_.Current.Name.Trim() })
+      if (($names -contains $ExtensionAllow) -and ($names -contains $ExtensionDecline)) { return $w }
+      return $null
+    }
     $cond = New-Object System.Windows.Automation.AndCondition(
       (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Window)),
       (New-Object System.Windows.Automation.PropertyCondition($AE::NameProperty, $c.title)))
