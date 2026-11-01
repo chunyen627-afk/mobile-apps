@@ -1089,7 +1089,9 @@ final class DeskRemoteUITests: XCTestCase {
     }
 
     private func reveal(_ element: XCUIElement) -> Bool {
-        let visible = { element.exists && element.isHittable && self.onScreen(element) }
+        // On screen first: asking an off-screen card's button whether it is hittable fails the
+        // test outright ("activation point invalid", CI 11/02).
+        let visible = { element.exists && self.onScreen(element) && element.isHittable }
         if poll(timeout: 2, visible) { return true }
         for _ in 0 ..< 4 {
             app.swipeDown()
