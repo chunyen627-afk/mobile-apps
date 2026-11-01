@@ -1109,7 +1109,7 @@ struct DeskPlanCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Button { withAnimation { open.toggle() } } label: {
+            Button { open.toggle() } label: {  // no animation: the closed line's text ghosted over the steps
                 HStack(spacing: 6) {
                     Image(systemName: open ? "chevron.down" : "chevron.right").font(.caption)
                     Image(systemName: done == items.count ? "checkmark.circle.fill" : "list.bullet.circle")
