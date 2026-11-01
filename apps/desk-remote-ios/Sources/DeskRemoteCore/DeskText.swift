@@ -175,7 +175,9 @@ public enum DeskText {
             return "跑的是 \(version.running ?? "?")，新版 \(pending) 已下載：按下面的「重新啟動以更新」才會換"
         }
         guard version.update, let running = version.running else {
-            return version.running == nil ? "版本 \(installed)（沒有開著）" : "版本 \(version.running ?? installed)"
+            if version.running == nil { return "版本 \(installed)（沒有開著）" }
+            let line = "版本 \(version.running ?? installed)"
+            return version.notice.map { "\(line)・\($0)" } ?? line
         }
         switch app {
         case .codex: return "跑的是 \(running)，新版 \(installed) 已裝好：電腦閒置 10 分鐘後自動重開"

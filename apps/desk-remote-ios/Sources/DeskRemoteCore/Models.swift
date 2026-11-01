@@ -78,6 +78,12 @@ public struct HelperState: Decodable, Equatable, Sendable {
         public let update: Bool
         /// Claude's downloaded version behind its "重新啟動以更新" button, which the phone may press.
         public let pending: String?
+        /// What to do at the PC for a newer version the phone cannot bring in (helper 0.5.30): Codex's
+        /// "有可用的更新", or a Claude download without a button. Shown after the version.
+        public let notice: String?
+
+        /// The line is drawn in orange: something newer is waiting.
+        public var newerWaiting: Bool { update || notice != nil }
     }
 
     /// One of the PC list's links: a conversation and the desktop app it is in.

@@ -55,7 +55,7 @@ struct DeskPCView: View {
                             if let state, let line = DeskText.versionLine(app, state.version(app)) {
                                 Text(line)
                                     .font(.footnote)
-                                    .foregroundStyle(state.version(app)?.update == true ? Color.orange : Color.secondary)
+                                    .foregroundStyle(state.version(app)?.newerWaiting == true ? Color.orange : Color.secondary)
                                     .accessibilityIdentifier("app-version-\(app.rawValue)")
                             }
                         }

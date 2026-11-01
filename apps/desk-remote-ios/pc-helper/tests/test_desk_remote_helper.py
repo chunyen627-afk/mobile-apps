@@ -1210,7 +1210,7 @@ class VersionTests(FakeEnvironment):
         watcher.check_versions(now=1061)
         self.assertEqual(hub.state()['versions']['codex'],
                          {'installed': '26.1023.6123.0', 'running': '26.1023.6123.0', 'update': False, 'pending': None,
-                          'downloaded': None})
+                          'downloaded': None, 'notice': None})
         watcher.check_versions(now=1400)
         self.assertEqual(driver.calls.count(('restart', 'codex')), 1)
 
@@ -1331,6 +1331,7 @@ class VersionTests(FakeEnvironment):
         watcher.check_versions(now=1100)
         shown = hub.state()['versions']['claude']
         self.assertEqual((shown['update'], shown['pending'], shown['downloaded']), (False, None, '4.4212.0'), shown)
+        self.assertEqual(shown['notice'], '新版 4.4212.0 已下載：到電腦上把 Claude 關掉再打開', 'after the version on the phone')
         self.assertEqual(len(sent), 1, sent)
         self.assertIn('4.4212.0', sent[0][1])
         self.assertIn('關掉再打開', sent[0][1])
@@ -1422,11 +1423,13 @@ class VersionTests(FakeEnvironment):
         self.assertEqual(len(sent), 1, sent)
         self.assertIn('Codex', sent[0][0])
         self.assertIn('有可用的更新', sent[0][1])
+        self.assertIn('有可用的更新', watcher.hub.state()['versions']['codex']['notice'], 'after the version on the phone')
         watcher.check_versions(now=1100)
         self.assertEqual(len(sent), 1, 'once while it shows')
         driver.fake_update = {}
         watcher.look('codex')
         watcher.check_versions(now=1200)
+        self.assertIsNone(watcher.hub.state()['versions']['codex']['notice'], 'gone with the button')
         driver.fake_update = {'codex': '有可用的更新'}
         watcher.look('codex')
         watcher.check_versions(now=1300)

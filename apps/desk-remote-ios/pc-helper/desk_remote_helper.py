@@ -2444,7 +2444,13 @@ class UiWatcher:
             running = (found.get('claude') or {}).get('running')
             downloaded = self.driver.downloaded_update('claude') if hasattr(self.driver, 'downloaded_update') else None
             if downloaded and running and version_key(downloaded)[:3] > version_key(running)[:3]:
-                found['claude'] = dict(found.get('claude') or {}, downloaded=downloaded)
+                found['claude'] = dict(found.get('claude') or {}, downloaded=downloaded,
+                                       notice=f'新版 {downloaded} 已下載：到電腦上把 Claude 關掉再打開')
+        codex_button = (self.current('codex') or {}).get('update')
+        notify_only = (self.hub.strings.get('codex') or {}).get('update_notify') or []
+        if codex_button in notify_only:
+            # Shown after the version on the phone's PC page too, not only as a notification (11/01).
+            found['codex'] = dict(found.get('codex') or {}, notice=f'有新版：到電腦上按 Codex 左下角的「{codex_button}」')
         with self.lock:
             self.versions = found
         claude = found.get('claude') or {}
@@ -2456,8 +2462,6 @@ class UiWatcher:
             self.send('🆕 Claude 桌面版有新版', f"{self.pc_name}・新版 {new}，目前跑的是 {claude.get('running')}；{how}"
                       '（會關掉裡面的 Claude Code 工作，所以不自動做）', 3, ['new'], open_link(self.pc_name))
         codex = found.get('codex') or {}
-        codex_button = (self.current('codex') or {}).get('update')
-        notify_only = (self.hub.strings.get('codex') or {}).get('update_notify') or []
         if codex_button in notify_only:
             # Codex's sidebar "update available" (home PC 11/01): only told, once while it shows,
             # to be done at the PC like Claude's (the user's choice 10/30).
@@ -2521,7 +2525,8 @@ class UiWatcher:
         with self.lock:
             return {app: {'installed': info.get('installed'), 'running': info.get('running'),
                           'update': bool(info.get('old') or info.get('pending')), 'pending': info.get('pending'),
-                          'downloaded': info.get('downloaded')}  # ready in Claude's log, no button: done at the PC
+                          'downloaded': info.get('downloaded'),  # ready in Claude's log, no button: done at the PC
+                          'notice': info.get('notice')}  # what to do at the PC, shown after the version (0.5.30)
                     for app, info in self.versions.items()}
 
     def update_target(self, app):
@@ -4294,7 +4299,7 @@ def main(argv=None):
         if args.fake_popup:
             driver.fake_popups = [dict(FAKE_POPUP)]
         if args.fake_update:
-            driver.fake_update = {'claude': '重新啟動以更新 v4.30.0'}
+            driver.fake_update = {'claude': '重新啟動以更新 v4.30.0', 'codex': '有可用的更新'}
             driver.fake_update_guard = True  # Claude Code is "working": Claude asks first
             driver.fake_versions = {'claude': ('3.6556.2.0', '3.6556.2.0'), 'codex': ('26.1023.6123.0', '26.1023.6123.0')}
         runner = build_driving(hub, driver, None, cfg['pc_name'], cfg, interval=1, verify_seconds=10)

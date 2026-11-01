@@ -780,6 +780,9 @@ final class DeskRemoteUITests: XCTestCase {
         XCTAssertTrue(reveal(button), "no update button for Claude's downloaded version")
         XCTAssertTrue(button.label.contains("4.30.0"), "the button does not name the version: \(said(button))")
         XCTAssertTrue(element("app-row-claude").label.contains("已下載"), "the Claude row does not say: \(said(element("app-row-claude")))")
+        // Codex's own "有可用的更新" is only done at the PC: named after its version (helper 0.5.30, 11/01).
+        XCTAssertTrue(element("app-row-codex").label.contains("左下角的「有可用的更新」"),
+                      "the Codex row does not say: \(said(element("app-row-codex")))")
         snapshot("38a-update-waiting")
         let note = element("claude-update-note")
         func pressUpdate() {
