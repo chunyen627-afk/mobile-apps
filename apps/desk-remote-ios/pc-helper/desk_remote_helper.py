@@ -38,7 +38,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.30'
+VERSION = '0.5.31'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -1422,13 +1422,14 @@ class Notifier:
 
 class AuthGate:
     """Shared token, constant-time compare. Five wrong tokens within ten minutes lock every /v1
-    request for ten minutes, even with the right token, and send one ntfy message."""
+    request for ten minutes, even with the right token. Logged, not sent to the phone (only what
+    waits on the user's approval is, 11/02)."""
 
     MAX_FAILURES, LOCK = 5, 600
 
-    def __init__(self, token, notify=None, pc_name='', clock=time.monotonic):
+    def __init__(self, token, clock=time.monotonic):
         self.token = token.encode('utf-8')
-        self.notify, self.pc_name, self.clock = notify, pc_name, clock
+        self.clock = clock
         self.lock = threading.Lock()
         self.failures, self.locked_until = [], 0.0
 
@@ -1447,16 +1448,8 @@ class AuthGate:
                 self.locked_until, self.failures = now + self.LOCK, []
         if locked:
             logging.warning('locked after repeated wrong tokens')
-            if self.notify:
-                threading.Thread(target=self._notify_lock, daemon=True).start()
             return 429, error('locked-out', '密碼錯誤太多次，已暫停 10 分鐘')
         return 401, error('unauthorized', '連線密碼不正確')
-
-    def _notify_lock(self):
-        try:
-            self.notify(f'🔒 桌面遙控：{self.pc_name} 已鎖定', '連線密碼連續錯誤 5 次，10 分鐘內拒絕所有請求。', 4, ['lock'])
-        except OSError:
-            logging.exception('lock notification failed')
 
 
 def error(code, message):
@@ -1843,16 +1836,17 @@ class MemoryWatch:
     """Windows' commit charge, once a minute (asked 11/01 after Steam's handle leak filled it and
     the screen flashed). Near the limit it frees what is known to be safe to restart: Steam
     holding a leak's worth of handles (asked to shut down; not started again) and this helper's
-    own screen worker. Anything else is only named on the phone: the user decides what to close
+    own screen worker. Anything else is only named on the phone's PC page, without a notification
+    (11/02: only what waits on the user's approval is sent): the user decides what to close
     (games, the desktop apps and the miners are never ended from here)."""
 
-    HIGH, CLEAR = 85, 75             # percent of the limit: act and tell at HIGH, all clear below CLEAR
+    HIGH, CLEAR = 85, 75             # percent of the limit: act at HIGH, all clear below CLEAR
     STEAM_HANDLES = 100_000          # Steam normally holds a few thousand; 2.47 million when it leaked
     WORKER_BYTES, WORKER_HANDLES = 600 * 2 ** 20, 15_000
 
-    def __init__(self, pc_name, send, worker=None, charge=commit_charge, processes=process_list,
+    def __init__(self, pc_name, worker=None, charge=commit_charge, processes=process_list,
                  steam=close_steam, clock=time.monotonic, wall=None):
-        self.pc_name, self.send, self.worker = pc_name, send, worker
+        self.pc_name, self.worker = pc_name, worker
         self.charge, self.processes, self.steam = charge, processes, steam
         self.clock, self.wall = clock, wall or (lambda: datetime.now(UTC))
         self.checked = None
@@ -1926,9 +1920,7 @@ class MemoryWatch:
             return
         self.told = True
         names = '、'.join(f"{p['name']} {p['bytes'] / 2 ** 30:.1f} GB" for p in top)
-        self.send('⚠️ 電腦記憶體快滿了', f'{self.pc_name}・已用 {percent:.0f}%（{reading[0] / 2 ** 30:.0f}／'
-                  f'{reading[1] / 2 ** 30:.0f} GB）。用最多的：{names}；沒有可以安全自動關的，請把其中不用的程式關掉',
-                  4, ['warning'], open_link(self.pc_name))
+        logging.warning('memory: %.0f%% used, nothing safe to close; biggest: %s', percent, names)
 
 
 class UiaWorker:
@@ -2520,9 +2512,11 @@ class UiWatcher:
 
     def check_popups(self, notify=True):
         """A window that pops up and waits for an answer (a firewall question, found 10/29) keeps
-        the desktop apps from coming to the front, so messages cannot be sent: tell the phone once
-        per window, and let it press one of the window's buttons. Returns the windows; `notify`
-        False when the phone is already looking (it pressed the button that opened the window)."""
+        the desktop apps from coming to the front, so messages cannot be sent: list it for the phone
+        and let it press one of the window's buttons. Only one asking for permission (a button in
+        ui_strings' popups.permission) is sent, once per window (11/02: notifications only for what
+        waits on the user's approval). Returns the windows; `notify` False when the phone is
+        already looking (it pressed the button that opened the window)."""
         if not hasattr(self.driver, 'popups'):
             return []
         try:
@@ -2548,11 +2542,13 @@ class UiWatcher:
         presence = self.hub.presence.snapshot() if any(p['page'] for p in listed) else {}
         away = presence.get('locked') or (presence.get('idleSeconds') or 0) >= 60
         quiet = not notify or time.monotonic() < self.quiet_popups_until
+        asks = (self.hub.strings.get('popups') or {}).get('permission') or []
         for popup in listed:
-            if popup['id'] not in known and not quiet and (away or not popup['page']):
+            permission = any(word in button for button in popup['buttons'] for word in asks)
+            if popup['id'] not in known and not quiet and permission and (away or not popup['page']):
                 name = popup['title'] or popup['process']
                 detail = popup['text'].replace('\n', ' ')[:100] or popup['process']
-                self.send(f'🪟 電腦跳出視窗：{name}', f'{self.pc_name}・{detail}；打開桌面遙控選要按的按鈕', 4, ['window'],
+                self.send(f'🪟 電腦跳出視窗在等你允許：{name}', f'{self.pc_name}・{detail}；打開桌面遙控選要按的按鈕', 4, ['window'],
                           open_link(self.pc_name))
         return listed
 
@@ -2635,8 +2631,7 @@ class UiWatcher:
         if key not in self.context_alerted:
             self.context_alerted.add(key)
             if self.checked_once:  # already past it when the helper started: not news
-                self.send(f'⚠️ {APP_NAMES[app]} 上下文快滿了', f'{self.pc_name}・「{row["title"]}」已用 {percent}%', 4,
-                          ['warning'], link)
+                self.note(f'{APP_NAMES[app]} context at {percent}%', row['title'])
 
     def check_usage(self):
         """Once per window when a plan limit passes the threshold (again after it resets)."""
@@ -2651,17 +2646,22 @@ class UiWatcher:
                     if not self.usage_checked_once:
                         continue  # already past it when the helper started: not news
                     reset = window.get('resetsText') or ''
-                    self.send(f'⚠️ {APP_NAMES[app]} 額度已用 {window["percent"]}%',
-                              f'{self.pc_name}・{window["label"]}{"・" + reset if reset else ""}', 4, ['warning'],
-                              open_link(self.pc_name))
+                    self.note(f'{APP_NAMES[app]} usage at {window["percent"]}%', f'{window["label"]} {reset}'.strip())
         self.usage_checked_once = True
 
     def send(self, title, message, priority, tags, click=None):
+        """To the phone: only for what waits on the user's approval (a permission prompt, a
+        question, UAC, a permission pop-up; asked 11/02). Everything else is shown on the phone's
+        pages and goes through note()."""
         if self.notify:
             try:
                 self.notify(title, message, priority, tags, click)
             except OSError:
                 logging.exception('notification failed: %s', title)
+
+    @staticmethod
+    def note(what, detail=''):
+        logging.info('not notified: %s %s', what, detail)
 
     RESTART_IDLE = 600  # seconds nobody has touched the PC before Codex is restarted into a new version
 
@@ -2705,18 +2705,15 @@ class UiWatcher:
         new = claude.get('pending') or claude.get('downloaded') or (claude['installed'] if claude.get('old') else None)
         if new and ('claude', new) not in self.update_told:
             self.update_told.add(('claude', new))
-            how = ('到電腦上按 Claude 畫面裡的「重新啟動以更新」（或在手機的電腦頁按）' if claude.get('pending')
-                   else '到電腦上把 Claude 關掉再打開就會換成新版（它沒有顯示更新按鈕）')
-            self.send('🆕 Claude 桌面版有新版', f"{self.pc_name}・新版 {new}，目前跑的是 {claude.get('running')}；{how}"
-                      '（會關掉裡面的 Claude Code 工作，所以不自動做）', 3, ['new'], open_link(self.pc_name))
+            how = 'restart button shown' if claude.get('pending') else 'needs a close and start'
+            self.note(f'claude {new} waiting', how)
         codex = found.get('codex') or {}
         if codex_button in notify_only:
-            # Codex's sidebar "update available" (home PC 11/01): only told, once while it shows,
-            # to be done at the PC like Claude's (the user's choice 10/30).
+            # Codex's sidebar "update available" (home PC 11/01): only shown after the version, to
+            # be done at the PC like Claude's (the user's choice 10/30; no notification since 11/02).
             if ('codex', codex_button) not in self.update_told:
                 self.update_told.add(('codex', codex_button))
-                self.send('🆕 Codex 桌面版有新版', f"{self.pc_name}・目前跑的是 {codex.get('running')}；"
-                          f'到電腦上按 Codex 左下角的「{codex_button}」', 3, ['new'], open_link(self.pc_name))
+                self.note('codex update waiting', codex.get('running'))
             return
         for name in notify_only:
             self.update_told.discard(('codex', name))  # Gone: the next one is told again.
@@ -2745,12 +2742,10 @@ class UiWatcher:
             except ActionError as exc:
                 logging.warning('restarting codex failed: %s %s', exc.code, exc.message)
                 self.update_told.add(('codex', version))
-                self.send('⚠️ Codex 換新版時沒能重新開起來', f'{self.pc_name}・新版 {version}；請在電腦上打開 Codex'
-                          '（或在手機點進 Codex 的對話清單，會試著叫出來）', 4, ['warning'], open_link(self.pc_name))
+                self.note('codex did not start again after its update', version)
         elif tried is not None and now - tried > 180 and ('codex', version) not in self.update_told:
             self.update_told.add(('codex', version))
-            self.send('⚠️ Codex 沒能重開成新版', f"{self.pc_name}・新版 {version} 已裝好，但還在跑 {codex['running']}；"
-                      '可在電腦上結束 Codex 再打開', 4, ['warning'], open_link(self.pc_name))
+            self.note(f"codex still runs {codex['running']}", f'{version} installed')
 
     def codex_restartable(self):
         """Nothing is lost by ending Codex now: nobody at the PC for RESTART_IDLE seconds, no
@@ -3097,23 +3092,10 @@ class ActionRunner:
             self.presence.end_own()
 
     def tell(self, action, failed=False):
-        """Only a failure goes to ntfy: the phone that asked already shows each success (the user
-        asked on 10/27 not to be notified of what they did themselves). Opening the desktop app
-        is asked for by the phone on its own, which shows how it went."""
-        if not self.notify or not failed or action['kind'] == 'launch':
-            return
-        verb = {'send': '送出訊息', 'permission': '回覆權限', 'new': '開新對話', 'open': '打開對話',
-                'answer': '回答選項題', 'model': '切換模型', 'effort': '切換推理強度', 'mode': '切換權限模式',
-                'stop': '停止', 'popup': '按電腦上的視窗', 'fast': '切換快速模式', 'update': '更新桌面版'}[action['kind']]
-        title = (action.get('info') or {}).get('title') or action.get('title') or ''
-        head = f"⚠️ 手機{verb}失敗" + (f"：{APP_NAMES[action['app']]}" if action['app'] in APP_NAMES else '')
-        body = f"{self.pc_name}・「{title}」：{action['message']}"
-        session_id = action.get('sessionId')
-        try:
-            self.notify(head, body, 4, ['iphone'],
-                        open_link(self.pc_name, action['app'], session_id, title) if session_id else open_link(self.pc_name))
-        except OSError:
-            logging.exception('action notification failed')
+        """Logged only: the phone that asked shows how each action went (no notification for
+        what the user did themselves, 10/27; none for its failures either since 11/02)."""
+        if failed:
+            logging.info('phone %s failed: %s', action['kind'], action['message'])
 
     def recheck(self, action, needs_front=True):
         denied = self.gate(action['force'], needs_front)
@@ -4565,7 +4547,7 @@ def main(argv=None):
             # that the phone restarts into (11/01).
             leak = [{'pid': 7, 'name': 'steam', 'path': 'steam.exe', 'bytes': 2 ** 30, 'handles': 2_470_000},
                     {'pid': 8, 'name': 'game', 'path': 'game.exe', 'bytes': 12 * 2 ** 30, 'handles': 900}]
-            hub.ram = MemoryWatch(cfg['pc_name'], lambda *a: None, charge=lambda: (164 * 2 ** 30, 178 * 2 ** 30),
+            hub.ram = MemoryWatch(cfg['pc_name'], charge=lambda: (164 * 2 ** 30, 178 * 2 ** 30),
                                   processes=lambda: leak, steam=lambda processes: 'shut-down')
             disk = ['9.9.9']
             hub.disk_version = lambda: disk[0]
@@ -4594,14 +4576,14 @@ def main(argv=None):
         driver = WindowsDriver(load_strings())
         runner = build_driving(hub, driver, notify, pc_name, cfg, interval=4, verify_seconds=20,
                                memory=path.parent / 'usage_seen.json')
-        hub.ram = MemoryWatch(pc_name, notify or (lambda *a: None), worker=driver.worker)
+        hub.ram = MemoryWatch(pc_name, worker=driver.worker)
         hub.restart = lambda: restart_helper(driver.worker)
     submit = Path((cfg.get('elevate') or {}).get('submit_file') or elevate.submit_file())
     if submit.exists():  # written by install-elevated.ps1 (run once as administrator)
         port, token = elevate.load_submit(submit)
         hub.elevate = ElevateRelay(lambda message: elevate.call(port, dict(message, token=token)), notify, pc_name)
         threading.Thread(target=hub.elevate.run_forever, daemon=True).start()
-    gate = AuthGate(cfg['token'], notify, pc_name)
+    gate = AuthGate(cfg['token'])
     return serve(hub, gate, cfg, networks, runner)
 
 
