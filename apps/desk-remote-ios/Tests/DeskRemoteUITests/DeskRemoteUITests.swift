@@ -883,6 +883,24 @@ final class DeskRemoteUITests: XCTestCase {
         snapshot("40-tools-open")
     }
 
+    func test41TaskListShowsUnderTheChat() throws {
+        try launchWithHelper()
+        openChat("claude", claudeA)
+        XCTAssertTrue(text("整理好了，安裝段落改成三步").waitForExistence(timeout: 10), "chat did not load")
+        let input = element("chat-input")
+        input.tap()
+        input.typeText("計畫 做三件事")
+        app.buttons["chat-send"].tap()
+        let card = element("plan-card")
+        XCTAssertTrue(card.waitForExistence(timeout: 20), "the task list did not show")
+        XCTAssertTrue(card.label.contains("任務 1/3") && card.label.contains("改程式"), "the card says: \(card.label)")
+        snapshot("41-plan-closed")
+        card.tap()
+        XCTAssertTrue(poll(timeout: 5) { self.app.descendants(matching: .any).matching(identifier: "plan-item").count == 3 },
+                      "the steps did not open")
+        snapshot("41-plan-open")
+    }
+
     // MARK: - Helpers
 
     /// How many photos the fake helper's transcript of `session` holds from the user.

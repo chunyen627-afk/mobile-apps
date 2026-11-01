@@ -53,6 +53,8 @@ public struct TranscriptLog: Equatable, Sendable, Codable {
     public private(set) var prompt: PermissionPrompt?
     public private(set) var question: OptionQuestion?
     public private(set) var suggestions: ReplySuggestions?
+    /// The task list under the latest message, as the page last said.
+    public private(set) var plan: [PlanItem]?
     /// Model, effort and context use; kept when a page (from an older helper) has none.
     public private(set) var meta: ConversationMeta?
     public private(set) var loaded = false
@@ -61,7 +63,7 @@ public struct TranscriptLog: Equatable, Sendable, Codable {
     static let maxEvents = 1000
 
     enum CodingKeys: String, CodingKey {
-        case events, epoch, cursor, earlier, status, prompt, question, suggestions, meta
+        case events, epoch, cursor, earlier, status, prompt, question, suggestions, meta, plan
     }
 
     public init() {}
@@ -77,6 +79,7 @@ public struct TranscriptLog: Equatable, Sendable, Codable {
         prompt = try c.decodeIfPresent(PermissionPrompt.self, forKey: .prompt)
         question = try c.decodeIfPresent(OptionQuestion.self, forKey: .question)
         suggestions = try c.decodeIfPresent(ReplySuggestions.self, forKey: .suggestions)
+        plan = try c.decodeIfPresent([PlanItem].self, forKey: .plan)
         meta = try c.decodeIfPresent(ConversationMeta.self, forKey: .meta)
         rows = Self.group(events)
         loaded = true
@@ -87,7 +90,7 @@ public struct TranscriptLog: Equatable, Sendable, Codable {
     /// visible changed.
     @discardableResult
     public mutating func apply(_ page: EventPage) -> Bool {
-        let waitingBefore = (question, suggestions, meta)
+        let waitingBefore = (question, suggestions, meta, plan)
         let before = (events.last?.seq, events.count, prompt, status, earlier, loaded)
         let regroup = page.reset || page.epoch != epoch || rows.isEmpty
         if page.reset || page.epoch != epoch {
@@ -107,13 +110,14 @@ public struct TranscriptLog: Equatable, Sendable, Codable {
         prompt = page.prompt
         question = page.question
         suggestions = page.suggestions
+        plan = page.plan
         if let pageMeta = page.meta { meta = pageMeta }
         loaded = true
         if regroup || (events.last?.seq, events.count) != (before.0, before.1) {
             rows = Self.group(events)
         }
         let after = (events.last?.seq, events.count, prompt, status, earlier, loaded)
-        return before != after || waitingBefore != (question, suggestions, meta)
+        return before != after || waitingBefore != (question, suggestions, meta, plan)
     }
 
     /// Whether a user message starting like `text` arrived after event `seq`: a message sent

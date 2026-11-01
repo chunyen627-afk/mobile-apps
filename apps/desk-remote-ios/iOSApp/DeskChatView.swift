@@ -183,6 +183,10 @@ struct DeskChatView: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
+                // The task list under the latest message, as the desktop keeps it (asked 11/1).
+                if let plan = log.plan, !plan.isEmpty {
+                    DeskPlanCard(items: plan)
+                }
                 if let suggestions = log.suggestions, pending.isEmpty, log.question == nil, log.prompt == nil {
                     DeskQuickReplies(suggestions: suggestions) { reply in submit(reply.message) }
                 }
@@ -1067,21 +1071,81 @@ struct DeskQuickReplies: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
+            // The next-step box as the desktop draws it: recap, question, reply buttons.
+            if let recap = suggestions.recap {
+                Text(recap).font(.footnote).lineLimit(4)
+                    .accessibilityIdentifier("next-step-recap")
+            }
             if let ask = suggestions.ask {
                 Text(ask).font(.caption).foregroundStyle(.secondary).lineLimit(2)
             }
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(suggestions.replies, id: \.self) { reply in
-                        Button(reply.label) { send(reply) }
-                            .buttonStyle(.bordered)
-                            .accessibilityIdentifier("quick-reply-\(reply.label)")
+            if !suggestions.replies.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(suggestions.replies, id: \.self) { reply in
+                            Button(reply.label) { send(reply) }
+                                .buttonStyle(.bordered)
+                                .accessibilityIdentifier("quick-reply-\(reply.label)")
+                        }
                     }
                 }
             }
         }
         .padding(.horizontal, 12)
         .padding(.top, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.bar)
+    }
+}
+
+/// The task list the desktop app keeps under the latest message: one line with the step in
+/// progress and the count, opened to see every step with its tick.
+struct DeskPlanCard: View {
+    let items: [PlanItem]
+    @State private var open = false
+
+    private var done: Int { items.filter { $0.status == "completed" }.count }
+    private var current: String? { items.first { $0.status == "in_progress" }?.content }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button { withAnimation { open.toggle() } } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: open ? "chevron.down" : "chevron.right").font(.caption)
+                    Image(systemName: done == items.count ? "checkmark.circle.fill" : "list.bullet.circle")
+                        .font(.caption)
+                        .foregroundStyle(done == items.count ? Color.green : Color.accentColor)
+                    Text("任務 \(done)/\(items.count)").font(.caption.bold())
+                    if !open, let current {
+                        Text(current).font(.caption).lineLimit(1)
+                    } else if !open, done == items.count {
+                        Text("全部完成").font(.caption)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("plan-card")
+            if open {
+                ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                    HStack(alignment: .top, spacing: 6) {
+                        Image(systemName: item.status == "completed" ? "checkmark.circle.fill"
+                              : (item.status == "in_progress" ? "circle.dotted" : "circle"))
+                            .font(.caption)
+                            .foregroundStyle(item.status == "completed" ? Color.green
+                                             : (item.status == "in_progress" ? Color.accentColor : Color.secondary))
+                        Text(item.content)
+                            .font(.caption)
+                            .foregroundStyle(item.status == "completed" ? Color.secondary : Color.primary)
+                            .strikethrough(item.status == "completed", color: .secondary)
+                    }
+                    .accessibilityIdentifier("plan-item")
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.bar)
     }

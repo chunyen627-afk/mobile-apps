@@ -335,6 +335,26 @@ public struct ReplySuggestions: Codable, Equatable, Sendable {
 
     public let ask: String?
     public let replies: [Reply]
+    /// The box's recap of what the turn did (helper 0.5.29); shown above the question.
+    public let recap: String?
+
+    public init(ask: String?, replies: [Reply], recap: String? = nil) {
+        self.ask = ask
+        self.replies = replies
+        self.recap = recap
+    }
+}
+
+/// One step of the task list the desktop app keeps under the latest message (helper 0.5.29).
+public struct PlanItem: Codable, Equatable, Hashable, Sendable {
+    public let content: String
+    /// "pending", "in_progress" or "completed".
+    public let status: String
+
+    public init(content: String, status: String) {
+        self.content = content
+        self.status = status
+    }
 }
 
 /// `GET /v1/{app}/sessions/{id}/events`.
@@ -351,15 +371,18 @@ public struct EventPage: Decodable, Equatable, Sendable {
     public let suggestions: ReplySuggestions?
     /// Missing from helpers before 0.4.0.
     public let meta: ConversationMeta?
+    /// The task list under the latest message (helper 0.5.29); nil from older helpers or without one.
+    public let plan: [PlanItem]?
 
     public init(epoch: String, reset: Bool, events: [TranscriptEvent], earlier: Bool, cursor: Int, status: String,
                 prompt: PermissionPrompt?, question: OptionQuestion? = nil, suggestions: ReplySuggestions? = nil,
-                meta: ConversationMeta? = nil) {
+                meta: ConversationMeta? = nil, plan: [PlanItem]? = nil) {
         self.epoch = epoch
         self.reset = reset
         self.events = events
         self.earlier = earlier
         self.cursor = cursor
+        self.plan = plan
         self.status = status
         self.prompt = prompt
         self.question = question

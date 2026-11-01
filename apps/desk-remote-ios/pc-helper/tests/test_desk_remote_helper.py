@@ -1650,6 +1650,33 @@ class PopupTests(FakeEnvironment):
         self.assertIn('覆蓋了電腦輸入框裡原本沒送出的 8 個字', status['message'])
         self.assertNotIn('半句話', status['message'])
 
+    def test_the_task_list_and_the_next_step_recap_reach_the_phone(self):
+        """update_plan calls become the task list (no tool row), advanced step by step; the
+        wrap-up checks it off and carries its recap (asked 11/1, like the desktop)."""
+        transcript = h.Transcript(self.fake.root / 'nowhere.jsonl', h.ClaudeParser)
+        def use(name, data):
+            for event in transcript.parser.feed({'type': 'assistant', 'message': {'role': 'assistant', 'content': [
+                    {'type': 'tool_use', 'id': 'x', 'name': name, 'input': data}]}}):
+                transcript.add(event)
+        use('mcp__ccd_turn__update_plan', {'items': [{'content': '讀設定', 'status': 'in_progress'},
+                                                      {'content': '改程式', 'status': 'pending'},
+                                                      {'content': '跑測試', 'status': 'pending'}], 'scope': 'first_task'})
+        self.assertEqual(transcript.page(0, '')['events'], [], 'the plan is not a tool row')
+        self.assertEqual([i['status'] for i in transcript.page(0, '')['plan']], ['in_progress', 'pending', 'pending'])
+        use('mcp__ccd_turn__update_plan', {'advance': True})
+        self.assertEqual([i['status'] for i in transcript.parser.plan], ['completed', 'in_progress', 'pending'])
+        use('mcp__ccd_turn__update_plan', {'done': [2], 'start': 3})
+        self.assertEqual([i['status'] for i in transcript.parser.plan], ['completed', 'completed', 'in_progress'])
+        use('mcp__ccd_turn__wrap_up', {'recap': '都改好了，還沒發布。', 'ask': '要發布嗎？',
+                                       'actions': [{'label': '發布'}, {'label': '先不發'}]})
+        page = transcript.page(0, '')
+        self.assertEqual([i['status'] for i in page['plan']], ['completed'] * 3)
+        self.assertEqual(page['suggestions'], {'ask': '要發布嗎？', 'recap': '都改好了，還沒發布。',
+                                               'replies': [{'label': '發布', 'message': '發布'}, {'label': '先不發', 'message': '先不發'}]})
+        # A wrap-up with a recap but no reply buttons still shows its recap.
+        self.assertEqual(h.suggestions_from({'recap': '完成了。'}), {'ask': None, 'replies': [], 'recap': '完成了。'})
+        self.assertIsNone(h.suggestions_from({'actions': [{'label': 'x', 'action': 'commit'}]}))
+
     def test_pictures_in_the_transcript_are_kept_for_the_phone(self):
         """A photo the person sent and a screenshot a tool returned (10/31: the phone showed only
         "[圖片]") travel as image ids on the events; the bytes come from the images endpoint."""

@@ -38,7 +38,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.28'
+VERSION = '0.5.29'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -362,7 +362,8 @@ def question_from(tool_id, data):
 
 
 def suggestions_from(data):
-    """Reply buttons of the next-step box: only those that send words, not app actions."""
+    """The next-step box: its recap (shown since 11/1, as the desktop does), its question and
+    the reply buttons that send words (not app actions). None when it has none of those."""
     if not isinstance(data, dict):
         return None
     replies = []
@@ -370,7 +371,49 @@ def suggestions_from(data):
         if not isinstance(action, dict) or action.get('action') or not action.get('label'):
             continue
         replies.append({'label': str(action['label']), 'message': str(action.get('message') or action['label'])})
-    return {'ask': data.get('ask') or None, 'replies': replies} if replies else None
+    recap = data.get('recap') if isinstance(data.get('recap'), str) and data.get('recap').strip() else None
+    if not replies and not recap:
+        return None
+    return {'ask': data.get('ask') or None, 'replies': replies, 'recap': recap}
+
+
+def is_plan(name):
+    """The desktop app's task list under the latest message (update_plan)."""
+    return name == 'update_plan' or name.endswith('__update_plan')
+
+
+def plan_apply(plan, data):
+    """The task list after one update_plan call: `items` replaces it; `advance` completes the
+    step in progress and starts the next pending one; `done` (1-based) completes steps and
+    `start` starts one. Items are [{'content', 'status'}]; None when there is no list."""
+    if not isinstance(data, dict):
+        return plan
+    if isinstance(data.get('items'), list):
+        plan = [{'content': str(item.get('content') or ''), 'status': str(item.get('status') or 'pending')}
+                for item in data['items'] if isinstance(item, dict) and item.get('content')]
+        return plan or None
+    if not plan:
+        return plan
+    plan = [dict(item) for item in plan]
+    if data.get('advance'):
+        current = next((i for i, item in enumerate(plan) if item['status'] == 'in_progress'), None)
+        if current is not None:
+            plan[current]['status'] = 'completed'
+        following = next((i for i, item in enumerate(plan) if item['status'] == 'pending'), None)
+        if following is not None:
+            plan[following]['status'] = 'in_progress'
+    for index in data.get('done') or []:
+        if isinstance(index, int) and 1 <= index <= len(plan):
+            plan[index - 1]['status'] = 'completed'
+    start = data.get('start')
+    if isinstance(start, int) and 1 <= start <= len(plan):
+        plan[start - 1]['status'] = 'in_progress'
+    return plan
+
+
+def plan_finished(plan):
+    """The task list once the turn's wrap-up checks it off."""
+    return [dict(item, status='completed') for item in plan] if plan else plan
 
 
 class ClaudeParser:
@@ -386,6 +429,7 @@ class ClaudeParser:
         self.queued = []  # messages Claude accepted but holds, e.g. while a question is pending
         self.question = None
         self.suggestions = None
+        self.plan = None  # the task list under the latest message: [{'content', 'status'}]
         self.model = None
         self.context = None  # tokens the last reply was given: its input plus cache reads and writes
 
@@ -477,6 +521,9 @@ class ClaudeParser:
                     self.question = question_from(block.get('id'), block.get('input'))
                 elif is_wrap_up(name):
                     self.suggestions = suggestions_from(block.get('input'))
+                    self.plan = plan_finished(self.plan)  # the wrap-up checks the list off
+                elif is_plan(name):
+                    self.plan = plan_apply(self.plan, block.get('input'))  # shown as a card, not a tool row
                 else:
                     out.append({'kind': 'tool_call', 'tool': name, 'text': summarize_input(name, block.get('input')),
                                 'ts': ts})
@@ -712,7 +759,8 @@ class Transcript:
         """Events after `after` in the same epoch, or the latest page with reset=True."""
         with self.lock:
             waiting = {'question': getattr(self.parser, 'question', None),
-                       'suggestions': getattr(self.parser, 'suggestions', None)}
+                       'suggestions': getattr(self.parser, 'suggestions', None),
+                       'plan': getattr(self.parser, 'plan', None)}
             if epoch != self.epoch or after <= 0 or after > self.seq:
                 events = self.events[-FIRST_PAGE:]
                 earlier = self.earlier or len(self.events) > len(events)
@@ -728,7 +776,9 @@ class Transcript:
         with self.lock:
             question = getattr(self.parser, 'question', None)
             suggestions = getattr(self.parser, 'suggestions', None)
-            return ((question or {}).get('questionId'), json.dumps(suggestions, sort_keys=True, ensure_ascii=False))
+            plan = getattr(self.parser, 'plan', None)
+            return ((question or {}).get('questionId'), json.dumps(suggestions, sort_keys=True, ensure_ascii=False),
+                    json.dumps(plan, sort_keys=True, ensure_ascii=False))
 
     def item(self, item_id):
         with self.lock:
@@ -4008,6 +4058,8 @@ class FakeDriver:
             reply += FAKE_TABLE
         if '多工具' in text and app == 'claude':  # a few tool calls before the reply (folded on the phone)
             self.write(app, path, 'tools', text)
+        if '計畫' in text and app == 'claude':  # a task list under the reply (a card on the phone)
+            self.write(app, path, 'plan', text)
         self.later(app, path, reply, delay, doc)
         return replaced
 
@@ -4066,6 +4118,13 @@ class FakeDriver:
                 lines = [{'timestamp': ts, 'type': 'event_msg', 'payload': {'type': 'task_started'}},
                          {'timestamp': ts, 'type': 'event_msg', 'payload': {'type': 'item_completed', 'item': {
                              'type': 'UserMessage', 'content': [{'type': 'input_image'}] * photos + blocks[photos:]}}}]
+        elif role == 'plan' and app == 'claude':
+            # The task list as the desktop writes it: an update_plan call, then its wrap-up later.
+            lines = [{'type': 'assistant', 'timestamp': ts, 'message': {'role': 'assistant', 'content': [
+                {'type': 'tool_use', 'id': 'fake-plan-' + secrets.token_hex(3), 'name': 'mcp__ccd_turn__update_plan',
+                 'input': {'items': [{'content': '讀設定檔', 'status': 'completed'},
+                                     {'content': '改程式', 'status': 'in_progress'},
+                                     {'content': '跑測試', 'status': 'pending'}], 'scope': 'first_task'}}]}}]
         elif role == 'tools' and app == 'claude':
             # Three tool calls in a row with their results (the phone folds them into one line).
             lines = []
