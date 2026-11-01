@@ -34,13 +34,25 @@ struct DeskSessionListView: View {
                 if list.sessions.isEmpty {
                     Text("沒有對話").foregroundStyle(.secondary)
                 }
-                ForEach(list.sessions) { session in
-                    NavigationLink(value: DeskRoute.chat(pcID, app, session)) {
-                        DeskSessionRow(session: session,
-                                       new: session.status != "active" && !store.opened.contains(session.id) && DeskText.isNewer(session.updatedAt ?? "", than: seenBefore))
+                // A section per day and conversations started from another one nested under it,
+                // as the desktop's sidebar shows them (asked 11/1).
+                ForEach(SessionTree.build(list.sessions).sections) { section in
+                    Section(SessionTree.dayLabel(section.day, today: SessionTree.dayKey(Date()))) {
+                        ForEach(section.rows) { row in
+                            NavigationLink(value: DeskRoute.chat(pcID, app, row.session)) {
+                                HStack(spacing: 0) {
+                                    if row.depth > 0 {
+                                        DeskTreeLine(depth: row.depth, last: row.last)
+                                    }
+                                    DeskSessionRow(session: row.session,
+                                                   new: row.session.status != "active" && !store.opened.contains(row.session.id)
+                                                        && DeskText.isNewer(row.session.updatedAt ?? "", than: seenBefore))
+                                }
+                            }
+                            .disabled(!row.session.hasTranscript)
+                            .accessibilityIdentifier("session-row-\(row.session.id)")
+                        }
                     }
-                    .disabled(!session.hasTranscript)
-                    .accessibilityIdentifier("session-row-\(session.id)")
                 }
             } else if failure == nil {
                 ProgressView()
@@ -95,6 +107,33 @@ struct DeskSessionListView: View {
             failure = text
             unreachable = DeskText.isConnectionFailure((error as? HelperFailure) ?? .unreachable)
         }
+    }
+}
+
+/// The branch lines in front of a nested conversation: a vertical line per level, an elbow
+/// into this row (the line stops at the last child).
+struct DeskTreeLine: View {
+    let depth: Int
+    let last: Bool
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(0 ..< depth, id: \.self) { level in
+                ZStack(alignment: .topLeading) {
+                    if level < depth - 1 {
+                        Rectangle().fill(Color.secondary.opacity(0.35)).frame(width: 1)
+                    } else {
+                        Rectangle().fill(Color.secondary.opacity(0.35)).frame(width: 1)
+                            .frame(maxHeight: last ? 14 : .infinity, alignment: .top)
+                        Rectangle().fill(Color.secondary.opacity(0.35)).frame(width: 10, height: 1)
+                            .offset(y: 13)
+                    }
+                }
+                .frame(width: 16)
+            }
+        }
+        .frame(maxHeight: .infinity)
+        .accessibilityHidden(true)
     }
 }
 

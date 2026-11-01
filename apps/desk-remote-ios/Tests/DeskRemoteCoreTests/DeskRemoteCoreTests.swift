@@ -218,6 +218,29 @@ final class TranscriptLogTests: XCTestCase {
         XCTAssertEqual(single.rows.map(\.id), ["m1", "t2", "m3"])
     }
 
+    func testSessionTreeNestsChildrenAndSplitsDays() throws {
+        let json = """
+        {"app": "claude", "sessions": [
+          {"id": "local_a", "title": "A", "updatedAt": "2026-11-01T01:00:00Z", "status": "idle", "hasTranscript": true},
+          {"id": "local_b", "title": "B", "updatedAt": "2026-10-31T23:00:00Z", "status": "idle", "hasTranscript": true},
+          {"id": "local_c", "title": "C", "updatedAt": "2026-10-31T10:00:00Z", "status": "idle", "hasTranscript": true, "parent": "local_a"},
+          {"id": "local_d", "title": "D", "updatedAt": "2026-10-30T10:00:00Z", "status": "idle", "hasTranscript": true, "parent": "local_c"},
+          {"id": "local_e", "title": "E", "updatedAt": "2026-10-29T10:00:00Z", "status": "idle", "hasTranscript": true, "parent": "local_missing"}
+        ]}
+        """
+        let list = try JSONDecoder().decode(SessionList.self, from: Data(json.utf8))
+        let utc = TimeZone(secondsFromGMT: 0)!
+        let tree = SessionTree.build(list.sessions, timeZone: utc)  // days are local; UTC here for a stable check
+        XCTAssertEqual(tree.sections.map { $0.rows.map { "\($0.session.title)\($0.depth)" } },
+                       [["A0", "C1", "D2"], ["B0"], ["E0"]])
+        XCTAssertEqual(tree.sections.flatMap { $0.rows }.map(\.last), [true, true, true, true, true])
+        XCTAssertEqual(SessionTree.localDay("2026-11-01T01:00:00Z", timeZone: utc), "2026-11-01")
+        XCTAssertEqual(SessionTree.dayLabel("2026-11-01", today: "2026-11-01"), "今天")
+        XCTAssertEqual(SessionTree.dayLabel("2026-10-31", today: "2026-11-01"), "昨天")
+        XCTAssertEqual(SessionTree.dayLabel("2026-10-29", today: "2026-11-01"), "10月29日")
+        XCTAssertEqual(SessionTree.dayLabel("", today: "2026-11-01"), "更早")
+    }
+
     func testPhotosSentTogetherShareOneBubble() {
         var log = TranscriptLog()
         log.apply(page("a", reset: true, [

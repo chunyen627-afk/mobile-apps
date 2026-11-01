@@ -231,6 +231,9 @@ public struct SessionSummary: Decodable, Equatable, Hashable, Identifiable, Send
     public let status: String
     public let permission: String?
     public let hasTranscript: Bool
+    /// The conversation this one was started from (a side session or a fork; helper 0.5.28),
+    /// shown nested under it like the desktop's sidebar.
+    public let parent: String?
 
     /// A conversation the phone just started, before the next list refresh describes it.
     public init(id: String, title: String) {
@@ -241,6 +244,7 @@ public struct SessionSummary: Decodable, Equatable, Hashable, Identifiable, Send
         status = "active"
         permission = nil
         hasTranscript = true
+        parent = nil
     }
 }
 

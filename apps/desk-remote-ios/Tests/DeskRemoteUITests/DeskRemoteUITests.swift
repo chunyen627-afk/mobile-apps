@@ -82,7 +82,10 @@ final class DeskRemoteUITests: XCTestCase {
         snapshot("05-claude-sessions")
         XCTAssertTrue(b.exists && c.exists, "conversations B or C missing")
         XCTAssertFalse(element("session-row-\(claudeArchived)").exists, "archived conversation must be hidden")
-        XCTAssertTrue(a.frame.minY < b.frame.minY && b.frame.minY < c.frame.minY, "not newest first")
+        XCTAssertFalse(element("session-row-local_77777777-7777-4777-8777-777777777777").exists, "a scheduled task's run must be hidden")
+        // C was started from A: nested right under it, indented, before B (asked 11/1).
+        XCTAssertTrue(a.frame.minY < c.frame.minY && c.frame.minY < b.frame.minY, "A, then its child C, then B expected")
+        XCTAssertGreaterThan(c.frame.minX, a.frame.minX + 8, "the child is not indented: \(c.frame) vs \(a.frame)")
         XCTAssertTrue(waitFor(a, labelContains: "最近有更新", timeout: 5), "A says \(a.label)")
         XCTAssertTrue(a.label.contains("demo-app"), "folder missing: \(a.label)")
         XCTAssertTrue(waitFor(b, labelContains: "需要處理", timeout: 5), "B says \(b.label)")

@@ -1,0 +1,11 @@
+{
+  "sessionId": "local_77777777-7777-4777-8777-777777777777",
+  "cliSessionId": "77777777-7777-4777-8777-777777777777",
+  "cwd": "C:\\work\\demo-app",
+  "title": "每日收益校正",
+  "_minutesAgo": 5,
+  "isArchived": false,
+  "permissionMode": "bypassPermissions",
+  "model": "claude-opus-5-5",
+  "scheduledTaskId": "demo-daily"
+}

@@ -94,8 +94,12 @@ class FakeEnvironment(unittest.TestCase):
 class ClaudeTests(FakeEnvironment):
     def test_list_is_newest_first_without_archived_and_reports_bad_files(self):
         rows = self.sources['claude'].list_sessions(50)
+        # The scheduled task's run ("每日收益校正", scheduledTaskId) is not listed (11/1).
         self.assertEqual([r['title'] for r in rows], ['整理專案 README', '修正建置錯誤', '選擇部署方式', '週報草稿'])
         self.assertEqual(self.sources['claude'].warning, 'Claude 對話清單有 1 個檔案無法解析')
+        # 週報草稿 was started from 整理專案 README (spawnedFrom): the phone nests it under A.
+        self.assertEqual({r['title']: r['parent'] for r in rows}['週報草稿'], A)
+        self.assertIsNone(rows[0]['parent'])
         first = rows[0]
         self.assertEqual(first['id'], A)
         self.assertEqual(first['folder'], 'demo-app')  # never the full path

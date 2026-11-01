@@ -38,7 +38,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.27'
+VERSION = '0.5.28'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -892,6 +892,8 @@ class ClaudeSource:
                 continue
             if data.get('isArchived'):
                 continue
+            if data.get('scheduledTaskId'):
+                continue  # a scheduled task's run: one a day per task floods the list (asked 11/1)
             rows.append(data)
         self.warning = f'Claude 對話清單有 {bad} 個檔案無法解析' if bad else None
         rows.sort(key=lambda d: d.get('lastActivityAt') or 0, reverse=True)
@@ -904,10 +906,15 @@ class ClaudeSource:
             elif path is not None and now - _mtime(path) < ACTIVE_SECONDS:
                 status = 'active'
             mode = data.get('permissionMode')
+            # The conversation this one was started from (a side session, or a fork), for the
+            # phone to nest it under, as the desktop's sidebar does (asked 11/1).
+            spawned = data.get('spawnedFrom') if isinstance(data.get('spawnedFrom'), dict) else {}
+            parent = spawned.get('sessionId') or data.get('forkedFromSessionId')
             out.append({'id': data['sessionId'], 'title': (data.get('title') or '').strip() or '（未命名）',
                         'folder': folder_name(data.get('cwd')), 'updatedAt': later_time(data.get('lastActivityAt'), path),
                         'status': status, 'permission': self.PERMISSION_LABELS.get(mode, mode),
-                        'hasTranscript': path is not None})
+                        'hasTranscript': path is not None,
+                        'parent': parent if isinstance(parent, str) and CLAUDE_ID.match(parent) else None})
         return out
 
 
