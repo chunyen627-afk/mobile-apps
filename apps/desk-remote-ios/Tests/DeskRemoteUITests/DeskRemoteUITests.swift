@@ -810,7 +810,7 @@ final class DeskRemoteUITests: XCTestCase {
         }
         // Claude Code is working (fake): Claude asks on the PC first, and the phone answers (10/30).
         pressUpdate()
-        XCTAssertTrue(waitFor(note, labelContains: "仍在處理中", timeout: 30), "the PC's question is not mentioned: \(said(note))")
+        XCTAssertTrue(waitFor(revealing: note, labelContains: "仍在處理中", timeout: 30), "the PC's question is not mentioned: \(said(note))")
         // The question is listed at the top of the PC page, above the memory rows (0.6.3): the
         // update button sits far below it, and a list builds only the rows on screen.
         let cancel = element("popup-button-取消")
@@ -840,7 +840,7 @@ final class DeskRemoteUITests: XCTestCase {
                       "result says \(said(element("popup-result")))")
         XCTAssertTrue(poll(timeout: 90) { !element("claude-update").exists }, "the button stays after updating")
         XCTAssertTrue(element("app-version-claude").label.contains("4.30.0"), "version: \(said(element("app-version-claude")))")
-        XCTAssertTrue(waitFor(note, labelContains: "已更新為 4.30.0", timeout: 20), "the note still talks of the question: \(said(note))")
+        XCTAssertTrue(waitFor(revealing: note, labelContains: "已更新為 4.30.0", timeout: 20), "the note still talks of the question: \(said(note))")
         snapshot("38d-updated")
     }
 
@@ -1076,6 +1076,15 @@ final class DeskRemoteUITests: XCTestCase {
     private func waitFor(_ element: XCUIElement, labelContains text: String, timeout: TimeInterval) -> Bool {
         poll(timeout: timeout) {
             element.exists && (element.label.contains(text) || ((element.value as? String)?.contains(text) ?? false))
+        }
+    }
+
+    /// Like waitFor, scrolling to the element while the list has not built it (the update note
+    /// sits below the fold on the longer PC page of 0.6.3, CI 11/02).
+    private func waitFor(revealing element: XCUIElement, labelContains text: String, timeout: TimeInterval) -> Bool {
+        poll(timeout: timeout) {
+            if !element.exists { _ = self.reveal(element) }
+            return element.exists && element.label.contains(text)
         }
     }
 
