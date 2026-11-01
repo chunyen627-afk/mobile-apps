@@ -175,12 +175,34 @@ public enum DeskText {
             return "跑的是 \(version.running ?? "?")，新版 \(pending) 已下載：按下面的「重新啟動以更新」才會換"
         }
         guard version.update, let running = version.running else {
-            return version.running == nil ? "版本 \(installed)（沒有開著）" : "版本 \(version.running ?? installed)"
+            if version.running == nil { return "版本 \(installed)（沒有開著）" }
+            let line = "版本 \(version.running ?? installed)"
+            return version.notice.map { "\(line)・\($0)" } ?? line
         }
         switch app {
         case .codex: return "跑的是 \(running)，新版 \(installed) 已裝好：電腦閒置 10 分鐘後自動重開"
         case .claude: return "跑的是 \(running)，新版 \(installed) 已裝好：要自己重開 Claude 桌面版"
         }
+    }
+
+    /// The PC page's memory value: "27%（30／112 GB）".
+    public static func memoryValue(_ memory: HelperState.Memory) -> String {
+        "\(memory.percent)%（\(Int(memory.usedGB.rounded()))／\(Int(memory.limitGB.rounded())) GB）"
+    }
+
+    /// Under it while it is high: "用最多的：game 12.0 GB、steam 247 萬個 handle".
+    public static func memoryTop(_ memory: HelperState.Memory) -> String? {
+        guard memory.high, !memory.top.isEmpty else { return nil }
+        let names = memory.top.map { item in
+            item.handles >= 100_000 ? "\(item.name) \(item.handles / 10_000) 萬個 handle" : String(format: "%@ %.1f GB", item.name, item.gb)
+        }
+        return "用最多的：" + names.joined(separator: "、")
+    }
+
+    /// What the helper freed on its own, with when: "Steam …已自動關掉・5 分鐘前".
+    public static func memoryAction(_ memory: HelperState.Memory, now: Date = Date()) -> String? {
+        guard let action = memory.action else { return nil }
+        return relative(memory.actionAt, now: now).map { "\(action)・\($0)" } ?? action
     }
 
     /// The PC list's time for a conversation: "回覆中", "等你回答・5 分鐘前", "3 小時前".

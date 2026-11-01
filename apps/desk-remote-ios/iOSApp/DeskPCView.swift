@@ -16,6 +16,10 @@ struct DeskPCView: View {
     @State private var confirmUpdate: String?
     @State private var updating = false
     @State private var updateNote: String?
+    /// The newer helper the user is asked to confirm restarting into (helper 0.5.30).
+    @State private var confirmRestart: String?
+    @State private var restarting = false
+    @State private var restartNote: String?
 
     var body: some View {
         List {
@@ -35,6 +39,32 @@ struct DeskPCView: View {
                     LabeledContent("狀態", value: DeskText.presence(state.presence))
                         .accessibilityIdentifier("pc-presence")
                     LabeledContent("小幫手", value: "\(state.pc.helperVersion)\(state.capabilities == ["read"] ? "（唯讀）" : "")")
+                    // A newer helper copied onto the PC, started from here (asked 11/01).
+                    if let newer = state.pc.helperUpdate, state.can("restart") {
+                        Button { confirmRestart = newer } label: {
+                            Label("有新版小幫手 \(newer)：按這裡重啟換新版", systemImage: "arrow.clockwise")
+                        }
+                        .disabled(restarting)
+                        .accessibilityIdentifier("helper-restart")
+                    }
+                    if let restartNote {
+                        Text(restartNote).font(.footnote).foregroundStyle(.secondary)
+                            .accessibilityIdentifier("helper-restart-note")
+                    }
+                    if let memory = state.memory {
+                        LabeledContent("記憶體") {
+                            Text(DeskText.memoryValue(memory)).foregroundStyle(memory.high ? Color.orange : Color.secondary)
+                        }
+                        .accessibilityIdentifier("pc-memory")
+                        if let top = DeskText.memoryTop(memory) {
+                            Text(top).font(.footnote).foregroundStyle(.orange)
+                                .accessibilityIdentifier("pc-memory-top")
+                        }
+                        if let action = DeskText.memoryAction(memory) {
+                            Text(action).font(.footnote).foregroundStyle(.secondary)
+                                .accessibilityIdentifier("pc-memory-action")
+                        }
+                    }
                     ForEach(state.warnings, id: \.self) { warning in
                         DeskNotice(text: warning)
                     }
@@ -55,7 +85,7 @@ struct DeskPCView: View {
                             if let state, let line = DeskText.versionLine(app, state.version(app)) {
                                 Text(line)
                                     .font(.footnote)
-                                    .foregroundStyle(state.version(app)?.update == true ? Color.orange : Color.secondary)
+                                    .foregroundStyle(state.version(app)?.newerWaiting == true ? Color.orange : Color.secondary)
                                     .accessibilityIdentifier("app-version-\(app.rawValue)")
                             }
                         }
@@ -118,6 +148,15 @@ struct DeskPCView: View {
         } message: { pending in
             Text("電腦上的 Claude 桌面版會關掉再開成 \(pending)。裡面所有 Claude Code 工作（包括正在跑的）都會中斷；重開後對話都還在。")
         }
+        .confirmationDialog("重新啟動小幫手？",
+                            isPresented: Binding(get: { confirmRestart != nil }, set: { if !$0 { confirmRestart = nil } }),
+                            titleVisibility: .visible, presenting: confirmRestart) { newer in
+            Button("重啟小幫手") { Task { await runRestart(newer) } }
+                .accessibilityIdentifier("helper-restart-confirm")
+            Button("取消", role: .cancel) {}
+        } message: { newer in
+            Text("電腦上的小幫手會關掉再開成 \(newer)，約 15 秒連不上；桌面版和裡面的工作不受影響。")
+        }
         // A window waiting on the PC is looked at more often, so its card goes once it is answered.
         .deskForegroundLoop(every: 15, failing: { unreachable || state?.shownPopups.isEmpty == false }) { await refresh() }
         .refreshable { await refresh() }
@@ -141,6 +180,32 @@ struct DeskPCView: View {
         } catch {
             updateNote = "沒有成功：\(DeskText.failure(.unreachable))"
         }
+        await refresh()
+    }
+
+    private func runRestart(_ newer: String) async {
+        guard let client = store.client(pcID) else { return }
+        restarting = true
+        defer { restarting = false }
+        do {
+            restartNote = try await client.restartHelper().message
+        } catch let error as HelperFailure {
+            restartNote = "沒能重啟：\(DeskText.failure(error))"
+            return
+        } catch {
+            restartNote = "沒能重啟：\(DeskText.failure(.unreachable))"
+            return
+        }
+        // Back in about 15 s; look every 3 s for up to a minute.
+        for _ in 0..<20 {
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            if let fresh = try? await client.state(), fresh.pc.helperUpdate == nil {
+                state = fresh
+                restartNote = "小幫手已換成 \(fresh.pc.helperVersion)"
+                return
+            }
+        }
+        restartNote = "一分鐘內沒有回來，請稍後下拉重新整理；仍連不上就到電腦上看看"
         await refresh()
     }
 

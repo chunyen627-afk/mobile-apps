@@ -579,11 +579,8 @@ final class DeskRemoteUITests: XCTestCase {
         XCTAssertTrue(card.waitForExistence(timeout: 10), "the pop-up is not on the PC page")
         XCTAssertTrue(text("電腦跳出視窗：Windows 安全性").exists, "the pop-up has no title")
         snapshot("32a-popup-on-pc-page")
-        let row = element("app-row-claude")
-        XCTAssertTrue(reveal(row), "Claude row missing")
-        row.tap()
         let session = element("session-row-\(claudeA)")
-        XCTAssertTrue(session.waitForExistence(timeout: 10), "conversation missing")
+        XCTAssertTrue(tap(element("app-row-claude"), until: session), "conversation missing")
         session.tap()
         XCTAssertTrue(element("popup-card").waitForExistence(timeout: 15), "the pop-up is not above the chat")
         let allow = element("popup-button-允許")
@@ -776,10 +773,31 @@ final class DeskRemoteUITests: XCTestCase {
         let port = try XCTUnwrap(ProcessInfo.processInfo.environment["DESK_POPUP_PORT"], "DESK_POPUP_PORT not set")
         launch(pc: "示範電腦|\(helper.host)|\(port)|\(helper.token)")
         openPC()
+        // Helper 0.5.30 (11/01): memory nearly full, a leaking Steam freed on its own, and a newer
+        // helper on disk that the phone restarts into.
+        let memory = element("pc-memory")
+        XCTAssertTrue(memory.waitForExistence(timeout: 15), "no memory row")
+        XCTAssertTrue(memory.label.contains("92%"), "memory: \(said(memory))")
+        XCTAssertTrue(waitFor(element("pc-memory-action"), labelContains: "已自動關掉", timeout: 90),
+                      "what was freed is not shown: \(said(element("pc-memory-action")))")
+        XCTAssertTrue(element("pc-memory-top").label.contains("247 萬個 handle"), "top: \(said(element("pc-memory-top")))")
+        let restart = element("helper-restart")
+        XCTAssertTrue(restart.exists && restart.label.contains("9.9.9"), "no restart for the newer helper: \(said(restart))")
+        snapshot("38-memory-and-helper")
+        restart.tap()
+        let restartConfirm = app.buttons["重啟小幫手"]
+        XCTAssertTrue(restartConfirm.waitForExistence(timeout: 5), "restarting the helper was not confirmed first")
+        restartConfirm.tap()
+        XCTAssertTrue(waitFor(element("helper-restart-note"), labelContains: "已換成", timeout: 40),
+                      "the restart did not finish: \(said(element("helper-restart-note")))")
+        XCTAssertFalse(element("helper-restart").exists, "the button stays after restarting")
         let button = element("claude-update")
         XCTAssertTrue(reveal(button), "no update button for Claude's downloaded version")
         XCTAssertTrue(button.label.contains("4.30.0"), "the button does not name the version: \(said(button))")
         XCTAssertTrue(element("app-row-claude").label.contains("已下載"), "the Claude row does not say: \(said(element("app-row-claude")))")
+        // Codex's own "有可用的更新" is only done at the PC: named after its version (helper 0.5.30, 11/01).
+        XCTAssertTrue(element("app-row-codex").label.contains("左下角的「有可用的更新」"),
+                      "the Codex row does not say: \(said(element("app-row-codex")))")
         snapshot("38a-update-waiting")
         let note = element("claude-update-note")
         func pressUpdate() {
@@ -792,9 +810,11 @@ final class DeskRemoteUITests: XCTestCase {
         }
         // Claude Code is working (fake): Claude asks on the PC first, and the phone answers (10/30).
         pressUpdate()
-        XCTAssertTrue(waitFor(note, labelContains: "仍在處理中", timeout: 30), "the PC's question is not mentioned: \(said(note))")
+        XCTAssertTrue(waitFor(revealing: note, labelContains: "仍在處理中", timeout: 30), "the PC's question is not mentioned: \(said(note))")
+        // The question is listed at the top of the PC page, above the memory rows (0.6.3): the
+        // update button sits far below it, and a list builds only the rows on screen.
         let cancel = element("popup-button-取消")
-        XCTAssertTrue(cancel.waitForExistence(timeout: 15), "Claude's question is not shown with its buttons")
+        XCTAssertTrue(poll(timeout: 30) { self.reveal(cancel) }, "Claude's question is not shown with its buttons")
         XCTAssertTrue(element("popup-button-等待 Claude").exists && element("popup-button-仍要更新").exists, "buttons missing")
         snapshot("38b-claude-asks")
         XCTAssertTrue(reveal(cancel), "the cancel button cannot be reached")
@@ -820,7 +840,7 @@ final class DeskRemoteUITests: XCTestCase {
                       "result says \(said(element("popup-result")))")
         XCTAssertTrue(poll(timeout: 90) { !element("claude-update").exists }, "the button stays after updating")
         XCTAssertTrue(element("app-version-claude").label.contains("4.30.0"), "version: \(said(element("app-version-claude")))")
-        XCTAssertTrue(waitFor(note, labelContains: "已更新為 4.30.0", timeout: 20), "the note still talks of the question: \(said(note))")
+        XCTAssertTrue(waitFor(revealing: note, labelContains: "已更新為 4.30.0", timeout: 20), "the note still talks of the question: \(said(note))")
         snapshot("38d-updated")
     }
 
@@ -1059,8 +1079,19 @@ final class DeskRemoteUITests: XCTestCase {
         }
     }
 
+    /// Like waitFor, scrolling to the element while the list has not built it (the update note
+    /// sits below the fold on the longer PC page of 0.6.3, CI 11/02).
+    private func waitFor(revealing element: XCUIElement, labelContains text: String, timeout: TimeInterval) -> Bool {
+        poll(timeout: timeout) {
+            if !element.exists { _ = self.reveal(element) }
+            return element.exists && element.label.contains(text)
+        }
+    }
+
     private func reveal(_ element: XCUIElement) -> Bool {
-        let visible = { element.exists && element.isHittable }
+        // On screen first: asking an off-screen card's button whether it is hittable fails the
+        // test outright ("activation point invalid", CI 11/02).
+        let visible = { element.exists && self.onScreen(element) && element.isHittable }
         if poll(timeout: 2, visible) { return true }
         for _ in 0 ..< 4 {
             app.swipeDown()
@@ -1069,6 +1100,30 @@ final class DeskRemoteUITests: XCTestCase {
         for _ in 0 ..< 8 {
             app.swipeUp()
             if poll(timeout: 1, visible) { return true }
+        }
+        return false
+    }
+
+    /// A list row just below the screen's edge already exists and reports itself hittable, so
+    /// `reveal` tapped it without scrolling and the tap landed off screen (CI 11/02: the PC page's
+    /// memory rows pushed Claude's row there). Its middle has to be inside the window.
+    private func onScreen(_ element: XCUIElement) -> Bool {
+        let window = app.windows.firstMatch.frame
+        let frame = element.frame
+        return window.insetBy(dx: 0, dy: 40).contains(CGPoint(x: frame.midX, y: frame.midY))
+    }
+
+    /// Taps until `next` shows: a row that moves while the PC page is still filling in (the
+    /// memory rows, CI 11/01) can swallow the tap.
+    private func tap(_ row: XCUIElement, until next: XCUIElement) -> Bool {
+        for attempt in 1 ... 3 {
+            guard reveal(row) else {
+                snapshot("tap-\(attempt)-row-gone")
+                return next.exists
+            }
+            row.tap()
+            if next.waitForExistence(timeout: 5) { return true }
+            snapshot("tap-\(attempt)-no-change")  // what the tap left on screen (CI 11/02: test32)
         }
         return false
     }

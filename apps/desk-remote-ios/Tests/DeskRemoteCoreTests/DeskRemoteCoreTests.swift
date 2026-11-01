@@ -485,6 +485,45 @@ final class MetaAndUsageTests: XCTestCase {
         """))
         XCTAssertEqual(DeskText.versionLine(.claude, waiting),
                        "跑的是 3.6556.2.0，新版 4.29.0 已下載：按下面的「重新啟動以更新」才會換")
+        XCTAssertFalse(current.newerWaiting)
+        // Helper 0.5.30: a newer one only the PC can bring in is named after the version (11/01).
+        let told = try JSONDecoder().decode(HelperState.AppVersion.self, from: data("""
+        {"installed":"26.1027.3384.0","running":"26.1027.3384.0","update":false,
+         "notice":"有新版：到電腦上按 Codex 左下角的「有可用的更新」"}
+        """))
+        XCTAssertEqual(DeskText.versionLine(.codex, told),
+                       "版本 26.1027.3384.0・有新版：到電腦上按 Codex 左下角的「有可用的更新」")
+        XCTAssertTrue(told.newerWaiting, "drawn in orange")
+    }
+
+    func testMemoryAndANewerHelperAreShown() throws {
+        // Helper 0.5.30 (11/01): the commit charge, what it freed itself, and a newer helper on disk.
+        let state = try HelperClient.decode(HelperState.self, status: 200, data: data("""
+        {"ok":true,"pc":{"name":"P","helperVersion":"0.5.29","helperUpdate":"0.5.30"},"capabilities":["read","restart"],
+         "apps":{},"presence":{"idleSeconds":1,"locked":false},"warnings":[],
+         "memory":{"percent":92,"usedGB":164.0,"limitGB":178.0,"high":true,
+                   "top":[{"name":"game","gb":12.0,"handles":900},{"name":"steam","gb":1.0,"handles":2470000}],
+                   "action":"Steam 已自動關掉","actionAt":"2026-11-01T14:55:00+00:00"}}
+        """))
+        XCTAssertEqual(state.pc.helperUpdate, "0.5.30")
+        XCTAssertTrue(state.can("restart"))
+        let memory = try XCTUnwrap(state.memory)
+        XCTAssertEqual(DeskText.memoryValue(memory), "92%（164／178 GB）")
+        XCTAssertEqual(DeskText.memoryTop(memory), "用最多的：game 12.0 GB、steam 247 萬個 handle")
+        let now = try XCTUnwrap(DeskText.parse("2026-11-01T15:00:00+00:00"))
+        XCTAssertEqual(DeskText.memoryAction(memory, now: now), "Steam 已自動關掉・5 分鐘前")
+        let calm = try HelperClient.decode(HelperState.self, status: 200, data: data("""
+        {"ok":true,"pc":{"name":"P","helperVersion":"0.5.12"},"capabilities":["read"],"apps":{},
+         "presence":{"idleSeconds":1,"locked":false},"warnings":[],
+         "memory":{"percent":27,"usedGB":30.1,"limitGB":111.9,"high":false,"top":[],"action":null,"actionAt":null}}
+        """))
+        XCTAssertNil(calm.pc.helperUpdate, "older helpers send no helperUpdate")
+        XCTAssertNil(DeskText.memoryTop(try XCTUnwrap(calm.memory)), "no list while it is fine")
+        XCTAssertNil(DeskText.memoryAction(try XCTUnwrap(calm.memory)))
+        let restarted = try HelperClient.decode(HelperRestart.self, status: 202, data: data("""
+        {"ok":true,"message":"小幫手重新啟動中，約 15 秒後回來"}
+        """))
+        XCTAssertTrue(restarted.ok)
     }
 
     func testAUACPromptIsNamedNotTakenForALock() throws {

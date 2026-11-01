@@ -58,9 +58,7 @@ class ConfigTests(unittest.TestCase):
 class AuthGateTests(unittest.TestCase):
     def setUp(self):
         self.now = 1000.0
-        self.sent = []
-        self.gate = h.AuthGate('right-token-' + 'x' * 24, lambda *a: self.sent.append(a), 'PC',
-                               clock=lambda: self.now)
+        self.gate = h.AuthGate('right-token-' + 'x' * 24, clock=lambda: self.now)
 
     def test_right_token_passes_and_wrong_is_401(self):
         self.assertIsNone(self.gate.check('Bearer right-token-' + 'x' * 24))
@@ -72,8 +70,6 @@ class AuthGateTests(unittest.TestCase):
         codes = [self.gate.check('Bearer wrong')[0] for _ in range(5)]
         self.assertEqual(codes, [401, 401, 401, 401, 429])
         self.assertEqual(self.gate.check('Bearer right-token-' + 'x' * 24)[0], 429)
-        time.sleep(0.2)  # the lock notification is sent on its own thread
-        self.assertEqual(len(self.sent), 1)
         self.now += 601
         self.assertIsNone(self.gate.check('Bearer right-token-' + 'x' * 24))
 
@@ -599,7 +595,7 @@ class DrivingTests(FakeEnvironment):
         run_all(runner)
         self.assertEqual(driver.calls[-1], ('new_send', 'codex', '在 demo-app 中開始新對話'))
 
-    def test_questions_and_failures_are_notified_but_not_what_the_phone_did(self):
+    def test_questions_are_notified_but_not_what_the_phone_did(self):
         sent = []
         _, _, watcher, runner = drive(self.fake, notify=lambda *a: sent.append(a))
         self.assertEqual(len([s for s in sent if s[0].startswith('🔔')]), 1)
@@ -612,7 +608,7 @@ class DrivingTests(FakeEnvironment):
         code, body = runner.submit('send', 'claude', A, {'text': '秘密內容不能進通知'})
         runner.presence = h.FixedPresence(dict(presence, locked=True))  # locked before it runs: fails
         run_all(runner)
-        self.assertEqual([s[0] for s in sent if s[0].startswith('⚠️')], ['⚠️ 手機送出訊息失敗：Claude'])
+        self.assertEqual([s[0] for s in sent if s[0].startswith('⚠️')], [], 'the phone shows its own failures (11/02)')
         self.assertFalse(any('秘密內容' in s[1] for s in sent), 'message text leaked into ntfy')
 
     def test_claude_ignoring_its_link_falls_back_to_the_sidebar(self):
@@ -687,7 +683,7 @@ class HttpTests(FakeEnvironment):
         else:
             hub, self.runner = h.Hub('示範電腦', self.sources, h.FixedPresence(self.fake.cfg['presence'])), None
         self.hub = hub
-        gate = h.AuthGate(TOKEN, None, '示範電腦')
+        gate = h.AuthGate(TOKEN)
         self.server = ThreadingHTTPServer(('127.0.0.1', 0), h.handler_for(hub, gate, networks, self.runner))
         self.server.daemon_threads = True
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
@@ -1210,7 +1206,7 @@ class VersionTests(FakeEnvironment):
         watcher.check_versions(now=1061)
         self.assertEqual(hub.state()['versions']['codex'],
                          {'installed': '26.1023.6123.0', 'running': '26.1023.6123.0', 'update': False, 'pending': None,
-                          'downloaded': None})
+                          'downloaded': None, 'notice': None})
         watcher.check_versions(now=1400)
         self.assertEqual(driver.calls.count(('restart', 'codex')), 1)
 
@@ -1230,19 +1226,15 @@ class VersionTests(FakeEnvironment):
         watcher.check_versions(now=1183)
         self.assertIn(('restart', 'codex'), driver.calls)
 
-    def test_a_restart_that_does_not_take_is_told_once(self):
+    def test_a_restart_that_does_not_take_is_not_notified(self):
         _, driver, watcher, sent, _ = self.version_setup(codex=('26.1023.6123.0', '26.1016.6573.0'))
         driver.restart_sticks = True
-        watcher.check_versions(now=1000)
-        watcher.check_versions(now=1100)
-        self.assertEqual(sent, [])
-        watcher.check_versions(now=1200)
-        watcher.check_versions(now=1300)
-        self.assertEqual(len(sent), 1, sent)
-        self.assertIn('Codex', sent[0][0])
+        for now in (1000, 1100, 1200, 1300):
+            watcher.check_versions(now=now)
+        self.assertEqual(sent, [], 'nothing waits on an approval (11/02)')
         self.assertEqual(driver.calls.count(('restart', 'codex')), 1, 'tried once per version')
 
-    def test_a_codex_that_does_not_start_again_is_told_at_once(self):
+    def test_a_codex_that_does_not_start_again_is_tried_once(self):
         _, driver, watcher, sent, _ = self.version_setup(codex=('26.1023.6123.0', '26.1016.6573.0'))
 
         def dead(app):
@@ -1250,30 +1242,26 @@ class VersionTests(FakeEnvironment):
             raise h.ActionError('restart-failed', 'Codex did not start again')
         driver.restart_app = dead
         watcher.check_versions(now=1000)
-        self.assertEqual(len(sent), 1, sent)
-        self.assertIn('沒能重新開起來', sent[0][0])
         watcher.check_versions(now=1300)
-        self.assertEqual(len(sent), 1, 'told once')
+        self.assertEqual(sent, [])
+        self.assertEqual(driver.calls.count(('restart', 'codex')), 1)
 
-    def test_a_new_claude_is_told_once_and_never_restarted(self):
+    def test_a_new_claude_is_only_shown_and_never_restarted(self):
         hub, driver, watcher, sent, _ = self.version_setup(claude=('4.30.0.0', '4.29.0.0'))
         watcher.check_versions(now=1000)
         watcher.check_versions(now=1100)
         self.assertNotIn(('restart', 'claude'), driver.calls)
-        self.assertEqual(len(sent), 1, sent)
-        self.assertIn('4.30.0.0', sent[0][1])
-        self.assertIn('不自動', sent[0][1])
+        self.assertEqual(sent, [], 'shown on the PC page, not notified (11/02)')
         self.assertTrue(hub.state()['versions']['claude']['update'])
 
-    def test_claudes_update_button_is_told_and_pressed_only_from_the_phone(self):
+    def test_claudes_update_button_is_pressed_only_from_the_phone(self):
         hub, driver, watcher, sent, _ = self.version_setup(claude=('3.6556.2.0', '3.6556.2.0'))
         driver.fake_update = {'claude': '重新啟動以更新 v4.29.0'}
         watcher.look('claude')
         watcher.check_versions(now=1000)
         watcher.check_versions(now=1100)
         self.assertNotIn('press_update', [c[0] for c in driver.calls], 'never pressed on its own')
-        self.assertEqual(len(sent), 1, sent)
-        self.assertIn('4.29.0', sent[0][1])
+        self.assertEqual(sent, [])
         shown = hub.state()['versions']['claude']
         self.assertEqual((shown['update'], shown['pending']), (True, '4.29.0'))
         runner = h.ActionRunner(hub, driver, hub.presence, watcher, None, '示範電腦', hub.strings,
@@ -1321,7 +1309,7 @@ class VersionTests(FakeEnvironment):
 
     def test_a_downloaded_update_without_a_button_is_only_told(self):
         """Office 10/30: the updater swapped the waiting 4.29 for 4.4212 and the button never came
-        back. Its log still says what is downloaded: the phone is told once, to do it at the PC
+        back. Its log still says what is downloaded: shown after the version, to do it at the PC
         (the user's choice after the phone's close-and-start route proved fiddly); no button."""
         hub, driver, watcher, sent, _ = self.version_setup(claude=('3.6556.2.0', '3.6556.2.0'))
         driver.fake_downloaded = '4.4212.0'
@@ -1331,9 +1319,8 @@ class VersionTests(FakeEnvironment):
         watcher.check_versions(now=1100)
         shown = hub.state()['versions']['claude']
         self.assertEqual((shown['update'], shown['pending'], shown['downloaded']), (False, None, '4.4212.0'), shown)
-        self.assertEqual(len(sent), 1, sent)
-        self.assertIn('4.4212.0', sent[0][1])
-        self.assertIn('關掉再打開', sent[0][1])
+        self.assertEqual(shown['notice'], '新版 4.4212.0 已下載：到電腦上把 Claude 關掉再打開', 'after the version on the phone')
+        self.assertEqual(sent, [], 'shown, not notified (11/02)')
         runner = h.ActionRunner(hub, driver, hub.presence, watcher, None, '示範電腦', hub.strings,
                                 verify_seconds=3, doc_wait=1, settle_seconds=0)
         self.assertEqual(runner.submit('update', 'claude', None, {})[1]['error'], 'no-update')
@@ -1343,7 +1330,7 @@ class VersionTests(FakeEnvironment):
         watcher.versions_checked = None
         watcher.check_versions(now=2000)
         self.assertEqual(hub.state()['versions']['claude']['downloaded'], None)
-        self.assertEqual(len(sent), 1, sent)
+        self.assertEqual(sent, [])
 
     def test_the_downloaded_version_is_read_from_claudes_log(self):
         log = ("2026-10-28 05:04:45 [info] [updater] Update downloaded and ready to install { releaseName: 'Claude 4.29.0' }\n"
@@ -1355,7 +1342,7 @@ class VersionTests(FakeEnvironment):
 
     def test_claude_for_chromes_read_permission_is_allowed_by_the_helper(self):
         """The extension asks before reading every site (10/31): the helper presses "Allow this
-        action" itself, tells nobody and lists nothing; a card with other words goes to the phone."""
+        action" itself, tells nobody and lists nothing; a card without that button is listed for the phone."""
         hub, driver, watcher, sent, _ = self.version_setup(idle=900)
         driver.fake_popups = [dict(h.FAKE_EXTENSION_READ)]
         self.assertEqual(watcher.check_popups(), [])
@@ -1369,25 +1356,39 @@ class VersionTests(FakeEnvironment):
             self.assertEqual(watcher.check_popups(), [])
         self.assertEqual(sent, [])
         self.assertEqual(driver.calls.count(('press_popup', 'Claude for Chrome', 'Allow this action')), 3)
-        # A window of the extension without the allow button is an ordinary pop-up.
+        # A window of the extension without the allow button is an ordinary pop-up: listed, not notified.
         driver.fake_popups = [dict(h.FAKE_EXTENSION_READ, hwnd=4349, buttons=['OK'])]
         listed = watcher.check_popups()
         self.assertEqual([p['buttons'] for p in listed], [['OK']])
-        self.assertEqual(len(sent), 1, sent)
+        self.assertEqual(sent, [])
         # The quick look between full ones (every second or two) presses it too.
         driver.fake_popups = [dict(h.FAKE_EXTENSION_READ, hwnd=4350)]
         watcher.check_extension()
         self.assertEqual(driver.fake_popups, [])
         self.assertEqual(driver.calls.count(('press_popup', 'Claude for Chrome', 'Allow this action')), 4)
 
-    def test_a_question_inside_an_apps_page_is_told_only_when_nobody_is_at_the_pc(self):
+    def test_only_a_pop_up_asking_for_permission_is_notified(self):
+        # 11/01: property sheets, an error box and the snipping tool all reached the phone; the
+        # user asked 11/02 for notifications only when something waits on their approval.
+        _, driver, watcher, sent, presence = self.version_setup(idle=900)
+        driver.fake_popups = [dict(h.FAKE_QUIT_GUARD),
+                              {'hwnd': 5001, 'title': 'game.exe - 內容', 'process': 'explorer', 'text': '檔案類型:',
+                               'buttons': ['確定', '取消', '套用(&A)']}]
+        self.assertEqual(len(watcher.check_popups()), 2, 'still listed for the phone')
+        self.assertEqual(sent, [])
+        driver.fake_popups = [dict(h.FAKE_POPUP)]
+        watcher.check_popups()
+        self.assertEqual([s[0] for s in sent], ['🪟 電腦跳出視窗在等你允許：Windows 安全性'])
+
+    def test_a_permission_question_inside_an_apps_page_is_told_only_when_nobody_is_at_the_pc(self):
         _, driver, watcher, sent, presence = self.version_setup(idle=30)
-        driver.fake_popups = [dict(h.FAKE_QUIT_GUARD)]
+        asks = dict(h.FAKE_POPUP, page=True)
+        driver.fake_popups = [asks]
         watcher.check_popups()
         self.assertEqual(sent, [], 'the person at the PC sees it (or opened it)')
         self.assertTrue(watcher.popup_list(), 'still listed for the phone')
         presence['idleSeconds'] = 900
-        driver.fake_popups = [dict(h.FAKE_QUIT_GUARD, hwnd=4344)]
+        driver.fake_popups = [dict(asks, hwnd=4344)]
         watcher.check_popups()
         self.assertEqual(len(sent), 1, sent)
 
@@ -1410,6 +1411,27 @@ class VersionTests(FakeEnvironment):
         watcher.look('codex')
         watcher.check_versions(now=1200)
         self.assertEqual(len([c for c in driver.calls if c[0] == 'press_update']), 1, 'not again within the hour')
+
+    def test_codexs_sidebar_update_is_only_shown_while_it_shows(self):
+        # Home PC 11/01: the new layout's "update available" (bottom left) was not recognised, so
+        # the phone heard nothing. It is shown after the version (not notified since 11/02),
+        # never pressed (updates are done at the PC, 10/30).
+        _, driver, watcher, sent, _ = self.version_setup(codex=('26.1027.3384.0', '26.1027.3384.0'))
+        driver.fake_update = {'codex': '有可用的更新'}
+        watcher.look('codex')
+        watcher.check_versions(now=1000)
+        self.assertEqual([c for c in driver.calls if c[0] == 'press_update'], [], 'never pressed on its own')
+        self.assertIn('有可用的更新', watcher.hub.state()['versions']['codex']['notice'], 'after the version on the phone')
+        watcher.check_versions(now=1100)
+        driver.fake_update = {}
+        watcher.look('codex')
+        watcher.check_versions(now=1200)
+        self.assertIsNone(watcher.hub.state()['versions']['codex']['notice'], 'gone with the button')
+        driver.fake_update = {'codex': '有可用的更新'}
+        watcher.look('codex')
+        watcher.check_versions(now=1300)
+        self.assertIn('有可用的更新', watcher.hub.state()['versions']['codex']['notice'], 'a later one is shown again')
+        self.assertEqual(sent, [])
 
     def test_versions_read_from_package_paths(self):
         path = r'C:\Program Files\WindowsApps\OpenAI.Codex_26.1016.6573.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe'
@@ -1513,7 +1535,7 @@ class PopupTests(FakeEnvironment):
         run_all(runner)
         status = runner.status(body['id'])
         self.assertEqual((status['state'], status['error']), ('failed', 'popup-gone'), status)
-        self.assertIn('⚠️ 手機按電腦上的視窗失敗', sent[-1][0])
+        self.assertFalse([s for s in sent if s[0].startswith('⚠️')], 'the phone shows its own failure (11/02)')
 
     def test_a_send_blocked_by_a_popup_says_so(self):
         class BlockedDriver(h.FakeDriver):
@@ -1769,7 +1791,7 @@ class PopupTests(FakeEnvironment):
         self.assertTrue(prompt[4].startswith('deskremote://open?pc=%E7%A4%BA'), prompt[4])
         self.assertEqual(h.open_link('辦公室', elevate=True), 'deskremote://open?pc=%E8%BE%A6%E5%85%AC%E5%AE%A4&elevate=1')
 
-    def test_limits_and_context_alert_once_when_they_cross(self):
+    def test_limits_and_context_are_not_notified(self):
         sent = []
         hub, _, watcher, _ = drive(self.fake, notify=lambda *a: sent.append(a))
         hub.alerts = {'usage_percent': 50, 'context_percent': 90}
@@ -1781,8 +1803,7 @@ class PopupTests(FakeEnvironment):
         for _ in range(2):
             watcher.check_usage()
             watcher.check_turns()
-        warnings = [s[0] for s in sent if s[0].startswith('⚠️')]
-        self.assertEqual(warnings, ['⚠️ Claude 額度已用 46%', '⚠️ Claude 上下文快滿了'], warnings)
+        self.assertFalse([s for s in sent if s[0].startswith('⚠️')], 'shown on the phone, nothing to approve (11/02)')
 
     def test_state_lists_what_the_phone_may_pick(self):
         hub, _, _, _ = drive(self.fake)
@@ -1834,6 +1855,130 @@ class ScreenHttpTests(FakeEnvironment):
         hub.presence = h.FixedPresence(self.fake.cfg['presence'])
         hub.screen = lambda: None
         self.assertEqual(fetch()[0], 503)
+
+
+class MemoryWatchTests(unittest.TestCase):
+    """Asked 11/01 after Steam's handle leak filled the commit charge and the home PC's screen flashed."""
+    GB = 2 ** 30
+
+    def make(self, used, found, worker=None):
+        self.closed = []
+        self.used = [used]
+
+        def steam(processes):
+            self.closed.append(len(processes()))
+            self.used[0] = 30 * self.GB
+            return 'shut-down'
+        return h.MemoryWatch('家用電腦', worker=worker,
+                             charge=lambda: (self.used[0], 178 * self.GB), processes=lambda: found, steam=steam,
+                             wall=lambda: h.datetime(2026, 11, 1, 23, 0, tzinfo=h.UTC))
+
+    def wait_closed(self, watch):
+        deadline = time.monotonic() + 5
+        while watch.closing and time.monotonic() < deadline:
+            time.sleep(0.02)
+
+    def test_a_leaking_steam_is_closed(self):
+        found = [{'pid': 7, 'name': 'steam', 'path': 'steam.exe', 'bytes': self.GB, 'handles': 2_470_000},
+                 {'pid': 8, 'name': 'game', 'path': 'game.exe', 'bytes': 12 * self.GB, 'handles': 900}]
+        watch = self.make(170 * self.GB, found)
+        watch.step(now=0)
+        self.wait_closed(watch)
+        self.assertEqual(len(self.closed), 1)
+        shown = watch.snapshot()
+        self.assertIn('Steam', shown['action'])
+        self.assertIn('2,470,000', shown['action'])
+        self.assertIn('17%', shown['action'], 'what the memory came back to')
+        watch.step(now=30)
+        self.assertEqual(len(self.closed), 1, 'once a minute at most')
+
+    def test_nothing_safe_to_close_names_the_biggest_on_the_phone_only(self):
+        found = [{'pid': 7, 'name': 'steam', 'path': 'steam.exe', 'bytes': self.GB, 'handles': 3000},
+                 {'pid': 8, 'name': 'game', 'path': 'game.exe', 'bytes': 120 * self.GB, 'handles': 900}]
+        watch = self.make(160 * self.GB, found)
+        with self.assertLogs(level='WARNING') as logs:
+            watch.step(now=0)
+            self.assertEqual(self.closed, [], 'a normal Steam (it may be running the game) is left alone')
+            shown = watch.snapshot()
+            self.assertEqual((shown['percent'], shown['high']), (90, True))
+            self.assertEqual(shown['top'][0]['name'], 'game')
+            watch.step(now=61)
+            self.used[0] = 140 * self.GB  # 79%: between the two lines
+            watch.step(now=122)
+            self.assertEqual(watch.snapshot()['top'], [], 'no list below 85%')
+            self.used[0] = 160 * self.GB
+            watch.step(now=183)
+            self.used[0] = 120 * self.GB
+            watch.step(now=244)
+            self.used[0] = 160 * self.GB
+            watch.step(now=305)
+        told = [r.getMessage() for r in logs.records if 'nothing safe' in r.getMessage()]
+        self.assertEqual(len(told), 2, 'logged once per episode (below 75% starts a new one)')
+        self.assertIn('game 120.0 GB', told[0])
+
+    def test_the_screen_worker_is_recycled_when_it_has_grown(self):
+        class Worker:
+            def __init__(self):
+                self.limits = []
+
+            def recycle_if_big(self, max_bytes, max_handles):
+                self.limits.append((max_bytes, max_handles))
+                return (1900 * 2 ** 20, 29_000)
+        worker = Worker()
+        watch = self.make(20 * self.GB, [], worker=worker)
+        watch.step(now=0)
+        self.assertEqual(worker.limits, [(600 * 2 ** 20, 15_000)])
+        self.assertIn('1900 MB', watch.snapshot()['action'])
+
+    def test_recycle_only_between_requests_and_past_a_limit(self):
+        worker = h.UiaWorker()
+
+        class Process:
+            pid = 42
+
+            def poll(self):
+                return None
+
+            def kill(self):
+                pass
+        worker.process = Process()
+        self.assertIsNone(worker.recycle_if_big(600, 100, size=lambda pid: (500, 50)))
+        self.assertIsNotNone(worker.process)
+        with worker.lock:
+            done = []
+            threading.Thread(target=lambda: done.append(worker.recycle_if_big(600, 100, size=lambda pid: (900, 50)))).start()
+            time.sleep(0.2)
+        self.assertEqual(done, [None], 'a request is running: left alone')
+        self.assertEqual(worker.recycle_if_big(600, 100, size=lambda pid: (100, 150)), (100, 150))
+        self.assertIsNone(worker.process)
+
+    def test_the_helper_on_disk_is_read_from_its_version_line(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'helper.py'
+            path.write_text("import x\nVERSION = '0.5.31'\n", encoding='utf-8')
+            self.assertEqual(h.helper_on_disk(path), '0.5.31')
+            self.assertIsNone(h.helper_on_disk(Path(folder) / 'missing.py'))
+
+
+class HelperRestartTests(HttpTests):
+    def test_a_newer_helper_on_disk_is_offered_and_restarted_into(self):
+        disk, restarted = ['9.9.9'], []
+        self.hub.disk_version = lambda: disk[0]
+        code, body = self.get('/v1/state')
+        self.assertEqual(body['pc']['helperUpdate'], '9.9.9')
+        self.assertNotIn('restart', body['capabilities'], 'no restart hook: not offered')
+        self.assertEqual(self.get('/v1/helper/restart', method='POST', body={})[0], 404)
+        self.hub.restart = lambda: restarted.append(True)
+        self.assertIn('restart', self.get('/v1/state')[1]['capabilities'])
+        code, body = self.get('/v1/helper/restart', method='POST', body={})
+        self.assertEqual(code, 202, body)
+        self.assertIn('重新啟動', body['message'])
+        deadline = time.monotonic() + 5
+        while not restarted and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertEqual(restarted, [True], 'restarted after the answer went out')
+        disk[0] = h.VERSION
+        self.assertIsNone(self.get('/v1/state')[1]['pc']['helperUpdate'], 'the same version: nothing newer')
 
 
 class StringsTests(unittest.TestCase):

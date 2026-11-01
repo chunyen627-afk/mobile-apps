@@ -40,6 +40,11 @@
     "fast_off": "啟用標準模式",
     "update_prefix": "更新",
     "update_exact": true,
-    "update_confirm": "更新"
+    "update_confirm": "更新",
+    "update_notify": ["有可用的更新"]
+  },
+  "popups": {
+    "_comment": "A pop-up window reaches the phone as a notification only when one of its buttons contains one of these (a permission question such as the firewall's 「允許」); every other pop-up is only listed on the phone's PC page (11/02).",
+    "permission": ["允許", "核准", "授權", "Allow", "Approve"]
   }
 }
