@@ -1080,7 +1080,7 @@ final class DeskRemoteUITests: XCTestCase {
     }
 
     private func reveal(_ element: XCUIElement) -> Bool {
-        let visible = { element.exists && element.isHittable }
+        let visible = { element.exists && element.isHittable && self.onScreen(element) }
         if poll(timeout: 2, visible) { return true }
         for _ in 0 ..< 4 {
             app.swipeDown()
@@ -1091,6 +1091,15 @@ final class DeskRemoteUITests: XCTestCase {
             if poll(timeout: 1, visible) { return true }
         }
         return false
+    }
+
+    /// A list row just below the screen's edge already exists and reports itself hittable, so
+    /// `reveal` tapped it without scrolling and the tap landed off screen (CI 11/02: the PC page's
+    /// memory rows pushed Claude's row there). Its middle has to be inside the window.
+    private func onScreen(_ element: XCUIElement) -> Bool {
+        let window = app.windows.firstMatch.frame
+        let frame = element.frame
+        return window.insetBy(dx: 0, dy: 40).contains(CGPoint(x: frame.midX, y: frame.midY))
     }
 
     /// Taps until `next` shows: a row that moves while the PC page is still filling in (the
