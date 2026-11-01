@@ -1,6 +1,7 @@
 name: Build Toolbox iOS
 # Runs only for the toolbox branch. No workflow_dispatch: that needs the file on main.
-# The toolbox builds from the album's and the miner's own folders, so changes there run it too.
+# The toolbox builds from the album's, the miner's and the desk remote's own folders, so changes
+# there run it too.
 on:
   push:
     branches: [claude/toolbox-ios]
@@ -13,6 +14,11 @@ on:
       - 'apps/miner-status-ios/Sources/**'
       - 'apps/miner-status-ios/Tests/MinerStatusCoreTests/**'
       - 'apps/miner-status-ios/fixtures/**'
+      - 'apps/desk-remote-ios/iOSApp/**'
+      - 'apps/desk-remote-ios/Sources/**'
+      - 'apps/desk-remote-ios/Tests/**'
+      - 'apps/desk-remote-ios/fixtures/**'
+      - 'apps/desk-remote-ios/pc-helper/**'
       - '.github/workflows/toolbox-ios.yml'
 # Write access is used only to publish an approved release and to force-push simulator
 # screenshots (fixture and demo data only) to one dedicated branch.
@@ -26,7 +32,8 @@ jobs:
     # Fail closed for private repositories; standard public runners are free.
     if: github.event.repository.private == false
     runs-on: macos-15
-    timeout-minutes: 60
+    # About 14 minutes before the desk remote joined; its 41 UI tests add about 16.
+    timeout-minutes: 80
     env:
       HOMEBREW_NO_AUTO_UPDATE: "1"
       APP_DIR: apps/toolbox-ios
@@ -34,7 +41,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install project generator
         run: brew install xcodegen
-      - name: Build and test
+      - name: Helper tests, build, unit and UI tests
         working-directory: ${{ env.APP_DIR }}
         run: bash scripts/build.sh
       # The IPA stays on the runner unless the build is approved for release.
@@ -78,10 +85,11 @@ jobs:
           fi
           sha=$(shasum -a 256 "$asset" | cut -d' ' -f1)
           notes=$(printf '%s\n' \
-            "未簽署 IPA，需用自己的 Apple 帳號簽署後安裝。沿用相簿的 Bundle ID，覆蓋安裝會保留相簿設定；只含模擬器測試資料與離線示範資料，不含任何真實位址或帳號。" \
+            "未簽署 IPA，需用自己的 Apple 帳號簽署後安裝。沿用相簿的 Bundle ID，覆蓋安裝會保留相簿與礦機設定；只含模擬器測試資料與離線示範資料，不含任何真實位址、密碼或金鑰。" \
+            "桌面遙控分頁要重新配對電腦（單獨的桌面遙控 App 的設定不會帶過來）；電腦端小幫手在 apps/desk-remote-ios/pc-helper。" \
             "" \
             "- 來源 commit：${GITHUB_SHA}" \
-            "- 建置與測試：run ${GITHUB_RUN_ID}（相簿與礦機的單元測試、工具箱與相簿的模擬器 UI 測試皆通過才發布）" \
+            "- 建置與測試：run ${GITHUB_RUN_ID}（小幫手、相簿、礦機與桌面遙控的單元測試，工具箱、相簿與桌面遙控的模擬器 UI 測試皆通過才發布）" \
             "- 大小：${size} bytes" \
             "- SHA256：${sha}" \
             "- ${symbols}：閃退分析用符號檔")
@@ -94,7 +102,7 @@ jobs:
         working-directory: ${{ env.APP_DIR }}/build
         run: |
           mkdir -p reports
-          [ -f test-summary.txt ] && cp test-summary.txt reports/
+          for f in test-summary.txt desk-helper-tests.log fake-helper.log; do [ -f "$f" ] && cp "$f" reports/; done
           ls -l reports
           total=$(find reports -type f -exec stat -f %z {} + | awk '{s+=$1} END {print s+0}')
           echo "reports total: $total bytes"
@@ -102,7 +110,8 @@ jobs:
             echo "Reports exceed 1 MB; refusing to upload."
             exit 1
           fi
-      # Replaces the branch each run (no history kept). Only fixture and demo screens; 5 MB cap.
+      # Replaces the branch each run (no history kept). Only fixture and demo screens; 10 MB cap
+      # (the desk remote's own screenshots, about 4.8 MB, are taken here too).
       - name: Publish simulator screenshots
         if: always()
         working-directory: ${{ env.APP_DIR }}/build
@@ -116,8 +125,8 @@ jobs:
           fi
           total=$(find screenshots-ui -type f -exec stat -f %z {} + | awk '{s+=$1} END {print s+0}')
           echo "screenshots total: $total bytes"
-          if [ "$total" -gt 5242880 ]; then
-            echo "Screenshots exceed 5 MB; refusing to publish."
+          if [ "$total" -gt 10485760 ]; then
+            echo "Screenshots exceed 10 MB; refusing to publish."
             exit 1
           fi
           cd screenshots-ui

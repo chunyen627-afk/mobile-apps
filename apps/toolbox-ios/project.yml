@@ -2,6 +2,8 @@
 # the free Apple account's three app slots and one renewal on all of them.
 # Nothing is copied: each tool's sources come straight from its own app folder, minus that app's
 # @main entry file, and the standalone apps still build from the same files.
+# Tools: the album (apps/album-ios), the miner status (apps/miner-status-ios) and the desk remote
+# (apps/desk-remote-ios), each with its own tab.
 # Generate on a Mac from this directory with `xcodegen generate`; see scripts/build.sh.
 name: Toolbox
 options:
@@ -19,8 +21,9 @@ settings:
     SWIFT_STRICT_CONCURRENCY: targeted
     TARGETED_DEVICE_FAMILY: "1"
     # Continues the album's numbering: the toolbox installs over the album (0.3.2 build 5).
-    MARKETING_VERSION: "0.4.3"
-    CURRENT_PROJECT_VERSION: "9"
+    # 0.5: the desk remote joined as the third tab.
+    MARKETING_VERSION: "0.5.0"
+    CURRENT_PROJECT_VERSION: "10"
 targets:
   # Named Lightbox, as the album app it replaces: the same bundle identifier, executable and
   # Swift module, so the album's unit tests (`@testable import Lightbox`) run here unchanged.
@@ -36,8 +39,11 @@ targets:
         excludes: [MinerStatusApp.swift, Info.plist, zh-Hant.lproj]
       - path: ../miner-status-ios/fixtures/demo-running.json
         buildPhase: resources
+      - path: ../desk-remote-ios/iOSApp
+        excludes: [DeskRemoteApp.swift, Info.plist, zh-Hant.lproj]
     dependencies:
       - target: MinerStatusCore
+      - target: DeskRemoteCore
       - package: AMSMB2
         embed: true
       - framework: ../album-ios/Vendor/MobileVLCKit.xcframework
@@ -72,8 +78,10 @@ targets:
       testTargets:
         - LightboxTests
         - MinerStatusCoreTests
+        - DeskRemoteCoreTests
         - ToolboxUITests
         - LightboxUITests
+        - DeskRemoteUITests
   # The miner's UI-free core, embedded as a framework so its sources keep `import MinerStatusCore`.
   MinerStatusCore:
     type: framework
@@ -84,7 +92,17 @@ targets:
       base:
         GENERATE_INFOPLIST_FILE: YES
         PRODUCT_BUNDLE_IDENTIFIER: org.personal.lightbox.minerstatuscore
-  # The album's and the miner's own unit tests, unchanged.
+  # The desk remote's UI-free core (API models, helper client, transcript merging), the same way.
+  DeskRemoteCore:
+    type: framework
+    platform: iOS
+    sources:
+      - ../desk-remote-ios/Sources/DeskRemoteCore
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: org.personal.lightbox.deskremotecore
+  # The album's, the miner's and the desk remote's own unit tests, unchanged.
   LightboxTests:
     type: bundle.unit-test
     platform: iOS
@@ -108,7 +126,19 @@ targets:
       base:
         GENERATE_INFOPLIST_FILE: YES
         PRODUCT_BUNDLE_IDENTIFIER: org.personal.lightbox.minerstatustests
-  # The toolbox's own UI tests: tabs, switching, the last tool reopening, the miner inside a tab.
+  DeskRemoteCoreTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - ../desk-remote-ios/Tests/DeskRemoteCoreTests
+    dependencies:
+      - target: DeskRemoteCore
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: org.personal.lightbox.deskremotetests
+  # The toolbox's own UI tests: tabs, switching, the last tool reopening, the miner and the desk
+  # remote inside their tabs.
   ToolboxUITests:
     type: bundle.ui-testing
     platform: iOS
@@ -133,4 +163,18 @@ targets:
       base:
         GENERATE_INFOPLIST_FILE: YES
         PRODUCT_BUNDLE_IDENTIFIER: org.personal.lightbox.uitests
+        TEST_TARGET_NAME: Lightbox
+  # The desk remote's own UI tests, unchanged, run inside the toolbox against the fake helper
+  # that scripts/build.sh serves (they start in the desk remote tab: DESK_UI_TEST).
+  DeskRemoteUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - ../desk-remote-ios/Tests/DeskRemoteUITests
+    dependencies:
+      - target: Lightbox
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: org.personal.lightbox.deskremoteuitests
         TEST_TARGET_NAME: Lightbox
