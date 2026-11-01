@@ -1,0 +1,16 @@
+[
+  {
+    "kind": "command",
+    "name": "",
+    "content": "Restart-Service -Name Spooler",
+    "cwd": "C:\\work",
+    "timeout": 60
+  },
+  {
+    "kind": "script",
+    "name": "cleanup.ps1",
+    "content": "Remove-Item C:\\Windows\\Temp\\demo-*.log\nWrite-Output 清理完成",
+    "cwd": "C:\\work",
+    "timeout": 60
+  }
+]

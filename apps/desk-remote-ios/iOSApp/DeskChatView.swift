@@ -1,0 +1,1363 @@
+import DeskRemoteCore
+import PhotosUI
+import SwiftUI
+import UIKit
+
+/// One conversation, read live: the first page, then long-polls of up to 25 s while the app is
+/// in the foreground. Tool calls are folded; a permission question shows as a card with
+/// 允許一次／拒絕. Messages typed here are pasted into the desktop app by the PC's helper and
+/// stay as pending bubbles until the transcript itself has them.
+struct DeskChatView: View {
+    @ObservedObject var store: DeskStore
+    let pcID: UUID
+    let app: DeskApp
+    let session: SessionSummary
+    @Environment(\.scenePhase) private var scenePhase
+    @ObservedObject private var network = DeskNetwork.shared
+    @State private var log = TranscriptLog()
+    @State private var failure: String?
+    @State private var expanded: Set<String> = []
+    @State private var fullTexts: [String: String] = [:]
+    @State private var draft = ""
+    @State private var pending: [DeskPending] = []
+    @State private var confirm: DeskConfirm?
+    @State private var promptBusy: String?
+    @State private var questionBusy: String?
+    @State private var openState: String?
+    /// A question was seen here, so the list's "needs action" is no longer news.
+    @State private var sawPrompt = false
+    @State private var showingMeta = false
+    @State private var stopState: String?
+    /// Photos picked for the next message, in order, already made small enough to send.
+    @State private var photos: [Data] = []
+    /// The PC's state, for the windows that popped up on it and how many photos it takes.
+    @State private var pcState: HelperState?
+    @StateObject private var presser = DeskPopupPresser()
+    @FocusState private var inputFocused: Bool
+    @State private var places = DeskRowPlaces()      // where the drawn rows are on the screen
+    // Where the scroll bar's thumb goes. Plain @State on purpose: a @StateObject would redraw this
+    // whole view on every scrolled point (the release run's main thread was busy for 30 s while the
+    // thumb was dragged, CI 10/30); only the bar observes it.
+    @State private var metrics = DeskScrollMetrics()
+    @State private var landing = false      // opening: hidden until it has reached the end
+    @State private var reload = 0           // bumped to make the scroll view anew (blank screen)
+    @State private var settling = 0         // the latest run of scrolling to the end; older ones stop
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 10) {
+                    Color.clear.frame(height: 1).id("top")
+                    if log.earlier {
+                        Text("更早的內容沒有載入（電腦端只送最近的部分）")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity)
+                    }
+                    if !log.loaded && failure == nil {
+                        ProgressView().frame(maxWidth: .infinity)
+                    }
+                    ForEach(log.rows) { row in
+                        rowView(row).id(row.id)
+                            .background(GeometryReader { geometry in
+                                Color.clear.preference(key: DeskRowTops.self,
+                                                       value: [row.id: geometry.frame(in: .named("chat")).minY])
+                            })
+                    }
+                    ForEach(pending) { item in
+                        DeskPendingBubble(item: item, retry: { Task { await send(item, force: false) } },
+                                          remove: { pending.removeAll { $0.id == item.id } })
+                            .id(item.id.uuidString)
+                    }
+                    if let prompt = log.prompt {
+                        DeskPromptCard(app: app, prompt: prompt, busy: promptBusy,
+                                       answer: { allow in Task { await answer(prompt, allow: allow, force: false) } })
+                            .id("prompt")
+                    } else if session.status == "needs-action" && log.loaded && !sawPrompt && log.question == nil {
+                        DeskOpenOnPC(state: openState) { Task { await openOnPC(force: false) } }
+                    }
+                    if let question = log.question {
+                        DeskQuestionCard(question: question, busy: questionBusy) { answers in
+                            Task { await answerQuestion(question, answers: answers, force: false) }
+                        }
+                        .id("question-\(question.questionId)")
+                    }
+                    if log.prompt == nil, log.question == nil, let working = DeskText.working(app, status: log.status) {
+                        HStack(spacing: 12) {
+                            Label(working, systemImage: "ellipsis.bubble")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .accessibilityIdentifier("chat-working")
+                            // Both apps (Codex's stop button read live 10/27); an older helper answers "not supported".
+                            Button(role: .destructive) { Task { await stopTurn(force: false) } } label: {
+                                Label("停止", systemImage: "stop.circle")
+                            }
+                            .font(.footnote)
+                            .buttonStyle(.bordered)
+                            .disabled(stopState != nil && stopState?.hasPrefix("沒有成功") == false)
+                            .accessibilityIdentifier("chat-stop")
+                        }
+                    }
+                    // Stays after the turn ends, so "已停止" is still readable.
+                    if let stopState {
+                        Text(stopState).font(.caption).foregroundStyle(.secondary)
+                            .accessibilityIdentifier("chat-stop-state")
+                    }
+                    // Its place, not its drawing, says the end is on screen: the lazy stack draws
+                    // it a little before it scrolls into view.
+                    Color.clear.frame(height: 1).id("bottom")
+                        .background(GeometryReader { geometry in
+                            Color.clear.preference(key: DeskRowTops.self,
+                                                   value: ["bottom": geometry.frame(in: .named("chat")).minY])
+                        })
+                }
+                .background(GeometryReader { geometry in
+                    Color.clear.preference(key: DeskContentFrame.self, value: geometry.frame(in: .named("chat")))
+                })
+                .opacity(landing ? 0 : 1)
+                .padding(.leading, 12)
+                // The scroll bar has a lane of its own, so it never covers the text (10/30).
+                .padding(.trailing, showsRail ? 18 : 12)
+                .padding(.vertical, 8)
+            }
+            .coordinateSpace(name: "chat")
+            .onPreferenceChange(DeskRowTops.self) { places.tops = $0 }
+            .onPreferenceChange(DeskContentFrame.self) { metrics.update(content: $0, viewport: places.height) }
+            .background(GeometryReader { geometry in
+                Color.clear
+                    .onAppear { places.height = geometry.size.height }
+                    .onChange(of: geometry.size.height) { places.height = geometry.size.height }
+            })
+            .scrollDismissesKeyboard(.interactively)
+            // The bar stands in for the system's indicator; both showed side by side (phone 10/31).
+            .scrollIndicators(showsRail ? .hidden : .automatic)
+            .defaultScrollAnchor(.bottom)
+            .id(reload)
+            // Opening a conversation lands on its newest message (it sometimes stopped short, 10/29).
+            .onChange(of: log.loaded) { if log.loaded { land(proxy) } }
+            .overlay { if landing { ProgressView().accessibilityIdentifier("chat-landing") } }
+            // New messages also go on until the end is really on screen: after a cached copy, the
+            // ones that came since (a huge one among them) stopped it halfway (10/30).
+            .onChange(of: log.rows.last?.id) { if log.loaded { toEnd(proxy) } }
+            .onChange(of: pending.count) { toEnd(proxy) }
+            .onChange(of: log.prompt) { toEnd(proxy) }
+            .onChange(of: log.question?.questionId) { toEnd(proxy) }
+            // A thin scroll bar like the desktop's at the right edge (asked 10/30, after held
+            // buttons and a lever): arrows to the start and the end, a grey thumb to drag, and
+            // holding the blank track pages towards the finger.
+            .overlay(alignment: .trailing) {
+                if showsRail {
+                    DeskScrollBar(metrics: metrics,
+                                  toTop: { jump(proxy, to: "top", anchor: .top) },
+                                  toBottom: { toEnd(proxy) },
+                                  scroll: { fraction in scroll(proxy, to: fraction) })
+                        .padding(.trailing, 1)
+                }
+            }
+        }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            VStack(spacing: 0) {
+                if let line = DeskText.metaLine(log.meta) {
+                    DeskMetaBar(line: (pcState?.fastOn(app) == true ? "⚡ " : "") + line) { showingMeta = true }
+                }
+                if let failure {
+                    DeskNotice(text: failure, tint: .red)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                        .background(Color(.systemBackground))
+                        .accessibilityIdentifier("chat-error")
+                }
+                // A window waiting on the PC keeps messages from going through: answer it here.
+                if let popups = pcState?.shownPopups, !popups.isEmpty || presser.result != nil {
+                    DeskPopupList(popups: popups, presser: presser, compact: true) { popup, button in
+                        Task { await presser.press(popup, button, client: store.client(pcID)) { await refreshPC() } }
+                    }
+                    .padding(8)
+                    .background(Color(.systemBackground))
+                }
+            }
+        }
+        .deskForegroundLoop(every: 10) { await refreshPC() }
+        .sheet(isPresented: $showingMeta) {
+            DeskModelSheet(store: store, pcID: pcID, app: app, session: session, meta: log.meta)
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                // The task list under the latest message, as the desktop keeps it (asked 11/1).
+                if let plan = log.plan, !plan.isEmpty {
+                    DeskPlanCard(items: plan)
+                }
+                if let suggestions = log.suggestions, pending.isEmpty, log.question == nil, log.prompt == nil {
+                    DeskQuickReplies(suggestions: suggestions) { reply in submit(reply.message) }
+                }
+                DeskInputBar(text: $draft, photos: $photos, limit: pcState?.photoLimit ?? 1,
+                             focused: $inputFocused) { submitDraft() }
+            }
+        }
+        .alert(confirm?.title ?? "", isPresented: Binding(get: { confirm != nil }, set: { if !$0 { confirm = nil } }),
+               presenting: confirm) { item in
+            Button(item.confirmLabel) { Task { await item.run() } }
+            Button("取消", role: .cancel) { item.cancel() }
+        } message: { item in
+            Text(item.message)
+        }
+        .navigationTitle(session.title)
+        .navigationBarTitleDisplayMode(.inline)
+        // A new network starts over at once instead of waiting out a long-poll on the old one.
+        .task(id: [scenePhase == .active ? 1 : 0, network.changes]) { await follow() }
+        .onAppear { store.opened.insert(session.id) }
+        .onDisappear { DeskLogCache.shared.save(pc: pcID, app: app, session: session.id) }
+        .onChange(of: scenePhase) { if scenePhase != .active { DeskLogCache.shared.save(pc: pcID, app: app, session: session.id) } }
+    }
+
+    @ViewBuilder
+    private func rowView(_ row: TranscriptRow) -> some View {
+        switch row {
+        case .message(let event):
+            DeskBubble(event: event, app: app, loadImage: loadImage)
+        case .status(let event):
+            Text(event.text)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+        case .tool(let call, let result):
+            toolRow(row.id, call: call, result: result)
+        case .tools(let inner):
+            // Several tool calls in a row: one line like the desktop's, opened to see each.
+            DeskToolGroupRow(row: row, expanded: expanded.contains(row.id), toggle: { toggle(row.id) }) {
+                ForEach(inner) { child in
+                    if case .tool(let call, let result) = child { toolRow(child.id, call: call, result: result) }
+                }
+            }
+        }
+    }
+
+    private func toolRow(_ id: String, call: TranscriptEvent?, result: TranscriptEvent?) -> some View {
+        DeskToolRow(call: call, result: result, expanded: expanded.contains(id),
+                    fullText: result?.itemId.flatMap { fullTexts[$0] },
+                    toggle: { toggle(id) },
+                    loadFull: { itemId in Task { await loadItem(itemId) } },
+                    loadImage: loadImage)
+    }
+
+    /// A picture of this conversation, from the phone's cache or the PC.
+    private func loadImage(_ imageId: String) async -> UIImage? {
+        guard let client = store.client(pcID) else { return nil }
+        return await DeskImageCache.shared.image(pc: pcID, app: app, session: session.id, id: imageId) {
+            try await client.image(app, session: session.id, image: imageId)
+        }
+    }
+
+    /// Scrolls to "top" or "bottom", then again twice: the lazy stack guesses the height of rows
+    /// it has not drawn yet, so a single jump through a long conversation can stop short.
+    private func jump(_ proxy: ScrollViewProxy, to target: String, anchor: UnitPoint = .bottom, animated: Bool = true) {
+        if animated {
+            withAnimation { proxy.scrollTo(target, anchor: anchor) }
+        } else {
+            proxy.scrollTo(target, anchor: anchor)
+        }
+        Task { @MainActor in
+            for delay: UInt64 in [250, 600] {
+                try? await Task.sleep(nanoseconds: delay * 1_000_000)
+                proxy.scrollTo(target, anchor: anchor)
+            }
+        }
+    }
+
+    /// Opening: goes to the end hidden, so the middle never shows. Three tries were not enough for
+    /// long replies: it sat in the middle until the next message came (10/30).
+    private func land(_ proxy: ScrollViewProxy) {
+        landing = true
+        toEnd(proxy)
+        // Whatever happens to the scrolling runs, the conversation shows after their longest time.
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 3_500_000_000)
+            landing = false
+        }
+    }
+
+    /// Scrolls to the end again and again until the end marker is on screen twice in a row (at
+    /// most 3 s): the lazy stack only guesses the height of rows it has not drawn, so one jump past
+    /// a huge message stops short. A newer call takes over from an older one, and the last one to
+    /// finish shows a conversation still hidden by `land`.
+    private func toEnd(_ proxy: ScrollViewProxy) {
+        settling += 1
+        let run = settling
+        Task { @MainActor in
+            var seen = 0
+            for _ in 0 ..< 20 {
+                guard run == settling else { return }
+                proxy.scrollTo("bottom", anchor: .bottom)
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                seen = endShown ? seen + 1 : 0
+                if seen >= 2 { break }
+            }
+            guard run == settling else { return }
+            proxy.scrollTo("bottom", anchor: .bottom)
+            landing = false
+            // A blank screen (no row drawn where it stopped: seen on CI 10/30 after a saved copy
+            // got huge new rows; going to the last row did not help either) is scrolled to the
+            // last row itself once more, then the scroll view is made anew, which starts at the end.
+            for target in [log.rows.last?.id, "bottom"] {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                guard run == settling, !rowOnScreen, let target else { return }
+                proxy.scrollTo(target, anchor: .bottom)
+            }
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard run == settling, !rowOnScreen else { return }
+            reload += 1
+        }
+    }
+
+    /// Some row is drawn within the screen.
+    private var rowOnScreen: Bool {
+        places.tops.contains { id, top in id != "bottom" && top > -60 && top < places.height }
+    }
+
+    /// The end marker is on screen and so is the last row: the marker's place can be the one it
+    /// had before new rows came (a row the lazy stack has not drawn yet reports no place), so the
+    /// last row has to have been drawn too (test39 failed on that once, CI 10/30).
+    private var endShown: Bool {
+        guard let top = places.tops["bottom"], top >= 0, top <= places.height else { return false }
+        guard let last = log.rows.last?.id else { return true }
+        guard let rowTop = places.tops[last] else { return false }
+        return rowTop < places.height
+    }
+
+    private var showsRail: Bool { log.rows.count > 12 }
+
+    /// Scrolls to `fraction` of the way through the conversation (0 its start, 1 its end), for the
+    /// scroll bar. The scroll view only goes to rows, so the row that far down the list is put
+    /// that far down the screen: the first at the top, the last at the bottom, the rest in between.
+    private func scroll(_ proxy: ScrollViewProxy, to fraction: CGFloat) {
+        let ids = log.rows.map(\.id)
+        guard !ids.isEmpty, abs(fraction - places.lastFraction) > 0.002 else { return }  // not for every touched point
+        places.lastFraction = fraction
+        if fraction <= 0.002 {
+            proxy.scrollTo("top", anchor: .top)
+        } else if fraction >= 0.998 {
+            proxy.scrollTo("bottom", anchor: .bottom)
+        } else {
+            let index = Int((CGFloat(ids.count - 1) * fraction).rounded())
+            proxy.scrollTo(ids[index], anchor: UnitPoint(x: 0, y: fraction))
+        }
+    }
+
+    private func toggle(_ id: String) {
+        if expanded.contains(id) { expanded.remove(id) } else { expanded.insert(id) }
+    }
+
+    // MARK: - Reading
+
+    /// Reads until the view goes away or the app leaves the foreground.
+    private func follow() async {
+        // Last visit's copy first (shown at once, even offline); then only what came after it.
+        if !log.loaded, let cached = DeskLogCache.shared.log(pc: pcID, app: app, session: session.id) {
+            log = cached
+        }
+        guard scenePhase == .active, let client = store.client(pcID) else {
+            if store.client(pcID) == nil { failure = "沒有連線密碼" }
+            return
+        }
+        var wait = 0
+        while !Task.isCancelled {
+            do {
+                let page = try await client.events(app, session: session.id, after: log.cursor, epoch: log.epoch,
+                                                   knownPrompt: log.prompt?.promptId,
+                                                   knownQuestion: log.question?.questionId, wait: wait)
+                let previousQuestion = log.question?.questionId
+                log.apply(page)
+                DeskLogCache.shared.note(log, pc: pcID, app: app, session: session.id)
+                if log.prompt == nil { promptBusy = nil } else { sawPrompt = true }
+                if log.question?.questionId != previousQuestion { questionBusy = nil }
+                pending.removeAll { $0.mark != nil && log.hasUserText($0.text, after: $0.mark ?? 0) }
+                failure = nil
+                wait = 25
+            } catch {
+                if Task.isCancelled { return }
+                guard let text = DeskNetwork.shared.failureText(error) else { return }
+                failure = text
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+            }
+        }
+    }
+
+    private func loadItem(_ itemId: String) async {
+        guard let client = store.client(pcID) else { return }
+        do {
+            fullTexts[itemId] = try await client.item(app, session: session.id, item: itemId)
+        } catch let error as HelperFailure {
+            fullTexts[itemId] = "（\(DeskText.failure(error))）"
+        } catch {
+            fullTexts[itemId] = "（\(DeskText.failure(.unreachable))）"
+        }
+    }
+
+    // MARK: - Sending
+
+    private func submitDraft() {
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty || !photos.isEmpty else { return }
+        draft = ""
+        submit(text, photos: photos)
+        photos = []
+    }
+
+    /// Sends typed text (with the picked photos) or a quick reply's message the same way.
+    private func submit(_ text: String, photos: [Data] = []) {
+        stopState = nil
+        let item = DeskPending(text: text, mark: log.events.last?.seq ?? 0, photos: photos)
+        pending.append(item)
+        Task { await send(item, force: false) }
+    }
+
+    private func stopTurn(force: Bool) async {
+        guard let client = store.client(pcID) else { return }
+        stopState = "正在電腦上按停止…"
+        do {
+            let end = try await client.follow(try await client.stop(app, session: session.id, force: force), timeout: 30)
+            stopState = end.state == "failed" ? "沒有成功：\(end.message)" : end.message
+        } catch let error as HelperFailure {
+            stopState = "沒有成功：\(DeskText.failure(error))"
+        } catch {
+            stopState = "沒有成功：\(DeskText.failure(.unreachable))"
+        }
+    }
+
+    private func setPending(_ id: UUID, _ change: (inout DeskPending) -> Void) {
+        if let index = pending.firstIndex(where: { $0.id == id }) { change(&pending[index]) }
+    }
+
+    private func send(_ item: DeskPending, force: Bool) async {
+        guard let client = store.client(pcID) else { return }
+        setPending(item.id) { $0.status = "送出中…"; $0.failed = false }
+        do {
+            let start = try await client.send(app, session: session.id, text: item.text,
+                                              clientMsgId: item.id.uuidString, images: item.photos, force: force)
+            setPending(item.id) { $0.status = start.message }
+            let end = try await client.follow(start) { status in setPending(item.id) { $0.status = status.message } }
+            setPending(item.id) {
+                $0.status = end.message
+                $0.failed = end.state == "failed"
+                if !end.finished { $0.status = "電腦端還在處理" }
+            }
+        } catch HelperFailure.busyUser(let seconds) {
+            setPending(item.id) { $0.status = "等你確認"; $0.failed = false }
+            confirm = DeskConfirm(
+                title: "電腦有人在用",
+                message: "\(seconds.map { "\($0) 秒前" } ?? "剛剛")有人操作過這台電腦。送出會把視窗切到前面並貼上文字，可能打斷正在用電腦的人。",
+                confirmLabel: "仍要送出",
+                run: { await send(item, force: true) },
+                cancel: { setPending(item.id) { $0.status = "已取消，沒有送出"; $0.failed = true } })
+        } catch let error as HelperFailure {
+            setPending(item.id) { $0.status = "沒有送出：\(DeskText.failure(error))"; $0.failed = true }
+        } catch {
+            setPending(item.id) { $0.status = "沒有送出：\(DeskText.failure(.unreachable))"; $0.failed = true }
+        }
+        if pending.first(where: { $0.id == item.id })?.failed == true { await refreshPC() }
+    }
+
+    /// The PC's state: windows that popped up on it, and how many photos one message may carry.
+    private func refreshPC() async {
+        guard let client = store.client(pcID), let fresh = try? await client.state() else { return }
+        pcState = fresh
+    }
+
+    // MARK: - Permission and opening on the PC
+
+    private func answer(_ prompt: PermissionPrompt, allow: Bool, force: Bool) async {
+        guard let client = store.client(pcID) else { return }
+        promptBusy = allow ? "正在按「允許一次」…" : "正在按「拒絕」…"
+        do {
+            let start = try await client.answer(app, session: session.id, promptId: prompt.promptId, allow: allow, force: force)
+            let end = try await client.follow(start, timeout: 40)
+            promptBusy = end.state == "failed" ? "沒有成功：\(end.message)" : "\(end.message)，等待電腦更新…"
+        } catch HelperFailure.busyUser(let seconds) {
+            promptBusy = nil
+            confirm = DeskConfirm(
+                title: "電腦有人在用",
+                message: "\(seconds.map { "\($0) 秒前" } ?? "剛剛")有人操作過這台電腦。Claude 的「允許一次」要移動滑鼠點選單。",
+                confirmLabel: "仍要按",
+                run: { await answer(prompt, allow: allow, force: true) },
+                cancel: {})
+        } catch let error as HelperFailure {
+            promptBusy = "沒有成功：\(DeskText.failure(error))"
+        } catch {
+            promptBusy = "沒有成功：\(DeskText.failure(.unreachable))"
+        }
+    }
+
+    private func answerQuestion(_ question: OptionQuestion, answers: [QuestionAnswer], force: Bool) async {
+        guard let client = store.client(pcID) else { return }
+        questionBusy = "正在電腦上選擇…"
+        do {
+            let start = try await client.answerQuestion(app, session: session.id, questionId: question.questionId,
+                                                        answers: answers, force: force)
+            let end = try await client.follow(start, timeout: 60)
+            questionBusy = end.state == "failed" ? "沒有成功：\(end.message)" : "\(end.message)，等待電腦更新…"
+        } catch HelperFailure.busyUser(let seconds) {
+            questionBusy = nil
+            confirm = DeskConfirm(
+                title: "電腦有人在用",
+                message: "\(seconds.map { "\($0) 秒前" } ?? "剛剛")有人操作過這台電腦。回答會把視窗切到前面並點選選項。",
+                confirmLabel: "仍要回答",
+                run: { await answerQuestion(question, answers: answers, force: true) },
+                cancel: {})
+        } catch let error as HelperFailure {
+            questionBusy = "沒有成功：\(DeskText.failure(error))"
+        } catch {
+            questionBusy = "沒有成功：\(DeskText.failure(.unreachable))"
+        }
+    }
+
+    private func openOnPC(force: Bool) async {
+        guard let client = store.client(pcID) else { return }
+        openState = "正在電腦上打開…"
+        do {
+            let end = try await client.follow(try await client.openOnPC(app, session: session.id, force: force), timeout: 30)
+            openState = end.state == "failed" ? "沒有成功：\(end.message)" : "已在電腦上打開，詢問會出現在這裡"
+        } catch HelperFailure.busyUser(let seconds) {
+            openState = nil
+            confirm = DeskConfirm(
+                title: "電腦有人在用",
+                message: "\(seconds.map { "\($0) 秒前" } ?? "剛剛")有人操作過這台電腦。打開會切換電腦畫面上的對話。",
+                confirmLabel: "仍要打開",
+                run: { await openOnPC(force: true) },
+                cancel: {})
+        } catch let error as HelperFailure {
+            openState = "沒有成功：\(DeskText.failure(error))"
+        } catch {
+            openState = "沒有成功：\(DeskText.failure(.unreachable))"
+        }
+    }
+}
+
+/// The tops of the drawn rows in the chat's visible area, and its height. A plain object, so
+/// scrolling (which changes them every frame) does not redraw the chat.
+final class DeskRowPlaces {
+    var tops: [String: CGFloat] = [:]
+    var height: CGFloat = 0
+    var lastFraction: CGFloat = -1  // where the scroll bar last sent the view
+}
+
+struct DeskRowTops: PreferenceKey {
+    static var defaultValue: [String: CGFloat] = [:]
+    static func reduce(value: inout [String: CGFloat], nextValue: () -> [String: CGFloat]) {
+        value.merge(nextValue()) { $1 }
+    }
+}
+
+/// The whole conversation's frame in the scroll view's space: its top edge is minus the scroll
+/// offset, its height the content's (the lazy stack's estimate for rows not drawn yet).
+struct DeskContentFrame: PreferenceKey {
+    static var defaultValue = CGRect.zero
+    /// Siblings without a frame of their own must not wipe it (they did: the bar read 0, CI 10/30).
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        let next = nextValue()
+        if next.height > 0 { value = next }
+    }
+}
+
+/// Where the scroll bar's thumb goes, kept apart from the view's state so that scrolling redraws
+/// the bar alone: `position` 0 at the start of the conversation, 1 at its end; `size` the share of
+/// the conversation on the screen.
+final class DeskScrollMetrics: ObservableObject {
+    @Published var position: CGFloat = 1
+    @Published var size: CGFloat = 1
+    var content = CGRect.zero  // for the bar's accessibility value (UI tests read it when stuck)
+
+    func update(content: CGRect, viewport: CGFloat) {
+        self.content = content
+        guard content.height > 0, viewport > 0 else { return }
+        let room = content.height - viewport
+        let newPosition = room > 1 ? min(1, max(0, -content.minY / room)) : 1
+        let newSize = min(1, viewport / content.height)
+        if abs(newPosition - position) > 0.002 { position = newPosition }
+        if abs(newSize - size) > 0.01 { size = newSize }
+    }
+}
+
+/// A thin scroll bar like the desktop's, at the conversation's right edge: an arrow at each end
+/// (a tap goes to the start or the end), a grey thumb that follows the scrolling and can be
+/// dragged, and a track that, held above or below the thumb, pages that way until the thumb
+/// reaches the finger or the finger lifts (asked 10/30).
+struct DeskScrollBar: View {
+    @ObservedObject var metrics: DeskScrollMetrics
+    let toTop: () -> Void
+    let toBottom: () -> Void
+    let scroll: (CGFloat) -> Void
+    @State private var grab: CGFloat?           // the finger's offset from the thumb's top while dragging it
+    @State private var paging: Task<Void, Never>?
+    @State private var finger: CGFloat = 0      // the finger's place on the track while it is held
+    static let width: CGFloat = 14
+    static let arrow: CGFloat = 18
+    static let thumbMinimum: CGFloat = 36
+
+    var body: some View {
+        VStack(spacing: 0) {
+            arrowView("chevron.up", label: "捲到最上面", identifier: "chat-to-top", action: toTop)
+            GeometryReader { geometry in
+                let track = geometry.size.height
+                let thumbHeight = min(track, max(Self.thumbMinimum, track * metrics.size))
+                let thumbTop = (track - thumbHeight) * metrics.position
+                ZStack(alignment: .top) {
+                    Color.clear
+                    Capsule()
+                        .fill(Color.secondary.opacity(grab == nil ? 0.5 : 0.85))
+                        .frame(width: 5, height: thumbHeight)
+                        .offset(y: thumbTop)
+                        .accessibilityIdentifier("chat-thumb")
+                }
+                .frame(width: Self.width, height: track)
+                .contentShape(Rectangle())
+                .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                    .onChanged { value in
+                        finger = value.location.y
+                        if grab == nil && paging == nil {
+                            if finger >= thumbTop && finger <= thumbTop + thumbHeight {
+                                grab = finger - thumbTop
+                            } else {
+                                paging = Task { @MainActor in await page(track: track, thumbHeight: thumbHeight) }
+                            }
+                        }
+                        if let grab, track > thumbHeight {
+                            let top = min(max(0, finger - grab), track - thumbHeight)
+                            scroll(top / (track - thumbHeight))
+                        }
+                    }
+                    .onEnded { _ in
+                        grab = nil
+                        paging?.cancel()
+                        paging = nil
+                    })
+            }
+            arrowView("chevron.down", label: "捲到最新", identifier: "chat-to-bottom", action: toBottom)
+        }
+        .frame(width: Self.width)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("chat-scrollbar")
+        .accessibilityValue(String(format: "位置 %.2f 大小 %.2f 內容 %.0f 從 %.0f", metrics.position, metrics.size,
+                                   metrics.content.height, metrics.content.minY))
+    }
+
+    private func arrowView(_ symbol: String, label: String, identifier: String, action: @escaping () -> Void) -> some View {
+        Image(systemName: symbol)
+            .font(.system(size: 9, weight: .bold))
+            .foregroundStyle(.secondary)
+            .frame(width: Self.width, height: Self.arrow)
+            .contentShape(Rectangle())
+            .onTapGesture(perform: action)
+            .accessibilityLabel(label)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityIdentifier(identifier)
+    }
+
+    /// A page (the share on the screen) towards the finger about six times a second, stopping once
+    /// the thumb has reached it; the finger may move meanwhile.
+    private func page(track: CGFloat, thumbHeight: CGFloat) async {
+        guard track > thumbHeight else { return }
+        while !Task.isCancelled {
+            let wanted = min(1, max(0, (finger - thumbHeight / 2) / (track - thumbHeight)))
+            let current = metrics.position
+            let step = max(0.02, metrics.size)
+            if wanted < current - 0.005 {
+                scroll(max(wanted, current - step))
+            } else if wanted > current + 0.005 {
+                scroll(min(wanted, current + step))
+            }
+            try? await Task.sleep(nanoseconds: 160_000_000)
+        }
+    }
+}
+
+/// A message typed on the phone that the transcript does not show yet.
+struct DeskPending: Identifiable, Equatable {
+    let id = UUID()
+    let text: String
+    /// The newest event seq when it was sent; the transcript must show it after this.
+    let mark: Int?
+    var photos: [Data] = []
+    var status = "排隊中"
+    var failed = false
+}
+
+/// One "are you sure" question with its two outcomes.
+struct DeskConfirm: Identifiable {
+    let id = UUID()
+    let title: String
+    let message: String
+    let confirmLabel: String
+    let run: @MainActor () async -> Void
+    let cancel: @MainActor () -> Void
+}
+
+struct DeskPendingBubble: View {
+    let item: DeskPending
+    let retry: () -> Void
+    let remove: () -> Void
+
+    var body: some View {
+        HStack {
+            Spacer(minLength: 40)
+            VStack(alignment: .trailing, spacing: 4) {
+                if item.photos.count == 1, let image = UIImage(data: item.photos[0]) {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: 160, maxHeight: 160)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .accessibilityLabel("照片")
+                } else if item.photos.count > 1 {
+                    LazyVGrid(columns: Array(repeating: GridItem(.fixed(64), spacing: 4), count: min(3, item.photos.count)),
+                              alignment: .trailing, spacing: 4) {
+                        ForEach(item.photos.indices, id: \.self) { index in
+                            if let image = UIImage(data: item.photos[index]) {
+                                Image(uiImage: image)
+                                    .resizable()
+                                    .scaledToFill()
+                                    .frame(width: 64, height: 64)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                            }
+                        }
+                    }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("\(item.photos.count) 張照片")
+                    .accessibilityIdentifier("pending-photos")
+                }
+                Text(item.text.isEmpty ? (item.photos.count > 1 ? "（只有 \(item.photos.count) 張照片）" : "（只有照片）") : item.text)
+                    .padding(10)
+                    .background(Color.accentColor.opacity(item.failed ? 0.08 : 0.12), in: RoundedRectangle(cornerRadius: 12))
+                    .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.accentColor.opacity(0.35),
+                                                                             style: StrokeStyle(lineWidth: 1, dash: [4])))
+                HStack(spacing: 10) {
+                    Text(item.status)
+                        .font(.caption)
+                        .foregroundStyle(item.failed ? Color.red : Color.secondary)
+                        .accessibilityIdentifier("pending-status")
+                    if item.failed {
+                        Button("重試", action: retry).font(.caption)
+                        Button("移除", action: remove).font(.caption)
+                    }
+                }
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("pending-bubble")
+    }
+}
+
+/// A user message (right) or a reply (left), with inline Markdown and fenced code blocks.
+struct DeskBubble: View {
+    let event: TranscriptEvent
+    let app: DeskApp
+    var loadImage: ((String) async -> UIImage?)?
+
+    private var mine: Bool { event.kind == "user" }
+    /// The words, except the "[圖片]" stand-in once the picture itself is shown.
+    private var shownText: String { event.pictures.isEmpty || event.text != "[圖片]" ? event.text : "" }
+
+    var body: some View {
+        HStack {
+            if mine { Spacer(minLength: 40) }
+            VStack(alignment: .leading, spacing: 6) {
+                if !event.pictures.isEmpty, let loadImage {
+                    DeskPictureStrip(ids: event.pictures, loadImage: loadImage)
+                }
+                ForEach(Array(DeskText.blocks(shownText).enumerated()), id: \.offset) { _, block in
+                    switch block {
+                    case .code(let code):
+                        Text(code)
+                            .font(.system(.footnote, design: .monospaced))
+                            .padding(8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 6))
+                    case .prose(let prose):
+                        Text(Self.markdown(prose))
+                    case .heading(let level, let heading):
+                        Text(Self.markdown(heading))
+                            .font(level <= 1 ? .title3.bold() : level == 2 ? .headline : .subheadline.bold())
+                            .padding(.top, 2)
+                    case .table(let header, let rows):
+                        DeskTable(header: header, rows: rows)
+                    case .rule:
+                        Divider()
+                    }
+                }
+                if event.truncated == true {
+                    Text("（內容太長，只顯示前段）").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .padding(10)
+            .background(mine ? Color.accentColor.opacity(0.18) : Color(.secondarySystemBackground),
+                        in: RoundedRectangle(cornerRadius: 12))
+            // Long press: copy all, or open the text where any part can be selected (SwiftUI's
+            // own text selection on iOS only copies the whole text; asked for on the phone 10/27).
+            .contextMenu {
+                Button { UIPasteboard.general.string = event.text } label: { Label("拷貝全部", systemImage: "doc.on.doc") }
+                Button { selecting = true } label: { Label("選取文字", systemImage: "selection.pin.in.out") }
+            }
+            // One element for the words; with pictures, each thumbnail stays its own (tappable,
+            // and found by the UI tests: combined, they vanished, CI 10/31).
+            .accessibilityElement(children: event.pictures.isEmpty ? .combine : .contain)
+            .accessibilityIdentifier(mine ? "bubble-user" : "bubble-reply")
+            if !mine { Spacer(minLength: 24) }
+        }
+        .sheet(isPresented: $selecting) { DeskSelectTextSheet(text: event.text) }
+    }
+
+    @State private var selecting = false
+
+    static func markdown(_ text: String) -> AttributedString {
+        let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        // Bare web addresses become tappable too, not only Markdown links (asked on the phone 10/27).
+        return DeskText.linkingWebAddresses((try? AttributedString(markdown: text, options: options)) ?? AttributedString(text))
+    }
+}
+
+/// A Markdown table as the desktop apps draw it: a grey header row, a thin line under each row,
+/// long cells wrapping; a table wider than the bubble scrolls sideways.
+struct DeskTable: View {
+    let header: [String]
+    let rows: [[String]]
+    /// A column as wide as its longest line, up to this; longer cells wrap.
+    private static let widest: CGFloat = 170
+
+    var body: some View {
+        let widths = columnWidths()
+        ScrollView(.horizontal, showsIndicators: false) {
+            Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 7) {
+                GridRow {
+                    ForEach(header.indices, id: \.self) { column in
+                        cell(header[column], width: widths[column]).foregroundStyle(.secondary)
+                    }
+                }
+                ForEach(rows.indices, id: \.self) { row in
+                    Divider()
+                    GridRow {
+                        ForEach(header.indices, id: \.self) { column in
+                            cell(rows[row][column], width: widths[column])
+                        }
+                    }
+                }
+            }
+            .padding(.vertical, 4)
+        }
+        // One element read row by row, which the bubble's combined label then includes (a scroll
+        // view's contents were left out of it).
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(spoken)
+        .accessibilityIdentifier("bubble-table")
+    }
+
+    private var spoken: String {
+        ([header] + rows).map { row in
+            row.map { String(DeskBubble.markdown($0).characters) }.joined(separator: "，")
+        }.joined(separator: "\n")
+    }
+
+    private func cell(_ text: String, width: CGFloat) -> some View {
+        Text(DeskBubble.markdown(text))
+            .font(.subheadline)
+            .frame(width: width, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func columnWidths() -> [CGFloat] {
+        let font = UIFont.preferredFont(forTextStyle: .subheadline)
+        return header.indices.map { column in
+            let texts = [header[column]] + rows.map { $0[column] }
+            let longest = texts.map { text in
+                (String(DeskBubble.markdown(text).characters) as NSString).size(withAttributes: [.font: font]).width
+            }.max() ?? 0
+            return min(Self.widest, max(28, ceil(longest) + 2))
+        }
+    }
+}
+
+/// A tool call folded into one line; tapping shows the call and its output.
+struct DeskToolRow: View {
+    let call: TranscriptEvent?
+    let result: TranscriptEvent?
+    let expanded: Bool
+    let fullText: String?
+    let toggle: () -> Void
+    let loadFull: (String) -> Void
+    var loadImage: ((String) async -> UIImage?)?
+
+    private var tool: String { call?.tool ?? result?.tool ?? "工具" }
+    private var summary: String {
+        (call?.text ?? "").split(separator: "\n", maxSplits: 1).first.map(String.init) ?? "（輸出）"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button(action: toggle) {
+                HStack(spacing: 6) {
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.caption)
+                    Image(systemName: result?.isError == true ? "xmark.octagon" : "wrench.and.screwdriver")
+                        .font(.caption)
+                        .foregroundStyle(result?.isError == true ? Color.red : Color.secondary)
+                    Text(tool).font(.caption.bold())
+                    Text(summary).font(.caption).lineLimit(1).truncationMode(.middle)
+                    if result?.pictures.isEmpty == false {
+                        Image(systemName: "photo").font(.caption)  // a screenshot came back
+                    }
+                    Spacer(minLength: 0)
+                }
+                .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("tool-\(tool)")
+            if expanded {
+                if let call, !call.text.isEmpty {
+                    DeskSelectableText(call.text, style: .caption1, monospaced: true)
+                        .accessibilityLabel(call.text)
+                }
+                if let result, !result.pictures.isEmpty, let loadImage {
+                    DeskPictureStrip(ids: result.pictures, loadImage: loadImage)
+                }
+                if let result {
+                    let output = fullText ?? (result.text.isEmpty ? "（沒有輸出）" : result.text)
+                    // Long output scrolls inside a box instead of filling the whole chat.
+                    ScrollView {
+                        DeskSelectableText(output, style: .caption2, monospaced: true)
+                            .accessibilityLabel(output)
+                            .padding(6)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .accessibilityIdentifier("tool-output")
+                    }
+                    .frame(maxHeight: 280)
+                    .fixedSize(horizontal: false, vertical: (fullText ?? result.text).count < 600)
+                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 6))
+                    if result.truncated == true, fullText == nil, let itemId = result.itemId {
+                        Button("載入完整輸出") { loadFull(itemId) }
+                            .font(.caption)
+                            .accessibilityIdentifier("tool-load-full")
+                    }
+                }
+            }
+        }
+        .padding(.vertical, 2)
+    }
+}
+
+/// The question the desktop app is asking now, answered from here: allow once or deny only.
+struct DeskPromptCard: View {
+    let app: DeskApp
+    let prompt: PermissionPrompt
+    let busy: String?
+    let answer: (Bool) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("\(app.displayName) 正在詢問權限", systemImage: "hand.raised.fill")
+                .font(.subheadline.bold())
+                .foregroundStyle(.orange)
+            DeskSelectableText(prompt.text, style: .callout)
+                .accessibilityLabel(prompt.text)
+                .accessibilityIdentifier("prompt-text")
+            if let busy {
+                Text(busy).font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("prompt-busy")
+            } else {
+                HStack(spacing: 12) {
+                    Button { answer(true) } label: { Text("允許一次").frame(maxWidth: .infinity) }
+                        .buttonStyle(.borderedProminent)
+                        .accessibilityIdentifier("prompt-allow")
+                    Button(role: .destructive) { answer(false) } label: { Text("拒絕").frame(maxWidth: .infinity) }
+                        .buttonStyle(.bordered)
+                        .accessibilityIdentifier("prompt-deny")
+                }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("prompt-card")
+    }
+}
+
+/// An option question: pick one (or several) per question, or write your own under 其他.
+struct DeskQuestionCard: View {
+    let question: OptionQuestion
+    let busy: String?
+    let submit: ([QuestionAnswer]) -> Void
+    @State private var picks: [Int: [String]] = [:]
+    @State private var others: [Int: String] = [:]
+
+    private func answer(_ index: Int) -> QuestionAnswer {
+        let other = (others[index] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return QuestionAnswer(labels: picks[index] ?? [], other: other.isEmpty ? nil : other)
+    }
+
+    private var complete: Bool { question.questions.indices.allSatisfy { !answer($0).isEmpty } }
+
+    private func toggle(_ index: Int, _ label: String, multi: Bool) {
+        var chosen = picks[index] ?? []
+        if chosen.contains(label) {
+            chosen.removeAll { $0 == label }
+        } else {
+            chosen = multi ? chosen + [label] : [label]
+        }
+        picks[index] = chosen
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Label("Claude 在等你選擇", systemImage: "list.bullet.circle.fill")
+                .font(.subheadline.bold())
+                .foregroundStyle(.blue)
+            ForEach(Array(question.questions.enumerated()), id: \.offset) { index, item in
+                VStack(alignment: .leading, spacing: 6) {
+                    if let header = item.header {
+                        Text(header).font(.caption.bold()).foregroundStyle(.secondary)
+                    }
+                    Text(item.question).font(.callout)
+                    Text(item.multiSelect ? "可複選" : "選一個").font(.caption2).foregroundStyle(.secondary)
+                    ForEach(item.options, id: \.label) { option in
+                        let on = (picks[index] ?? []).contains(option.label)
+                        Button { toggle(index, option.label, multi: item.multiSelect) } label: {
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Image(systemName: item.multiSelect ? (on ? "checkmark.square.fill" : "square")
+                                                                   : (on ? "largecircle.fill.circle" : "circle"))
+                                    .foregroundStyle(on ? Color.blue : Color.secondary)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(option.label).foregroundStyle(.primary)
+                                    if let detail = option.description {
+                                        Text(detail).font(.caption).foregroundStyle(.secondary)
+                                    }
+                                }
+                                Spacer(minLength: 0)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(busy != nil)
+                        .accessibilityIdentifier("question-option-\(index)-\(option.label)")
+                        .accessibilityValue(on ? "已選" : "未選")
+                    }
+                    TextField("其他（自己寫）", text: Binding(get: { others[index] ?? "" }, set: { others[index] = $0 }),
+                              axis: .vertical)
+                        .textFieldStyle(.roundedBorder)
+                        .disabled(busy != nil)
+                        .accessibilityIdentifier("question-other-\(index)")
+                }
+            }
+            if let busy {
+                Text(busy).font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("question-busy")
+            } else {
+                Button { submit(question.questions.indices.map { answer($0) }) } label: {
+                    Text("送出選擇").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!complete)
+                .accessibilityIdentifier("question-submit")
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("question-card")
+    }
+}
+
+/// The next-step box's reply buttons: tapping one sends its message like typing it.
+struct DeskQuickReplies: View {
+    let suggestions: ReplySuggestions
+    let send: (ReplySuggestions.Reply) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            // The next-step box as the desktop draws it: recap, question, reply buttons.
+            if let recap = suggestions.recap {
+                Text(recap).font(.footnote).lineLimit(4)
+                    .accessibilityIdentifier("next-step-recap")
+            }
+            if let ask = suggestions.ask {
+                Text(ask).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+            }
+            if !suggestions.replies.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(suggestions.replies, id: \.self) { reply in
+                            Button(reply.label) { send(reply) }
+                                .buttonStyle(.bordered)
+                                .accessibilityIdentifier("quick-reply-\(reply.label)")
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.bar)
+    }
+}
+
+/// The task list the desktop app keeps under the latest message: one line with the step in
+/// progress and the count, opened to see every step with its tick.
+struct DeskPlanCard: View {
+    let items: [PlanItem]
+    @State private var open = false
+
+    private var done: Int { items.filter { $0.status == "completed" }.count }
+    private var current: String? { items.first { $0.status == "in_progress" }?.content }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Button { open.toggle() } label: {  // no animation: the closed line's text ghosted over the steps
+                HStack(spacing: 6) {
+                    Image(systemName: open ? "chevron.down" : "chevron.right").font(.caption)
+                    Image(systemName: done == items.count ? "checkmark.circle.fill" : "list.bullet.circle")
+                        .font(.caption)
+                        .foregroundStyle(done == items.count ? Color.green : Color.accentColor)
+                    Text("任務 \(done)/\(items.count)").font(.caption.bold())
+                    if !open, let current {
+                        Text(current).font(.caption).lineLimit(1)
+                    } else if !open, done == items.count {
+                        Text("全部完成").font(.caption)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("plan-card")
+            if open {
+                ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                    HStack(alignment: .top, spacing: 6) {
+                        Image(systemName: item.status == "completed" ? "checkmark.circle.fill"
+                              : (item.status == "in_progress" ? "circle.dotted" : "circle"))
+                            .font(.caption)
+                            .foregroundStyle(item.status == "completed" ? Color.green
+                                             : (item.status == "in_progress" ? Color.accentColor : Color.secondary))
+                        Text(item.content)
+                            .font(.caption)
+                            .foregroundStyle(item.status == "completed" ? Color.secondary : Color.primary)
+                            .strikethrough(item.status == "completed", color: .secondary)
+                    }
+                    .accessibilityElement(children: .combine)  // one element per step (a bare stack has none)
+                    .accessibilityIdentifier("plan-item")
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.bar)
+    }
+}
+
+/// A conversation waiting for someone, not open on the PC: its question only shows once it is.
+struct DeskOpenOnPC: View {
+    let state: String?
+    let open: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("這個對話在等待處理，但電腦上目前開著別的對話，所以看不到它的詢問。")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            if let state {
+                Text(state).font(.caption).foregroundStyle(.secondary)
+            } else {
+                Button("在電腦上打開這個對話", action: open)
+                    .buttonStyle(.bordered)
+                    .accessibilityIdentifier("open-on-pc")
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+/// The native input bar: multi-line, the iOS keyboard and dictation; sends on the button.
+struct DeskInputBar: View {
+    @Binding var text: String
+    /// In the order they go out; up to `limit` (1 for helpers before 0.5.11, which take one).
+    @Binding var photos: [Data]
+    let limit: Int
+    var focused: FocusState<Bool>.Binding
+    let send: () -> Void
+    @State private var picked: [PhotosPickerItem] = []
+    @State private var preparing = false
+    @State private var shooting = false
+    @StateObject private var dictation = DeskDictation()
+    /// Simulator UI tests have no camera: the camera button hands over a made-up shot instead.
+    private static let uiTest = ProcessInfo.processInfo.environment["DESK_UI_TEST"] == "1"
+    private var canShoot: Bool { Self.uiTest || UIImagePickerController.isSourceTypeAvailable(.camera) }
+
+    private var empty: Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && photos.isEmpty }
+    /// With room for one photo only, a new pick replaces the one there.
+    private var room: Int { limit <= 1 ? 1 : max(0, limit - photos.count) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if !photos.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(alignment: .top, spacing: 6) {
+                        ForEach(photos.indices, id: \.self) { index in
+                            thumbnail(index)
+                        }
+                    }
+                }
+                Text(photos.count > 1 ? "會先依序貼上 \(photos.count) 張照片，再送出文字" : "會先貼上照片，再送出文字")
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("chat-photo-count")
+            }
+            if let failure = dictation.failure {
+                Text(failure).font(.caption2).foregroundStyle(.red).accessibilityIdentifier("chat-mic-failure")
+            }
+            row
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.bar)
+        .onChange(of: picked) {
+            let items = picked
+            guard !items.isEmpty else { return }
+            preparing = true
+            Task {
+                var ready: [Data] = []
+                for item in items {
+                    if let data = try? await item.loadTransferable(type: Data.self), let photo = DeskPhoto.prepare(data) {
+                        ready.append(photo)
+                    }
+                }
+                add(ready)
+                preparing = false
+                picked = []
+            }
+        }
+        .onDisappear { dictation.cancel() }
+        .fullScreenCover(isPresented: $shooting) {
+            DeskCamera { image in
+                shooting = false
+                add([image.flatMap { $0.jpegData(compressionQuality: 0.9) }.flatMap { DeskPhoto.prepare($0) }].compactMap { $0 })
+            }
+            .ignoresSafeArea()
+        }
+    }
+
+    private func add(_ ready: [Data]) {
+        guard !ready.isEmpty else { return }
+        photos = limit <= 1 ? [ready[0]] : Array((photos + ready).prefix(limit))
+    }
+
+    private func thumbnail(_ index: Int) -> some View {
+        ZStack(alignment: .topTrailing) {
+            if let image = UIImage(data: photos[index]) {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 64, height: 64)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .accessibilityIdentifier("chat-photo-preview")
+            }
+            Button { photos.remove(at: index) } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(.white, .black.opacity(0.6))
+            }
+            .padding(2)
+            .accessibilityLabel("移除第 \(index + 1) 張照片")
+            .accessibilityIdentifier("chat-photo-remove")
+        }
+    }
+
+    /// The keyboard goes away: speaking needs no keyboard (asked on 10/29). Simulator UI tests
+    /// cannot speak: the microphone types a fixed phrase instead.
+    private func listen() {
+        focused.wrappedValue = false
+        if Self.uiTest {
+            text += "語音輸入測試"
+        } else {
+            dictation.toggle($text)
+        }
+    }
+
+    private func shoot() {
+        if Self.uiTest {
+            let colors: [UIColor] = [.systemTeal, .systemOrange, .systemPurple]
+            let shot = UIGraphicsImageRenderer(size: CGSize(width: 400, height: 300)).image { context in
+                colors[photos.count % colors.count].setFill()
+                context.fill(CGRect(x: 0, y: 0, width: 400, height: 300))
+            }
+            add([shot.jpegData(compressionQuality: 0.9).flatMap { DeskPhoto.prepare($0) }].compactMap { $0 })
+        } else {
+            shooting = true
+        }
+    }
+
+    private var row: some View {
+        HStack(alignment: .bottom, spacing: 8) {
+            PhotosPicker(selection: $picked, maxSelectionCount: max(1, room), selectionBehavior: .ordered, matching: .images) {
+                Image(systemName: preparing ? "hourglass" : "photo").font(.title3)
+            }
+            .disabled(room == 0 || preparing)
+            .accessibilityLabel(limit > 1 ? "加入照片（最多 \(limit) 張）" : "加入照片")
+            .accessibilityIdentifier("chat-photo")
+            if canShoot {
+                Button(action: shoot) { Image(systemName: "camera").font(.title3) }
+                    .disabled(preparing || room == 0)
+                    .accessibilityLabel("拍照")
+                    .accessibilityIdentifier("chat-camera")
+            }
+            Button(action: listen) {
+                Image(systemName: dictation.listening ? "mic.fill" : "mic").font(.title3)
+                    .foregroundStyle(dictation.listening ? Color.red : Color.accentColor)
+            }
+            .accessibilityLabel(dictation.listening ? "停止語音輸入" : "語音輸入")
+            .accessibilityIdentifier("chat-mic")
+            TextField(dictation.listening ? "請說話…" : "輸入訊息", text: $text, axis: .vertical)
+                .lineLimit(1 ... 6)
+                .textFieldStyle(.roundedBorder)
+                .focused(focused)
+                .accessibilityIdentifier("chat-input")
+            Button {
+                dictation.cancel()
+                send()
+            } label: {
+                Image(systemName: "paperplane.fill").font(.title3)
+            }
+            .disabled(empty || preparing)
+            .accessibilityLabel("送出")
+            .accessibilityIdentifier("chat-send")
+        }
+    }
+}
+
+/// The camera, for a photo that goes straight into the next message: the shot stays in memory
+/// and is never saved to the photo library (asked on 10/29).
+struct DeskCamera: UIViewControllerRepresentable {
+    let done: (UIImage?) -> Void
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = .camera
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ controller: UIImagePickerController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator { Coordinator(done: done) }
+
+    final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+        let done: (UIImage?) -> Void
+
+        init(done: @escaping (UIImage?) -> Void) { self.done = done }
+
+        func imagePickerController(_ picker: UIImagePickerController,
+                                   didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
+            done(info[.originalImage] as? UIImage)
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) { done(nil) }
+    }
+}

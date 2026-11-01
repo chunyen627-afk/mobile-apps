@@ -1,0 +1,13 @@
+{
+  "records": [
+    {
+      "source_path": "C:\\Users\\demo\\.claude\\projects\\C--work\\11111111-2222-4333-8444-555555555555.jsonl",
+      "content_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "imported_thread_id": "0a000000-0000-4000-8000-000000000002",
+      "imported_at": 1793000000,
+      "source_modified_at": 1792990000000000000,
+      "title": "iPhone App 做法評估"
+    }
+  ],
+  "detected_connector_records": []
+}
