@@ -102,6 +102,13 @@ final class DeskRemoteUITests: XCTestCase {
         try launchWithHelper()
         openChat("claude", claudeA)
         XCTAssertTrue(text("整理好了，安裝段落改成三步").waitForExistence(timeout: 10), "reply missing")
+        // The fake helper appends two lines a few seconds after the conversation is first opened;
+        // a new row scrolls the chat to the bottom. Waited for first: scrolling up to the earlier
+        // rows while that scroll-to-the-end runs lost the race now and then (CI 10/31, 11/1).
+        XCTAssertTrue(text("已加上解除安裝").waitForExistence(timeout: 25), "live reply did not arrive")
+        XCTAssertTrue(reveal(text("再加上解除安裝的步驟。")), "live user line did not arrive")
+        XCTAssertTrue(element("chat-input").exists, "input box missing")
+        snapshot("06-chat-live")
         // The chat is a lazy stack scrolled to the bottom: earlier rows are revealed by scrolling.
         // Tool calls in a row are folded into one line (asked 10/31): opened first.
         openToolGroups()
@@ -111,12 +118,6 @@ final class DeskRemoteUITests: XCTestCase {
         XCTAssertFalse(text("internal note the user never typed").exists, "injected text must be hidden")
         XCTAssertFalse(text("subagent text").exists, "subagent text must be hidden")
         snapshot("06a-chat")
-        // The fake helper appends two lines a few seconds after the conversation is first opened;
-        // a new row scrolls the chat to the bottom.
-        XCTAssertTrue(text("已加上解除安裝").waitForExistence(timeout: 25), "live reply did not arrive")
-        XCTAssertTrue(reveal(text("再加上解除安裝的步驟。")), "live user line did not arrive")
-        XCTAssertTrue(element("chat-input").exists, "input box missing")
-        snapshot("06-chat-live")
     }
 
     func test07ToolOutputExpands() throws {
