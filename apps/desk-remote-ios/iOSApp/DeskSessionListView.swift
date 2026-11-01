@@ -133,7 +133,9 @@ struct DeskTreeLine: View {
             }
         }
         .frame(maxHeight: .infinity)
-        .accessibilityHidden(true)
+        .accessibilityElement()
+        .accessibilityLabel("由上面的對話啟動")
+        .accessibilityIdentifier("tree-line")
     }
 }
 

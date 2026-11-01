@@ -1140,6 +1140,7 @@ struct DeskPlanCard: View {
                             .foregroundStyle(item.status == "completed" ? Color.secondary : Color.primary)
                             .strikethrough(item.status == "completed", color: .secondary)
                     }
+                    .accessibilityElement(children: .combine)  // one element per step (a bare stack has none)
                     .accessibilityIdentifier("plan-item")
                 }
             }
