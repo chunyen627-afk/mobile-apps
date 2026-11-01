@@ -1467,6 +1467,42 @@ def error(code, message):
 # The hub: sources, cached transcripts, state.
 
 
+_disk_cache = [0.0, None]
+
+
+def helper_on_disk(path=None, now=None):
+    """VERSION in the helper file on disk (read at most once a minute): newer than the running
+    one when a new helper was copied in but not started yet (11/01, the phone showed 0.5.29)."""
+    now = time.monotonic() if now is None else now
+    if path is None and _disk_cache[1] is not None and now - _disk_cache[0] < 60:
+        return _disk_cache[1]
+    try:
+        text = Path(path or __file__).read_text(encoding='utf-8')
+    except OSError:
+        return None
+    found = re.search(r"^VERSION = '([0-9.]+)'", text, re.M)
+    version = found.group(1) if found else None
+    if path is None:
+        _disk_cache[:] = [now, version]
+    return version
+
+
+def restart_helper(worker=None, task='DeskRemoteHelper'):
+    """Exits, and starts the helper's logon task again 5 seconds later. The starter is created
+    through WMI, so it is not a child of this task and is not ended with it."""
+    import base64
+    import subprocess
+    inner = base64.b64encode(f'Start-Sleep -Seconds 5; Start-ScheduledTask -TaskName {task}'.encode('utf-16-le')).decode('ascii')
+    line = f'powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand {inner}'
+    subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command',
+                    f"Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{{CommandLine='{line}'}} | Out-Null"],
+                   capture_output=True, timeout=30, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    logging.info('restarting into the helper on disk (%s)', helper_on_disk())
+    if worker is not None:
+        worker.stop()
+    os._exit(0)
+
+
 class Hub:
     def __init__(self, pc_name, sources, presence, prompts=None, on_events=None):
         self.pc_name = pc_name
@@ -1485,6 +1521,9 @@ class Hub:
         self.usage_cache = (0.0, None)
         self.latest_cache = (0.0, None)
         self.screen = None               # () -> JPEG bytes of the PC's screen, when it can be read
+        self.ram = None                   # MemoryWatch: the commit charge and what was freed (0.5.30)
+        self.disk_version = helper_on_disk  # the helper version installed on disk, maybe newer than this one
+        self.restart = None               # () -> None: start the helper again (it exits), from the phone
         self.alerts = {'usage_percent': 80, 'context_percent': 80}
         self.chosen_modes = {}            # (app, id) -> (mode, when): a Codex pick its rollout shows only next turn
         self.page_names = {}              # (app, id) -> the page title last seen for it, when its files say otherwise
@@ -1509,14 +1548,18 @@ class Hub:
         stop = [app for app in APPS if 'stop' in self.capabilities and (self.strings.get(app) or {}).get('stop')]
         fast = {app: source.fast() for app, source in self.sources.items()
                 if 'fast' in self.capabilities and (self.strings.get(app) or {}).get('fast_on') and hasattr(source, 'fast')}
-        extra = (['elevate'] if self.elevate is not None else []) + (['screen'] if self.screen is not None else [])
-        return {'ok': True, 'pc': {'name': self.pc_name, 'helperVersion': VERSION},
+        extra = ((['elevate'] if self.elevate is not None else []) + (['screen'] if self.screen is not None else [])
+                 + (['restart'] if self.restart is not None else []))
+        disk = self.disk_version()
+        newer = disk if disk and version_key(disk) > version_key(VERSION) else None
+        return {'ok': True, 'pc': {'name': self.pc_name, 'helperVersion': VERSION, 'helperUpdate': newer},
                 'capabilities': self.capabilities + extra,
                 'apps': apps, 'presence': {'idleSeconds': presence.get('idleSeconds'), 'locked': presence.get('locked'),
                                            'uac': bool(presence.get('uac'))},
                 'warnings': warnings, 'elevate': elevate, 'usage': self.usage(), 'models': choices('model', 'models'),
                 'efforts': choices('effort', 'efforts'), 'modes': choices('mode', 'modes'), 'stop': stop,
-                'popups': self.popups(), 'recent': self.recent(), 'fast': fast, 'versions': self.versions()}
+                'popups': self.popups(), 'recent': self.recent(), 'fast': fast, 'versions': self.versions(),
+                'memory': self.ram.snapshot() if self.ram is not None else None}
 
     def recent(self, per_app=3):
         """Each app's few most recently written conversations, newest first, for the phone's PC
@@ -1700,6 +1743,194 @@ def load_strings(path=None):
     return json.loads(path.read_text(encoding='utf-8'))
 
 
+def _kernel32():
+    from ctypes import wintypes
+    k32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    k32.OpenProcess.restype = wintypes.HANDLE
+    k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    k32.GetProcessHandleCount.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    k32.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
+    return k32
+
+
+def commit_charge():
+    """(bytes in use, limit) of Windows' commit charge: what a handle leak fills up while no
+    process's own memory shows it (Steam 11/01: 175.8 of 177.9 GB, private memory ~15 GB)."""
+    from ctypes import wintypes
+
+    class Status(ctypes.Structure):
+        _fields_ = [('dwLength', wintypes.DWORD), ('dwMemoryLoad', wintypes.DWORD), ('ullTotalPhys', ctypes.c_uint64),
+                    ('ullAvailPhys', ctypes.c_uint64), ('ullTotalPageFile', ctypes.c_uint64),
+                    ('ullAvailPageFile', ctypes.c_uint64), ('ullTotalVirtual', ctypes.c_uint64),
+                    ('ullAvailVirtual', ctypes.c_uint64), ('ullAvailExtendedVirtual', ctypes.c_uint64)]
+    status = Status(dwLength=ctypes.sizeof(Status))
+    if not _kernel32().GlobalMemoryStatusEx(ctypes.byref(status)):
+        return None
+    return status.ullTotalPageFile - status.ullAvailPageFile, status.ullTotalPageFile
+
+
+class _MemoryCounters(ctypes.Structure):
+    _fields_ = [('cb', ctypes.c_uint32), ('PageFaultCount', ctypes.c_uint32)] + [
+        (name, ctypes.c_size_t) for name in ('PeakWorkingSetSize', 'WorkingSetSize', 'QuotaPeakPagedPoolUsage',
+                                         'QuotaPagedPoolUsage', 'QuotaPeakNonPagedPoolUsage', 'QuotaNonPagedPoolUsage',
+                                         'PagefileUsage', 'PeakPagefileUsage', 'PrivateUsage')]
+
+
+def _process_info(k32, pid, name=False):
+    """(private bytes, handles[, image path]) of one process, or None when it cannot be opened."""
+    from ctypes import wintypes
+    handle = k32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return None
+    try:
+        counters = _MemoryCounters(cb=ctypes.sizeof(_MemoryCounters))
+        count = wintypes.DWORD()
+        psapi = ctypes.WinDLL('psapi')
+        psapi.GetProcessMemoryInfo.argtypes = [wintypes.HANDLE, ctypes.POINTER(_MemoryCounters), wintypes.DWORD]
+        if not psapi.GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb):
+            return None
+        k32.GetProcessHandleCount(handle, ctypes.byref(count))
+        if not name:
+            return counters.PrivateUsage, count.value
+        buffer, size = ctypes.create_unicode_buffer(1024), wintypes.DWORD(1024)
+        path = buffer.value if k32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)) else ''
+        return counters.PrivateUsage, count.value, path
+    finally:
+        k32.CloseHandle(handle)
+
+
+def process_size(pid):
+    """(private bytes, handle count) of one process, or None."""
+    return _process_info(_kernel32(), pid)
+
+
+def process_list():
+    """[{pid, name, path, bytes, handles}] of every process this user can look at."""
+    from ctypes import wintypes
+    pids, needed = (wintypes.DWORD * 8192)(), wintypes.DWORD()
+    if not ctypes.WinDLL('psapi').EnumProcesses(pids, ctypes.sizeof(pids), ctypes.byref(needed)):
+        return []
+    k32, out = _kernel32(), []
+    for pid in pids[:needed.value // ctypes.sizeof(wintypes.DWORD)]:
+        info = _process_info(k32, pid, name=True) if pid else None
+        if info:
+            out.append({'pid': pid, 'name': Path(info[2]).stem.lower() if info[2] else '', 'path': info[2],
+                        'bytes': info[0], 'handles': info[1]})
+    return out
+
+
+def close_steam(processes, wait=60, sleep=time.sleep, run=None, kill=None):
+    """Asks Steam to shut down normally, then ends it if it is still there after `wait` seconds;
+    it is not started again (the Steam guard on the home PC does the same). Returns how it went."""
+    import subprocess
+    run = run or (lambda args: subprocess.Popen(args, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)))
+    kill = kill or (lambda: subprocess.run(['taskkill', '/F', '/IM', 'steam.exe', '/IM', 'steamwebhelper.exe'],
+                                           capture_output=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0)))
+    steam = next((p for p in processes() if p['name'] == 'steam'), None)
+    if steam is None:
+        return 'gone'
+    run([steam['path'], '-shutdown'])
+    for _ in range(max(1, wait // 5)):
+        sleep(5)
+        if not any(p['name'] == 'steam' for p in processes()):
+            return 'shut-down'
+    kill()
+    return 'ended'
+
+
+class MemoryWatch:
+    """Windows' commit charge, once a minute (asked 11/01 after Steam's handle leak filled it and
+    the screen flashed). Near the limit it frees what is known to be safe to restart: Steam
+    holding a leak's worth of handles (asked to shut down; not started again) and this helper's
+    own screen worker. Anything else is only named on the phone: the user decides what to close
+    (games, the desktop apps and the miners are never ended from here)."""
+
+    HIGH, CLEAR = 85, 75             # percent of the limit: act and tell at HIGH, all clear below CLEAR
+    STEAM_HANDLES = 100_000          # Steam normally holds a few thousand; 2.47 million when it leaked
+    WORKER_BYTES, WORKER_HANDLES = 600 * 2 ** 20, 15_000
+
+    def __init__(self, pc_name, send, worker=None, charge=commit_charge, processes=process_list,
+                 steam=close_steam, clock=time.monotonic, wall=None):
+        self.pc_name, self.send, self.worker = pc_name, send, worker
+        self.charge, self.processes, self.steam = charge, processes, steam
+        self.clock, self.wall = clock, wall or (lambda: datetime.now(UTC))
+        self.checked = None
+        self.reading = None              # (used, limit) at the last check
+        self.top = []
+        self.action = self.action_at = None
+        self.told = False
+        self.closing = False
+        self.lock = threading.Lock()
+
+    def snapshot(self):
+        with self.lock:
+            if not self.reading:
+                return None
+            used, limit = self.reading
+            percent = round(used * 100 / limit) if limit else 0
+            return {'percent': percent, 'usedGB': round(used / 2 ** 30, 1), 'limitGB': round(limit / 2 ** 30, 1),
+                    'high': percent >= self.HIGH, 'top': list(self.top) if percent >= self.HIGH else [],
+                    'action': self.action, 'actionAt': self.action_at}
+
+    def did(self, text):
+        with self.lock:
+            self.action, self.action_at = text, self.wall().isoformat(timespec='seconds')
+        logging.warning('memory: %s', text)
+
+    def step(self, now=None):
+        now = self.clock() if now is None else now
+        if self.checked is not None and now - self.checked < 60:
+            return
+        self.checked = now
+        if self.worker is not None:
+            grown = self.worker.recycle_if_big(self.WORKER_BYTES, self.WORKER_HANDLES)
+            if grown:
+                self.did(f'小幫手的畫面讀取程式長到 {grown[0] / 2 ** 20:.0f} MB、{grown[1]:,} 個 handle，已自動重開')
+        reading = self.charge()
+        if not reading or not reading[1]:
+            return
+        with self.lock:
+            self.reading = reading
+        percent = reading[0] * 100 / reading[1]
+        if percent < self.CLEAR:
+            self.told = False
+            with self.lock:
+                self.top = []
+            return
+        if percent < self.HIGH:
+            return
+        found = self.processes()
+        top = sorted(found, key=lambda p: p['bytes'], reverse=True)[:3]
+        leaky = sorted(found, key=lambda p: p['handles'], reverse=True)[:2]
+        shown = {p['pid']: p for p in top + leaky}.values()
+        with self.lock:
+            self.top = [{'name': p['name'], 'gb': round(p['bytes'] / 2 ** 30, 1), 'handles': p['handles']} for p in shown]
+        steam = next((p for p in found if p['name'] == 'steam'), None)
+        if steam and steam['handles'] >= self.STEAM_HANDLES and not self.closing:
+            self.closing = True
+            handles = steam['handles']
+
+            def run():
+                try:
+                    how = self.steam(self.processes)
+                    after = self.charge()
+                    left = f'，記憶體回到 {after[0] * 100 / after[1]:.0f}%' if after and after[1] else ''
+                    self.did(f"Steam 握著 {handles:,} 個 handle（漏記憶體），已自動{'關掉' if how == 'shut-down' else '結束'}"
+                             f'（不會自己再開）{left}')
+                finally:
+                    self.closing = False
+            threading.Thread(target=run, daemon=True).start()
+            return
+        if self.closing or self.told:
+            return
+        self.told = True
+        names = '、'.join(f"{p['name']} {p['bytes'] / 2 ** 30:.1f} GB" for p in top)
+        self.send('⚠️ 電腦記憶體快滿了', f'{self.pc_name}・已用 {percent:.0f}%（{reading[0] / 2 ** 30:.0f}／'
+                  f'{reading[1] / 2 ** 30:.0f} GB）。用最多的：{names}；沒有可以安全自動關的，請把其中不用的程式關掉',
+                  4, ['warning'], open_link(self.pc_name))
+
+
 class UiaWorker:
     """One long-lived `uia_worker.ps1`. Requests are serialized; a timeout or crash restarts it."""
 
@@ -1732,6 +1963,23 @@ class UiaWorker:
             except OSError:
                 pass
         self.process = None
+
+    def recycle_if_big(self, max_bytes, max_handles, size=None):
+        """Ends the worker between requests once it has grown past either limit; the next request
+        starts a fresh one. It leaked to 1.9 GB and 29,000 handles in six hours (home PC 11/01).
+        Returns (bytes, handles) when it was recycled, otherwise None."""
+        if not self.lock.acquire(blocking=False):
+            return None  # A request is running: next time.
+        try:
+            if self.process is None or self.process.poll() is not None:
+                return None
+            found = (size or process_size)(self.process.pid)
+            if not found or (found[0] < max_bytes and found[1] < max_handles):
+                return None
+            self.stop()
+            return found
+        finally:
+            self.lock.release()
 
     def request(self, command, timeout=25):
         import queue
@@ -2553,6 +2801,8 @@ class UiWatcher:
 
     def tick(self):
         self.check_uac()
+        if self.hub.ram is not None:
+            self.hub.ram.step()
         for app in APPS:
             self.look(app)
         self.check_versions()  # after the looks: Claude's update button is read there
@@ -3589,6 +3839,13 @@ def handler_for(hub, gate, networks, runner=None):
                 if body is None:
                     return None
                 return self.send_json(*hub.elevate.decide(parts[1], body.get('decision'), body.get('hmac')))
+            if parts == ['helper', 'restart']:
+                if hub.restart is None:
+                    return self.send_json(404, error('not-found', '這台電腦的小幫手不能從手機重啟'))
+                if runner is not None and runner.queue:
+                    return self.send_json(409, error('busy', '手機的動作還在排隊，做完再重啟'))
+                threading.Timer(1.0, hub.restart).start()  # after this answer has gone out
+                return self.send_json(202, {'ok': True, 'message': '小幫手重新啟動中，約 15 秒後回來'})
             if runner is None:
                 return self.send_json(405, error('read-only', '這一版只能讀取'))
             body = self.read_body(PHOTO_BODY if parts[-1:] == ['messages'] else MAX_BODY)
@@ -4303,6 +4560,16 @@ def main(argv=None):
             driver.fake_update_guard = True  # Claude Code is "working": Claude asks first
             driver.fake_versions = {'claude': ('3.6556.2.0', '3.6556.2.0'), 'codex': ('26.1023.6123.0', '26.1023.6123.0')}
         runner = build_driving(hub, driver, None, cfg['pc_name'], cfg, interval=1, verify_seconds=10)
+        if args.fake_update:
+            # Memory nearly full with a leaking Steam (freed on its own), and a newer helper on disk
+            # that the phone restarts into (11/01).
+            leak = [{'pid': 7, 'name': 'steam', 'path': 'steam.exe', 'bytes': 2 ** 30, 'handles': 2_470_000},
+                    {'pid': 8, 'name': 'game', 'path': 'game.exe', 'bytes': 12 * 2 ** 30, 'handles': 900}]
+            hub.ram = MemoryWatch(cfg['pc_name'], lambda *a: None, charge=lambda: (164 * 2 ** 30, 178 * 2 ** 30),
+                                  processes=lambda: leak, steam=lambda processes: 'shut-down')
+            disk = ['9.9.9']
+            hub.disk_version = lambda: disk[0]
+            hub.restart = lambda: disk.__setitem__(0, VERSION)
         hub.elevate = fake.elevate_relay()
         hub.screen = lambda: (fake.fixtures / 'screen.jpg').read_bytes()
         gate = AuthGate(cfg['token'], None, cfg['pc_name'])
@@ -4324,8 +4591,11 @@ def main(argv=None):
         hub.screen = capture_screen
     runner = None
     if cfg.get('drive_windows', True):
-        runner = build_driving(hub, WindowsDriver(load_strings()), notify, pc_name, cfg, interval=4, verify_seconds=20,
+        driver = WindowsDriver(load_strings())
+        runner = build_driving(hub, driver, notify, pc_name, cfg, interval=4, verify_seconds=20,
                                memory=path.parent / 'usage_seen.json')
+        hub.ram = MemoryWatch(pc_name, notify or (lambda *a: None), worker=driver.worker)
+        hub.restart = lambda: restart_helper(driver.worker)
     submit = Path((cfg.get('elevate') or {}).get('submit_file') or elevate.submit_file())
     if submit.exists():  # written by install-elevated.ps1 (run once as administrator)
         port, token = elevate.load_submit(submit)

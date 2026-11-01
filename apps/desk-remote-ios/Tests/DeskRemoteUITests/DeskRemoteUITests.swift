@@ -776,6 +776,24 @@ final class DeskRemoteUITests: XCTestCase {
         let port = try XCTUnwrap(ProcessInfo.processInfo.environment["DESK_POPUP_PORT"], "DESK_POPUP_PORT not set")
         launch(pc: "示範電腦|\(helper.host)|\(port)|\(helper.token)")
         openPC()
+        // Helper 0.5.30 (11/01): memory nearly full, a leaking Steam freed on its own, and a newer
+        // helper on disk that the phone restarts into.
+        let memory = element("pc-memory")
+        XCTAssertTrue(memory.waitForExistence(timeout: 15), "no memory row")
+        XCTAssertTrue(memory.label.contains("92%"), "memory: \(said(memory))")
+        XCTAssertTrue(waitFor(element("pc-memory-action"), labelContains: "已自動關掉", timeout: 90),
+                      "what was freed is not shown: \(said(element("pc-memory-action")))")
+        XCTAssertTrue(element("pc-memory-top").label.contains("247 萬個 handle"), "top: \(said(element("pc-memory-top")))")
+        let restart = element("helper-restart")
+        XCTAssertTrue(restart.exists && restart.label.contains("9.9.9"), "no restart for the newer helper: \(said(restart))")
+        snapshot("38-memory-and-helper")
+        restart.tap()
+        let restartConfirm = app.buttons["重啟小幫手"]
+        XCTAssertTrue(restartConfirm.waitForExistence(timeout: 5), "restarting the helper was not confirmed first")
+        restartConfirm.tap()
+        XCTAssertTrue(waitFor(element("helper-restart-note"), labelContains: "已換成", timeout: 40),
+                      "the restart did not finish: \(said(element("helper-restart-note")))")
+        XCTAssertFalse(element("helper-restart").exists, "the button stays after restarting")
         let button = element("claude-update")
         XCTAssertTrue(reveal(button), "no update button for Claude's downloaded version")
         XCTAssertTrue(button.label.contains("4.30.0"), "the button does not name the version: \(said(button))")

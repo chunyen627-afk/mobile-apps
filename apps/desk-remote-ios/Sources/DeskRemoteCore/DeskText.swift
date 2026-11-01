@@ -185,6 +185,26 @@ public enum DeskText {
         }
     }
 
+    /// The PC page's memory value: "27%（30／112 GB）".
+    public static func memoryValue(_ memory: HelperState.Memory) -> String {
+        "\(memory.percent)%（\(Int(memory.usedGB.rounded()))／\(Int(memory.limitGB.rounded())) GB）"
+    }
+
+    /// Under it while it is high: "用最多的：game 12.0 GB、steam 247 萬個 handle".
+    public static func memoryTop(_ memory: HelperState.Memory) -> String? {
+        guard memory.high, !memory.top.isEmpty else { return nil }
+        let names = memory.top.map { item in
+            item.handles >= 100_000 ? "\(item.name) \(item.handles / 10_000) 萬個 handle" : String(format: "%@ %.1f GB", item.name, item.gb)
+        }
+        return "用最多的：" + names.joined(separator: "、")
+    }
+
+    /// What the helper freed on its own, with when: "Steam …已自動關掉・5 分鐘前".
+    public static func memoryAction(_ memory: HelperState.Memory, now: Date = Date()) -> String? {
+        guard let action = memory.action else { return nil }
+        return relative(memory.actionAt, now: now).map { "\(action)・\($0)" } ?? action
+    }
+
     /// The PC list's time for a conversation: "回覆中", "等你回答・5 分鐘前", "3 小時前".
     public static func latestTime(_ session: SessionSummary, now: Date = Date()) -> String {
         let when = relative(session.updatedAt, now: now) ?? ""

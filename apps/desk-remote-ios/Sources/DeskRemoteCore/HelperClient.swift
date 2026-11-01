@@ -147,6 +147,11 @@ public struct HelperClient: Sendable {
         try await post(["v1", app.rawValue, "sessions", id, "mode"], ActionRequest(mode: mode, force: force ? true : nil))
     }
 
+    /// Restarts the helper into the newer one on disk; it is back about 15 seconds later (0.5.30).
+    public func restartHelper() async throws -> HelperRestart {
+        try await post(["v1", "helper", "restart"], ActionRequest())
+    }
+
     /// Presses Claude's own "重新啟動以更新" on the PC; it restarts Claude, ending its Claude Code sessions.
     public func updateApp(_ app: DeskApp, force: Bool = false) async throws -> ActionStatus {
         try await post(["v1", app.rawValue, "update"], ActionRequest(force: force ? true : nil))

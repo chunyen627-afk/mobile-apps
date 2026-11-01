@@ -1860,6 +1860,133 @@ class ScreenHttpTests(FakeEnvironment):
         self.assertEqual(fetch()[0], 503)
 
 
+class MemoryWatchTests(unittest.TestCase):
+    """Asked 11/01 after Steam's handle leak filled the commit charge and the home PC's screen flashed."""
+    GB = 2 ** 30
+
+    def make(self, used, found, worker=None):
+        self.sent, self.closed = [], []
+        self.used = [used]
+
+        def steam(processes):
+            self.closed.append(len(processes()))
+            self.used[0] = 30 * self.GB
+            return 'shut-down'
+        return h.MemoryWatch('家用電腦', lambda *a: self.sent.append(a), worker=worker,
+                             charge=lambda: (self.used[0], 178 * self.GB), processes=lambda: found, steam=steam,
+                             wall=lambda: h.datetime(2026, 11, 1, 23, 0, tzinfo=h.UTC))
+
+    def wait_closed(self, watch):
+        deadline = time.monotonic() + 5
+        while watch.closing and time.monotonic() < deadline:
+            time.sleep(0.02)
+
+    def test_a_leaking_steam_is_closed_without_a_notification(self):
+        found = [{'pid': 7, 'name': 'steam', 'path': 'steam.exe', 'bytes': self.GB, 'handles': 2_470_000},
+                 {'pid': 8, 'name': 'game', 'path': 'game.exe', 'bytes': 12 * self.GB, 'handles': 900}]
+        watch = self.make(170 * self.GB, found)
+        watch.step(now=0)
+        self.wait_closed(watch)
+        self.assertEqual(len(self.closed), 1)
+        self.assertEqual(self.sent, [], 'freed on its own: nothing for the user to do')
+        shown = watch.snapshot()
+        self.assertIn('Steam', shown['action'])
+        self.assertIn('2,470,000', shown['action'])
+        self.assertIn('17%', shown['action'], 'what the memory came back to')
+        watch.step(now=30)
+        self.assertEqual(len(self.closed), 1, 'once a minute at most')
+
+    def test_nothing_safe_to_close_names_the_biggest_once(self):
+        found = [{'pid': 7, 'name': 'steam', 'path': 'steam.exe', 'bytes': self.GB, 'handles': 3000},
+                 {'pid': 8, 'name': 'game', 'path': 'game.exe', 'bytes': 120 * self.GB, 'handles': 900}]
+        watch = self.make(160 * self.GB, found)
+        watch.step(now=0)
+        self.assertEqual(self.closed, [], 'a normal Steam (it may be running the game) is left alone')
+        self.assertEqual(len(self.sent), 1, self.sent)
+        self.assertIn('game 120.0 GB', self.sent[0][1])
+        shown = watch.snapshot()
+        self.assertEqual((shown['percent'], shown['high']), (90, True))
+        self.assertEqual(shown['top'][0]['name'], 'game')
+        watch.step(now=61)
+        self.assertEqual(len(self.sent), 1, 'told once while it stays high')
+        self.used[0] = 140 * self.GB  # 79%: between the two lines
+        watch.step(now=122)
+        self.assertEqual(watch.snapshot()['top'], [], 'no list below 85%')
+        self.used[0] = 160 * self.GB
+        watch.step(now=183)
+        self.assertEqual(len(self.sent), 1, 'not again before it came below 75%')
+        self.used[0] = 120 * self.GB
+        watch.step(now=244)
+        self.used[0] = 160 * self.GB
+        watch.step(now=305)
+        self.assertEqual(len(self.sent), 2, 'a new episode is told again')
+
+    def test_the_screen_worker_is_recycled_when_it_has_grown(self):
+        class Worker:
+            def __init__(self):
+                self.limits = []
+
+            def recycle_if_big(self, max_bytes, max_handles):
+                self.limits.append((max_bytes, max_handles))
+                return (1900 * 2 ** 20, 29_000)
+        worker = Worker()
+        watch = self.make(20 * self.GB, [], worker=worker)
+        watch.step(now=0)
+        self.assertEqual(worker.limits, [(600 * 2 ** 20, 15_000)])
+        self.assertIn('1900 MB', watch.snapshot()['action'])
+        self.assertEqual(self.sent, [])
+
+    def test_recycle_only_between_requests_and_past_a_limit(self):
+        worker = h.UiaWorker()
+
+        class Process:
+            pid = 42
+
+            def poll(self):
+                return None
+
+            def kill(self):
+                pass
+        worker.process = Process()
+        self.assertIsNone(worker.recycle_if_big(600, 100, size=lambda pid: (500, 50)))
+        self.assertIsNotNone(worker.process)
+        with worker.lock:
+            done = []
+            threading.Thread(target=lambda: done.append(worker.recycle_if_big(600, 100, size=lambda pid: (900, 50)))).start()
+            time.sleep(0.2)
+        self.assertEqual(done, [None], 'a request is running: left alone')
+        self.assertEqual(worker.recycle_if_big(600, 100, size=lambda pid: (100, 150)), (100, 150))
+        self.assertIsNone(worker.process)
+
+    def test_the_helper_on_disk_is_read_from_its_version_line(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'helper.py'
+            path.write_text("import x\nVERSION = '0.5.31'\n", encoding='utf-8')
+            self.assertEqual(h.helper_on_disk(path), '0.5.31')
+            self.assertIsNone(h.helper_on_disk(Path(folder) / 'missing.py'))
+
+
+class HelperRestartTests(HttpTests):
+    def test_a_newer_helper_on_disk_is_offered_and_restarted_into(self):
+        disk, restarted = ['9.9.9'], []
+        self.hub.disk_version = lambda: disk[0]
+        code, body = self.get('/v1/state')
+        self.assertEqual(body['pc']['helperUpdate'], '9.9.9')
+        self.assertNotIn('restart', body['capabilities'], 'no restart hook: not offered')
+        self.assertEqual(self.get('/v1/helper/restart', method='POST', body={})[0], 404)
+        self.hub.restart = lambda: restarted.append(True)
+        self.assertIn('restart', self.get('/v1/state')[1]['capabilities'])
+        code, body = self.get('/v1/helper/restart', method='POST', body={})
+        self.assertEqual(code, 202, body)
+        self.assertIn('重新啟動', body['message'])
+        deadline = time.monotonic() + 5
+        while not restarted and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertEqual(restarted, [True], 'restarted after the answer went out')
+        disk[0] = h.VERSION
+        self.assertIsNone(self.get('/v1/state')[1]['pc']['helperUpdate'], 'the same version: nothing newer')
+
+
 class StringsTests(unittest.TestCase):
     def test_both_apps_have_every_control_name(self):
         strings = h.load_strings()

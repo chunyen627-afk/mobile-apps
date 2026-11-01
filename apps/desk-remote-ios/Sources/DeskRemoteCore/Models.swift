@@ -17,6 +17,26 @@ public struct HelperState: Decodable, Equatable, Sendable {
     public struct PC: Decodable, Equatable, Sendable {
         public let name: String
         public let helperVersion: String
+        /// A newer helper copied onto the PC but not started yet (helper 0.5.30).
+        public let helperUpdate: String?
+    }
+
+    /// Windows' commit charge, and what the helper freed on its own when it neared the limit (0.5.30).
+    public struct Memory: Decodable, Equatable, Sendable {
+        public struct Top: Decodable, Equatable, Sendable {
+            public let name: String
+            public let gb: Double
+            public let handles: Int
+        }
+
+        public let percent: Int
+        public let usedGB: Double
+        public let limitGB: Double
+        /// At or above 85%: `top` names the biggest programs.
+        public let high: Bool
+        public let top: [Top]
+        public let action: String?
+        public let actionAt: String?
     }
 
     public struct AppState: Decodable, Equatable, Sendable {
@@ -69,6 +89,8 @@ public struct HelperState: Decodable, Equatable, Sendable {
     public let fast: [String: Bool?]?
     /// Each desktop app's installed and running version (helper 0.5.12).
     public let versions: [String: AppVersion]?
+    /// nil from older helpers.
+    public let memory: Memory?
 
     public struct AppVersion: Decodable, Equatable, Sendable {
         public let installed: String?
@@ -189,6 +211,12 @@ public struct ConversationMeta: Codable, Equatable, Sendable {
 }
 
 /// `POST` answers and `GET /v1/actions/{id}`: one action the helper runs on the PC's windows.
+/// `POST /v1/helper/restart`.
+public struct HelperRestart: Decodable, Equatable, Sendable {
+    public let ok: Bool
+    public let message: String
+}
+
 public struct ActionStatus: Decodable, Equatable, Sendable {
     public let id: String
     public let kind: String

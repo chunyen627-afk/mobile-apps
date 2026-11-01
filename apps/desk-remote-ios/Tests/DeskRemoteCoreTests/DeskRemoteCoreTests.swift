@@ -496,6 +496,36 @@ final class MetaAndUsageTests: XCTestCase {
         XCTAssertTrue(told.newerWaiting, "drawn in orange")
     }
 
+    func testMemoryAndANewerHelperAreShown() throws {
+        // Helper 0.5.30 (11/01): the commit charge, what it freed itself, and a newer helper on disk.
+        let state = try HelperClient.decode(HelperState.self, status: 200, data: data("""
+        {"ok":true,"pc":{"name":"P","helperVersion":"0.5.29","helperUpdate":"0.5.30"},"capabilities":["read","restart"],
+         "apps":{},"presence":{"idleSeconds":1,"locked":false},"warnings":[],
+         "memory":{"percent":92,"usedGB":164.0,"limitGB":178.0,"high":true,
+                   "top":[{"name":"game","gb":12.0,"handles":900},{"name":"steam","gb":1.0,"handles":2470000}],
+                   "action":"Steam 已自動關掉","actionAt":"2026-11-01T14:55:00+00:00"}}
+        """))
+        XCTAssertEqual(state.pc.helperUpdate, "0.5.30")
+        XCTAssertTrue(state.can("restart"))
+        let memory = try XCTUnwrap(state.memory)
+        XCTAssertEqual(DeskText.memoryValue(memory), "92%（164／178 GB）")
+        XCTAssertEqual(DeskText.memoryTop(memory), "用最多的：game 12.0 GB、steam 247 萬個 handle")
+        let now = try XCTUnwrap(DeskText.parse("2026-11-01T15:00:00+00:00"))
+        XCTAssertEqual(DeskText.memoryAction(memory, now: now), "Steam 已自動關掉・5 分鐘前")
+        let calm = try HelperClient.decode(HelperState.self, status: 200, data: data("""
+        {"ok":true,"pc":{"name":"P","helperVersion":"0.5.12"},"capabilities":["read"],"apps":{},
+         "presence":{"idleSeconds":1,"locked":false},"warnings":[],
+         "memory":{"percent":27,"usedGB":30.1,"limitGB":111.9,"high":false,"top":[],"action":null,"actionAt":null}}
+        """))
+        XCTAssertNil(calm.pc.helperUpdate, "older helpers send no helperUpdate")
+        XCTAssertNil(DeskText.memoryTop(try XCTUnwrap(calm.memory)), "no list while it is fine")
+        XCTAssertNil(DeskText.memoryAction(try XCTUnwrap(calm.memory)))
+        let restarted = try HelperClient.decode(HelperRestart.self, status: 202, data: data("""
+        {"ok":true,"message":"小幫手重新啟動中，約 15 秒後回來"}
+        """))
+        XCTAssertTrue(restarted.ok)
+    }
+
     func testAUACPromptIsNamedNotTakenForALock() throws {
         let state = try HelperClient.decode(HelperState.self, status: 200, data: data("""
         {"ok":true,"pc":{"name":"P","helperVersion":"0.5.12"},"capabilities":["read"],"apps":{},
