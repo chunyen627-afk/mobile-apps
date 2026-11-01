@@ -40,6 +40,7 @@
     "fast_off": "啟用標準模式",
     "update_prefix": "更新",
     "update_exact": true,
-    "update_confirm": "更新"
+    "update_confirm": "更新",
+    "update_notify": ["有可用的更新"]
   }
 }

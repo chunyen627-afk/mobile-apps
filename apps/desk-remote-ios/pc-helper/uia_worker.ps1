@@ -673,9 +673,12 @@ function Set-CodexModel($w, $page, $s, $label) {
 }
 
 # The app's own update button: Claude's starts with update_prefix and names the version
-# ("restart to update v4.29.0"); Codex's is exactly update_prefix (update_exact).
+# ("restart to update v4.29.0"); Codex's is exactly update_prefix (update_exact), or since its
+# sidebar layout one of update_notify ("update available", bottom left, home PC 11/01).
 function Is-UpdateButton($s, $n) {
-  if (-not $s.update_prefix -or -not $n) { return $false }
+  if (-not $n) { return $false }
+  if ($s.update_notify -and (@($s.update_notify) -contains $n)) { return $true }
+  if (-not $s.update_prefix) { return $false }
   if ($s.update_exact) { return $n -eq $s.update_prefix }
   return $n.StartsWith($s.update_prefix)
 }

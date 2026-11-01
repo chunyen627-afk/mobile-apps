@@ -1411,6 +1411,27 @@ class VersionTests(FakeEnvironment):
         watcher.check_versions(now=1200)
         self.assertEqual(len([c for c in driver.calls if c[0] == 'press_update']), 1, 'not again within the hour')
 
+    def test_codexs_sidebar_update_is_only_told_once_while_it_shows(self):
+        # Home PC 11/01: the new layout's "update available" (bottom left) was not recognised, so
+        # the phone heard nothing. It is told, never pressed (updates are done at the PC, 10/30).
+        _, driver, watcher, sent, _ = self.version_setup(codex=('26.1027.3384.0', '26.1027.3384.0'))
+        driver.fake_update = {'codex': '有可用的更新'}
+        watcher.look('codex')
+        watcher.check_versions(now=1000)
+        self.assertEqual([c for c in driver.calls if c[0] == 'press_update'], [], 'never pressed on its own')
+        self.assertEqual(len(sent), 1, sent)
+        self.assertIn('Codex', sent[0][0])
+        self.assertIn('有可用的更新', sent[0][1])
+        watcher.check_versions(now=1100)
+        self.assertEqual(len(sent), 1, 'once while it shows')
+        driver.fake_update = {}
+        watcher.look('codex')
+        watcher.check_versions(now=1200)
+        driver.fake_update = {'codex': '有可用的更新'}
+        watcher.look('codex')
+        watcher.check_versions(now=1300)
+        self.assertEqual(len(sent), 2, 'a later update is told again')
+
     def test_versions_read_from_package_paths(self):
         path = r'C:\Program Files\WindowsApps\OpenAI.Codex_26.1016.6573.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe'
         self.assertEqual(h.package_version(path, 'OpenAI.Codex'), '26.1016.6573.0')

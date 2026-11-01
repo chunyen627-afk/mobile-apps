@@ -38,7 +38,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.29'
+VERSION = '0.5.30'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -2457,6 +2457,17 @@ class UiWatcher:
                       '（會關掉裡面的 Claude Code 工作，所以不自動做）', 3, ['new'], open_link(self.pc_name))
         codex = found.get('codex') or {}
         codex_button = (self.current('codex') or {}).get('update')
+        notify_only = (self.hub.strings.get('codex') or {}).get('update_notify') or []
+        if codex_button in notify_only:
+            # Codex's sidebar "update available" (home PC 11/01): only told, once while it shows,
+            # to be done at the PC like Claude's (the user's choice 10/30).
+            if ('codex', codex_button) not in self.update_told:
+                self.update_told.add(('codex', codex_button))
+                self.send('🆕 Codex 桌面版有新版', f"{self.pc_name}・目前跑的是 {codex.get('running')}；"
+                          f'到電腦上按 Codex 左下角的「{codex_button}」', 3, ['new'], open_link(self.pc_name))
+            return
+        for name in notify_only:
+            self.update_told.discard(('codex', name))  # Gone: the next one is told again.
         if codex_button and not codex.get('old'):
             # Codex's own updater (its header "更新"), when the Store has not brought the new one
             # yet: press it once nothing is lost; again at most once an hour while it stays.
