@@ -1096,10 +1096,14 @@ final class DeskRemoteUITests: XCTestCase {
     /// Taps until `next` shows: a row that moves while the PC page is still filling in (the
     /// memory rows, CI 11/01) can swallow the tap.
     private func tap(_ row: XCUIElement, until next: XCUIElement) -> Bool {
-        for _ in 0 ..< 3 {
-            guard reveal(row) else { return next.exists }
+        for attempt in 1 ... 3 {
+            guard reveal(row) else {
+                snapshot("tap-\(attempt)-row-gone")
+                return next.exists
+            }
             row.tap()
             if next.waitForExistence(timeout: 5) { return true }
+            snapshot("tap-\(attempt)-no-change")  // what the tap left on screen (CI 11/02: test32)
         }
         return false
     }
