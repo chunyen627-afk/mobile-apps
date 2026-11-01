@@ -16,6 +16,9 @@ enum DiagnosticAction: String {
     // the toolbox ended in the foreground four times on 11/01 with no iOS report, two of them
     // away from playback, so the last beat dates the end and shows where the app was.
     case toolShown, heartbeat
+    // A request failed on the NAS connection and the app reconnected to try once more (code and
+    // domainClass say why): an idle connection the NAS closed shows up here.
+    case reconnecting
 }
 
 enum MemoryReading {

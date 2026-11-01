@@ -6,7 +6,13 @@ final class SMBService: @unchecked Sendable {
     let manager: SMB2Manager
     let settings: ConnectionSettings
 
+    /// libsmb2 writes with plain writev(): writing to a connection the NAS has already closed
+    /// raises SIGPIPE, which ends the app on the spot. Ignored once for the whole process, so the
+    /// write fails with EPIPE and the request reports an error instead.
+    static let brokenPipesIgnored: Void = { signal(SIGPIPE, SIG_IGN) }()
+
     init(settings: ConnectionSettings, password: String) throws {
+        _ = Self.brokenPipesIgnored
         try settings.validate()
         let credentials = URLCredential(user: settings.username.isEmpty ? "guest" : settings.username,
                                         password: password, persistence: .forSession)
@@ -25,7 +31,9 @@ final class SMBService: @unchecked Sendable {
     func list(_ path: String) async throws -> [AlbumEntry] {
         try Task.checkCancellation()
         let folder = try AlbumPath.clean(path)
-        let rows = try await manager.contentsOfDirectory(atPath: folder)
+        let rows = try await Reconnecting.perform(reconnect: connect) { [manager] in
+            try await manager.contentsOfDirectory(atPath: folder)
+        }
         try Task.checkCancellation()
         return rows.compactMap { row -> AlbumEntry? in
             guard let name = row[.nameKey] as? String, name != ".", name != "..",
@@ -43,8 +51,29 @@ final class SMBService: @unchecked Sendable {
     }
 
     func read(_ path: String, range: Range<Int64>) async throws -> Data {
-        try await CancellableRead.perform { [manager] shouldContinue in
-            try await manager.contents(atPath: path, range: range, progress: { _, _ in shouldContinue() })
+        try await Reconnecting.perform(reconnect: connect) { [manager] in
+            try await CancellableRead.perform { shouldContinue in
+                try await manager.contents(atPath: path, range: range, progress: { _, _ in shouldContinue() })
+            }
+        }
+    }
+}
+
+/// A NAS closes a connection that sat idle, and iOS drops it while the app is in the background;
+/// the next request on it then fails. Reconnect (connectShare echoes the server and builds a new
+/// connection when the old one is gone) and try once more, so a folder opened after a while still
+/// opens. Cancellation is never retried, and a second failure is reported as it is.
+enum Reconnecting {
+    static func perform<T>(reconnect: () async throws -> Void, _ operation: () async throws -> T) async throws -> T {
+        do {
+            return try await operation()
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            try Task.checkCancellation()
+            DiagnosticStore.shared.recordError(.reconnecting, error: error)
+            try await reconnect()
+            return try await operation()
         }
     }
 }

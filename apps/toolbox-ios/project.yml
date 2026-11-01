@@ -22,9 +22,10 @@ settings:
     TARGETED_DEVICE_FAMILY: "1"
     # Continues the album's numbering: the toolbox installs over the album (0.3.2 build 5).
     # 0.5: the desk remote joined as the third tab. 0.5.1: memory, tab and heartbeat in the
-    # album's diagnostics (four unexplained ends on 11/01).
-    MARKETING_VERSION: "0.5.1"
-    CURRENT_PROJECT_VERSION: "11"
+    # album's diagnostics (four unexplained ends on 11/01). 0.5.2: the album no longer ends when a
+    # folder is opened on a connection the NAS closed (SIGPIPE ignored, reconnect and retry once).
+    MARKETING_VERSION: "0.5.2"
+    CURRENT_PROJECT_VERSION: "12"
 targets:
   # Named Lightbox, as the album app it replaces: the same bundle identifier, executable and
   # Swift module, so the album's unit tests (`@testable import Lightbox`) run here unchanged.
