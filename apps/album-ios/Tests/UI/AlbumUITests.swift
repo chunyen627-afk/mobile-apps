@@ -165,6 +165,9 @@ final class AlbumUITests: XCTestCase {
             assertVideoFits(aspect: pass == 0 ? 16.0 / 9.0 : 4.0 / 3.0)
             capture("avi-landscape-fit-\(pass)")
             centerTap()
+            // The single tap waits out the double-tap check; once (toolbox CI 11/02) the controls
+            // had not come back when the button was looked for, so allow one more tap.
+            if !app.buttons["leavePlayer"].waitForExistence(timeout: 3) { centerTap() }
             app.buttons["leavePlayer"].tap()
             XCTAssertTrue(app.buttons["開始播放"].waitForExistence(timeout: 5))
             XCUIDevice.shared.orientation = .portrait
