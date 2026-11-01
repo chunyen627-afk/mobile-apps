@@ -6,6 +6,14 @@ import SwiftUI
 struct DeskRemoteRootView: View {
     @StateObject private var store = DeskStore()
     @State private var path: [DeskRoute] = []
+    /// A link handed in from outside: the toolbox receives a `deskremote://` link at its tab bar
+    /// (this view may not exist yet while another tab is showing), switches to this tab and sets
+    /// it here; it is opened and then cleared. The standalone app leaves it nil.
+    @Binding private var link: URL?
+
+    init(link: Binding<URL?> = .constant(nil)) {
+        _link = link
+    }
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -26,13 +34,21 @@ struct DeskRemoteRootView: View {
                 }
         }
         .onOpenURL { url in open(url) }
+        .onChange(of: link) { _, url in openHandedIn(url) }
         .onAppear {
+            openHandedIn(link)
             // UI tests hand the link in at launch: a link opened from outside goes through a
             // system confirmation first.
             if store.uiTest, let link = ProcessInfo.processInfo.environment["DESK_UI_OPEN_URL"], let url = URL(string: link) {
                 open(url)
             }
         }
+    }
+
+    private func openHandedIn(_ url: URL?) {
+        guard let url else { return }
+        open(url)
+        link = nil
     }
 
     /// A notification's link: straight to that PC's conversation (or its administrator
