@@ -56,6 +56,38 @@ final class DiagnosticsTests: XCTestCase {
         XCTAssertTrue(text.contains("connectFailed"))
     }
 
+    func testEveryEventCarriesTheMemoryReading() throws {
+        let dir = directory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = DiagnosticStore(directory: dir)
+        store.record(.photoSelected, values: ["index": 3])
+        let events = try XCTUnwrap(exported(store)["events"] as? [[String: Any]])
+        let values = try XCTUnwrap(events.last?["values"] as? [String: Int])
+        XCTAssertEqual(values["index"], 3)
+        XCTAssertGreaterThan(values["memMB"] ?? 0, 0, "the app's own memory use")
+        XCTAssertNotNil(values["freeMB"], "what is left before iOS ends the app (0 on the simulator)")
+    }
+
+    @MainActor
+    func testHeartbeatRunsOnlyInTheForegroundAndNamesTheTab() async throws {
+        let dir = directory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = DiagnosticStore(directory: dir)
+        let diagnostics = AppDiagnostics(store: store, heartbeatSeconds: 0.05)
+        diagnostics.showTool(2)
+        diagnostics.showTool(2)
+        diagnostics.setForeground(true)
+        try await Task.sleep(for: .milliseconds(400))
+        diagnostics.setForeground(false)
+        let beats = try XCTUnwrap(exported(store)["events"] as? [[String: Any]]).filter { $0["action"] as? String == "heartbeat" }
+        XCTAssertGreaterThanOrEqual(beats.count, 2)
+        XCTAssertEqual((beats.first?["values"] as? [String: Int])?["tool"], 2)
+        try await Task.sleep(for: .milliseconds(300))
+        let events = try XCTUnwrap(exported(store)["events"] as? [[String: Any]])
+        XCTAssertEqual(events.filter { $0["action"] as? String == "heartbeat" }.count, beats.count, "stopped in the background")
+        XCTAssertEqual(events.filter { $0["action"] as? String == "toolShown" }.count, 1, "the same tab is logged once")
+    }
+
     func testEventRotationAndSystemReportDeduplicationAreBounded() throws {
         let dir = directory()
         defer { try? FileManager.default.removeItem(at: dir) }

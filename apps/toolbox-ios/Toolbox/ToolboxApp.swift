@@ -37,6 +37,10 @@ struct ToolboxRoot: View {
                 .tag(ToolboxTool.desk.rawValue)
         }
         .onAppear { tool = Self.startTool(stored: tool) }
+        // Logged with the album's diagnostics, so an unexpected end shows which tab was in use.
+        .onChange(of: tool, initial: true) { _, value in
+            AppDiagnostics.shared.showTool(ToolboxTool.allCases.firstIndex { $0.rawValue == value } ?? -1)
+        }
         // The desk remote's tab may not exist yet while another tab is showing, so its link is
         // taken here: switch to that tab and hand the link over.
         .onOpenURL { url in

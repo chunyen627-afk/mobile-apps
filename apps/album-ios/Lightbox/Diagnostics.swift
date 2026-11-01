@@ -3,6 +3,7 @@ import Foundation
 import MetricKit
 import SwiftUI
 import UIKit
+import os
 
 enum DiagnosticAction: String {
     case launch, previousSessionEndedInForeground, foreground, background, termination, memoryWarning
@@ -11,6 +12,27 @@ enum DiagnosticAction: String {
     case scanIndexLoading, scanIndexLoaded, scanDirectoryReading, scanDirectoryRead, scanSorting, scanIndexSaving, scanIndexSaved
     case playbackStarted, playbackStopped, photoSelected, videoSelected, playbackFailed, videoFailed, photoFailed, videoSeek
     case userMarkedProblem, mediaReadFailed, vlcStarted, vlcFailed, nativeDecoderFallback
+    // The toolbox's tab (0 album, 1 miner, 2 desk remote) and a beat every 15 s in the foreground:
+    // the toolbox ended in the foreground four times on 11/01 with no iOS report, two of them
+    // away from playback, so the last beat dates the end and shows where the app was.
+    case toolShown, heartbeat
+}
+
+enum MemoryReading {
+    /// What iOS counts against the app's memory limit (task_vm_info.phys_footprint), in MB.
+    static func footprintMB() -> Int? {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let result = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        return result == KERN_SUCCESS ? Int(info.phys_footprint / 1_048_576) : nil
+    }
+
+    /// How much more the app may use before iOS ends it (0 on the simulator), in MB.
+    static func availableMB() -> Int { Int(os_proc_available_memory() / 1_048_576) }
 }
 
 private struct DiagnosticEvent: Codable {
@@ -26,6 +48,8 @@ private struct DiagnosticSession: Codable {
 
 /// Serial, bounded local storage. Callers can log only named events and numbers,
 /// never hostnames, credentials, filenames, media contents or error descriptions.
+/// Every event also carries the app's memory use (memMB) and what is left before iOS ends it
+/// (freeMB), so an end without a system report can be told apart from a memory kill.
 final class DiagnosticStore: @unchecked Sendable {
     static let shared = DiagnosticStore()
     private let queue = DispatchQueue(label: "Lightbox.diagnostics")
@@ -122,7 +146,7 @@ final class DiagnosticStore: @unchecked Sendable {
                 "appVersion": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown",
                 "build": Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown",
                 "systemVersion": ProcessInfo.processInfo.operatingSystemVersionString,
-                "note": "previousSessionEndedInForeground is a clue, not proof of a crash; force quit, restart or power loss may also cause it. System reports are delivered by iOS when available.",
+                "note": "previousSessionEndedInForeground is a clue, not proof of a crash; force quit, restart or power loss may also cause it. System reports are delivered by iOS when available. memMB: the app's memory use; freeMB: left before iOS ends it (0 on the simulator); tool: 0 album, 1 miner, 2 desk remote; heartbeat: every 15 s in the foreground.",
                 "storageHadErrors": storageFailed, "events": events, "systemReports": reports
             ]
             let exports = directory.appendingPathComponent("Exports", isDirectory: true)
@@ -162,6 +186,9 @@ final class DiagnosticStore: @unchecked Sendable {
             try createDirectory()
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
+            var values = values
+            if let used = MemoryReading.footprintMB() { values["memMB"] = used }
+            values["freeMB"] = MemoryReading.availableMB()
             var data = try encoder.encode(DiagnosticEvent(date: Date(), session: session, action: action.rawValue, values: values))
             data.append(0x0a)
             let file = eventFile(0)
@@ -186,21 +213,52 @@ final class DiagnosticStore: @unchecked Sendable {
 @MainActor
 final class AppDiagnostics: NSObject, MXMetricManagerSubscriber {
     static let shared = AppDiagnostics()
+    private let store: DiagnosticStore
+    private let heartbeatSeconds: Double
     private var started = false
     private var observers: [NSObjectProtocol] = []
+    private var heartbeat: Task<Void, Never>?
+    /// The toolbox tab showing (nil in the standalone album).
+    private var tool: Int?
+
+    init(store: DiagnosticStore = .shared, heartbeatSeconds: Double = 15) {
+        self.store = store
+        self.heartbeatSeconds = heartbeatSeconds
+        super.init()
+    }
 
     func start() {
         guard !started else { return }
         started = true
-        DiagnosticStore.shared.beginSession()
+        store.beginSession()
         MXMetricManager.shared.add(self)
-        observers.append(NotificationCenter.default.addObserver(forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: nil) { _ in
-            DiagnosticStore.shared.record(.memoryWarning)
+        observers.append(NotificationCenter.default.addObserver(forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: nil) { [store] _ in
+            store.record(.memoryWarning)
         })
-        observers.append(NotificationCenter.default.addObserver(forName: UIApplication.willTerminateNotification, object: nil, queue: nil) { _ in
-            DiagnosticStore.shared.record(.termination)
-            DiagnosticStore.shared.setActive(false)
+        observers.append(NotificationCenter.default.addObserver(forName: UIApplication.willTerminateNotification, object: nil, queue: nil) { [store] _ in
+            store.record(.termination)
+            store.setActive(false)
         })
+    }
+
+    /// Beats while in the foreground; stopped in the background, where iOS suspends the app anyway.
+    func setForeground(_ active: Bool) {
+        heartbeat?.cancel()
+        heartbeat = nil
+        guard active else { return }
+        heartbeat = Task { [weak self, store, heartbeatSeconds] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(heartbeatSeconds))
+                guard !Task.isCancelled, let self else { return }
+                store.record(.heartbeat, values: tool.map { ["tool": $0] } ?? [:])
+            }
+        }
+    }
+
+    func showTool(_ index: Int) {
+        guard index != tool else { return }
+        tool = index
+        store.record(.toolShown, values: ["tool": index])
     }
 
     nonisolated func didReceive(_ payloads: [MXDiagnosticPayload]) {
@@ -223,7 +281,7 @@ struct DiagnosticsView: View {
             Form {
                 Section("自動保留在手機") {
                     Text(status)
-                    Text("保留近期操作、錯誤代碼、記憶體警告，以及 iOS 提供的診斷。下次開啟也會檢查上次是否未正常結束；強制關閉或重新開機也可能留下這個線索。").font(.footnote)
+                    Text("保留近期操作、錯誤代碼、記憶體用量與警告、目前所在分頁，以及 iOS 提供的診斷。下次開啟也會檢查上次是否未正常結束；強制關閉或重新開機也可能留下這個線索。").font(.footnote)
                     Text("不記錄 SMB 位址、帳密、檔名或照片內容，不會自動上傳。紀錄有容量上限，較舊資料會輪替。").font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("遇到問題後") {

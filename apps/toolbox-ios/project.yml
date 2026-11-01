@@ -21,9 +21,10 @@ settings:
     SWIFT_STRICT_CONCURRENCY: targeted
     TARGETED_DEVICE_FAMILY: "1"
     # Continues the album's numbering: the toolbox installs over the album (0.3.2 build 5).
-    # 0.5: the desk remote joined as the third tab.
-    MARKETING_VERSION: "0.5.0"
-    CURRENT_PROJECT_VERSION: "10"
+    # 0.5: the desk remote joined as the third tab. 0.5.1: memory, tab and heartbeat in the
+    # album's diagnostics (four unexplained ends on 11/01).
+    MARKETING_VERSION: "0.5.1"
+    CURRENT_PROJECT_VERSION: "11"
 targets:
   # Named Lightbox, as the album app it replaces: the same bundle identifier, executable and
   # Swift module, so the album's unit tests (`@testable import Lightbox`) run here unchanged.

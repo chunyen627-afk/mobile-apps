@@ -5,7 +5,7 @@
 # unsigned Release IPA. Requires Xcode 15+, XcodeGen and python3; this script installs nothing.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-EXPECTED_ALBUM_TESTS="${EXPECTED_ALBUM_TESTS:-41}"
+EXPECTED_ALBUM_TESTS="${EXPECTED_ALBUM_TESTS:-43}"
 EXPECTED_MINER_TESTS="${EXPECTED_MINER_TESTS:-126}"
 EXPECTED_DESK_TESTS="${EXPECTED_DESK_TESTS:-44}"
 EXPECTED_TOOLBOX_UI_TESTS="${EXPECTED_TOOLBOX_UI_TESTS:-5}"

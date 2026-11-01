@@ -31,12 +31,20 @@ private struct AlbumDiagnosticsLifecycle: ViewModifier {
         content
             .task {
                 AppDiagnostics.shared.start()
-                if scenePhase == .active { DiagnosticStore.shared.setActive(true) }
+                if scenePhase == .active {
+                    DiagnosticStore.shared.setActive(true)
+                    AppDiagnostics.shared.setForeground(true)
+                }
             }
             .onChange(of: scenePhase) { _, phase in
                 AppDiagnostics.shared.start()
-                if phase == .active { DiagnosticStore.shared.setActive(true) }
-                else if phase == .background { DiagnosticStore.shared.setActive(false) }
+                if phase == .active {
+                    DiagnosticStore.shared.setActive(true)
+                    AppDiagnostics.shared.setForeground(true)
+                } else if phase == .background {
+                    DiagnosticStore.shared.setActive(false)
+                    AppDiagnostics.shared.setForeground(false)
+                }
             }
     }
 }
