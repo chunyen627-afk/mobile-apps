@@ -41,6 +41,7 @@ struct DeskChatView: View {
     @State private var metrics = DeskScrollMetrics()
     @State private var landing = false      // opening: hidden until it has reached the end
     @State private var reload = 0           // bumped to make the scroll view anew (blank screen)
+    @State private var nudge = false        // toggled to change the viewport by a point (blank screen)
     @State private var settling = 0         // the latest run of scrolling to the end; older ones stop
 
     var body: some View {
@@ -133,6 +134,7 @@ struct DeskChatView: View {
             .scrollIndicators(showsRail ? .hidden : .automatic)
             .defaultScrollAnchor(.bottom)
             .id(reload)
+            .padding(.bottom, nudge ? 1 : 0)
             // Opening a conversation lands on its newest message (it sometimes stopped short, 10/29).
             .onChange(of: log.loaded) { if log.loaded { land(proxy) } }
             .overlay { if landing { ProgressView().accessibilityIdentifier("chat-landing") } }
@@ -297,15 +299,21 @@ struct DeskChatView: View {
             landing = false
             // A blank screen (no row drawn where it stopped: seen on CI 10/30 after a saved copy
             // got huge new rows; going to the last row did not help either) is scrolled to the
-            // last row itself once more, then the scroll view is made anew, which starts at the end.
-            for target in [log.rows.last?.id, "bottom"] {
+            // last row itself once more, then the scroll view is made anew, which starts at the
+            // end. Inside the toolbox the new one came up blank as well (CI 11/1), so it goes on
+            // while nothing is drawn: a change of the viewport by a point makes the lazy stack
+            // pick its rows again, the last row is put at the top, the view is made anew again.
+            for attempt in 0 ..< 10 {
                 try? await Task.sleep(nanoseconds: 300_000_000)
-                guard run == settling, !rowOnScreen, let target else { return }
-                proxy.scrollTo(target, anchor: .bottom)
+                guard run == settling, !rowOnScreen, !log.rows.isEmpty else { return }
+                switch attempt % 5 {
+                case 0: proxy.scrollTo(log.rows.last?.id ?? "bottom", anchor: .bottom)
+                case 1: proxy.scrollTo("bottom", anchor: .bottom)
+                case 2: reload += 1
+                case 3: nudge.toggle()
+                default: proxy.scrollTo(log.rows.last?.id ?? "bottom", anchor: .top)
+                }
             }
-            try? await Task.sleep(nanoseconds: 300_000_000)
-            guard run == settling, !rowOnScreen else { return }
-            reload += 1
         }
     }
 
