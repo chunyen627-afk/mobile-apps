@@ -4554,7 +4554,7 @@ def main(argv=None):
             hub.restart = lambda: disk.__setitem__(0, VERSION)
         hub.elevate = fake.elevate_relay()
         hub.screen = lambda: (fake.fixtures / 'screen.jpg').read_bytes()
-        gate = AuthGate(cfg['token'], None, cfg['pc_name'])
+        gate = AuthGate(cfg['token'])
         return serve(hub, gate, cfg, networks, runner)
     path = args.config or default_config_path()
     cfg, networks = load_config(path)
