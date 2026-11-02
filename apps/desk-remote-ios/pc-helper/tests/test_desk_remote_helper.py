@@ -972,6 +972,32 @@ for line in sys.stdin:
         # A card older than the file, or none, leaves the earlier rules.
         self.assertEqual(h.merge_claude_usage(sample, button, t, t, rows, t - 2 * 86400)['windows'][-1]['percent'], 63)
 
+    def test_a_per_model_week_on_the_button_does_not_pass_for_the_all_models_week(self):
+        # Live 11/2 (Claude 4.29, a Team plan with a Fable week): the button read "每週 · Fable：23%"
+        # after the card, and the phone showed 每週 23% in place of the card's 21%.
+        t = 1793600000
+        rows = [{'label': '5 小時限制', 'percent': 5, 'reset': '於 下午10:30 重設'},
+                {'label': '每週 · 所有模型', 'percent': 21, 'reset': '週日上午11:00 重設'},
+                {'label': '每週 · Fable', 'percent': 22, 'reset': '週日上午11:00 重設'}]
+        button = h.ui_usage('使用量：每週 · Fable：23% 週日上午11:00 重設', '使用量：')
+        self.assertEqual(button, {'label': '每週 · Fable', 'percent': 23, 'resetsText': '週日上午11:00 重設'})
+        merged = h.merge_claude_usage(None, button, t + 30, t + 60, rows, t)
+        self.assertEqual([(w['label'], w['percent']) for w in merged['windows']],
+                         [('5 小時', 5), ('每週', 21), ('每週 · Fable', 23)])  # the card's order, Fable's row renewed
+        # Read before the card, the button changes nothing.
+        older = h.merge_claude_usage(None, button, t - 30, t + 60, rows, t)
+        self.assertEqual([(w['label'], w['percent']) for w in older['windows']], [('5 小時', 5), ('每週', 21), ('每週 · Fable', 22)])
+        # Without a card, the file's all-models week stays and the button's row is added after it.
+        sample = {'windows': [{'label': '每週', 'percent': 40, 'resetsAt': None, 'resetsText': None}], 'sampledAt': h.iso(t)}
+        merged = h.merge_claude_usage(sample, button, t + 30, t + 60)
+        self.assertEqual([(w['label'], w['percent'], w['resetsText']) for w in merged['windows']],
+                         [('每週', 40, None), ('每週 · Fable', 23, '週日上午11:00 重設')])
+        self.assertEqual(merged['sampledAt'], h.iso(t))
+        # An all-models button still replaces the file's week, as before.
+        all_models = h.ui_usage('使用量：每週 · 所有模型：41% 週日上午11:00 重設', '使用量：')
+        merged = h.merge_claude_usage(sample, all_models, t + 30, t + 60)
+        self.assertEqual([(w['label'], w['percent']) for w in merged['windows']], [('每週', 41)])
+
     def test_claude_4_29_card_rows_keep_their_wording_and_expire(self):
         read = h.datetime(2026, 10, 28, 23, 34).timestamp()  # a Wednesday, local time
         self.assertEqual(h.datetime(2026, 10, 28).weekday(), 2)

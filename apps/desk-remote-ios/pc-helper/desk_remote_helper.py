@@ -38,7 +38,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.31'
+VERSION = '0.5.32'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -220,34 +220,45 @@ def card_windows(rows, read_at, now):
 def merge_claude_usage(from_file, button, button_at, now, card=None, card_at=None):
     """Claude's limits from the freshest of three readings. The usage card (the button expanded,
     read every few minutes while nobody uses the PC) is the only one with the session limit; the
-    button shows the week; the history file stopped for days (live 10/28: the office's 3.6556
-    since 10/27 17:49, the home PC's 4.29 since its update). The weekly percent comes from the
-    button whenever it was read after the card or the file; a 5-hour figure from the file older
-    than five hours is left out (that window has reset since). `sampledAt` is the oldest time
-    behind what is shown."""
+    button shows one weekly row; the history file stopped for days (live 10/28: the office's
+    3.6556 since 10/27 17:49, the home PC's 4.29 since its update). The button's row replaces the
+    row of the same name whenever it was read after the card or the file: the button says "每週 ·
+    所有模型" or, since Claude 4.29 on a plan with a per-model week, "每週 · Fable" (live 11/2: that
+    one was taken for the all-models week, so the phone showed Fable's 23% twice and never the
+    21%). A 5-hour figure from the file older than five hours is left out (that window has reset
+    since). `sampledAt` is the oldest time behind what is shown."""
     file_at = datetime.fromisoformat(from_file['sampledAt'].replace('Z', '+00:00')).timestamp() if from_file else None
-    weekly = button if button and button_at and button['label'].startswith('每週') else None
+    weekly = None
+    if button and button_at and button['label'].startswith('每週'):
+        weekly = {'label': card_label(button['label']), 'percent': button['percent'], 'resetsAt': None,
+                  'resetsText': button['resetsText']}
     if card and card_at and (file_at is None or card_at > file_at):
         windows = card_windows(card, card_at, now)
         if windows:
-            times = [card_at]
             if weekly and button_at > card_at:
-                week = {'label': '每週', 'percent': weekly['percent'], 'resetsAt': None, 'resetsText': weekly['resetsText']}
-                windows = [w for w in windows if w['label'] != '每週'] + [week]
-            return {'windows': windows, 'sampledAt': iso(min(times))}
+                windows = replace_window(windows, weekly)
+            return {'windows': windows, 'sampledAt': iso(card_at)}
     fresher = weekly is not None and (file_at is None or button_at > file_at)
+    same_week = weekly is not None and weekly['label'] == '每週'  # the file only knows the all-models week
     windows, times = [], []
     for window in (from_file or {}).get('windows') or []:
         if window['label'] == '5 小時' and now - file_at < 5 * 3600:
             windows.append(window)
             times.append(file_at)
-        elif window['label'] == '每週' and not fresher:
-            windows.append(dict(window, resetsText=weekly['resetsText'] if weekly else None))
+        elif window['label'] == '每週' and not (fresher and same_week):
+            windows.append(dict(window, resetsText=weekly['resetsText'] if same_week else None))
             times.append(file_at)
     if fresher:
-        windows.append({'label': '每週', 'percent': weekly['percent'], 'resetsAt': None, 'resetsText': weekly['resetsText']})
+        windows.append(weekly)
         times.append(button_at)
     return {'windows': windows, 'sampledAt': iso(min(times))} if windows else None
+
+
+def replace_window(windows, window):
+    """`windows` with `window` in place of the row of the same name, or added at the end."""
+    if not any(w['label'] == window['label'] for w in windows):
+        return windows + [window]
+    return [window if w['label'] == window['label'] else w for w in windows]
 
 
 def ui_model(name, strip):
