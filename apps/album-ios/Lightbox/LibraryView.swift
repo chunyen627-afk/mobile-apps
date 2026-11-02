@@ -77,7 +77,7 @@ struct LibraryView: View {
             } header: { Text("登入") } footer: { Text("密碼只儲存在這台 iPhone 的鑰匙圈。App 僅讀取相簿，不會修改或刪除分享內檔案。") }
             Section {
                 Button { Task { await model.connect() } } label: {
-                    HStack { Spacer(); if model.busy { ProgressView() }; Text(model.busy ? "正在連線…" : "連接相簿"); Spacer() }
+                    HStack { Spacer(); if model.busy { ProgressView() }; Text(!model.busy ? "連接相簿" : model.connectAttempt > 1 ? "等 NAS 回應…（第 \(model.connectAttempt) 次）" : "正在連線…"); Spacer() }
                 }.disabled(model.busy || model.settings.server.isEmpty || model.settings.share.isEmpty)
             }
             Section {

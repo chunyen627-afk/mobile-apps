@@ -24,8 +24,9 @@ settings:
     # 0.5: the desk remote joined as the third tab. 0.5.1: memory, tab and heartbeat in the
     # album's diagnostics (four unexplained ends on 11/01). 0.5.2: the album no longer ends when a
     # folder is opened on a connection the NAS closed (SIGPIPE ignored, reconnect and retry once).
-    MARKETING_VERSION: "0.5.2"
-    CURRENT_PROJECT_VERSION: "12"
+    # 0.5.3: a NAS not answering over ZeroTier is tried up to five times before the album gives up.
+    MARKETING_VERSION: "0.5.3"
+    CURRENT_PROJECT_VERSION: "13"
 targets:
   # Named Lightbox, as the album app it replaces: the same bundle identifier, executable and
   # Swift module, so the album's unit tests (`@testable import Lightbox`) run here unchanged.

@@ -19,7 +19,7 @@
 
 ## 安裝與資料
 
-- 沿用相簿的 Bundle ID `org.personal.lightbox.album`，版本接續相簿編號（目前 0.5.2 build 12；0.5.2 修正相簿連著 NAS 一段時間後點進資料夾就閃退（忽略 SIGPIPE、失敗時重連再試一次），見相簿 README；0.5 是桌面遙控加進來成為第三個分頁；0.5.1 在相簿的診斷紀錄加上記憶體用量、目前分頁與每 15 秒一次的心跳，追 11/01 四次在前景突然結束、又沒有 iOS 閃退報告的原因，見相簿 README；也併入桌面遙控 0.6.3：電腦頁的記憶體列、版本後面的更新提醒、從手機重啟換新版小幫手，搭配小幫手 0.5.31）。
+- 沿用相簿的 Bundle ID `org.personal.lightbox.album`，版本接續相簿編號（目前 0.5.3 build 13；0.5.3 讓相簿連不到 NAS 時（經 ZeroTier 逾時）自動再試，最多 5 次，見相簿 README；0.5.2 修正相簿連著 NAS 一段時間後點進資料夾就閃退（忽略 SIGPIPE、失敗時重連再試一次），見相簿 README；0.5 是桌面遙控加進來成為第三個分頁；0.5.1 在相簿的診斷紀錄加上記憶體用量、目前分頁與每 15 秒一次的心跳，追 11/01 四次在前景突然結束、又沒有 iOS 閃退報告的原因，見相簿 README；也併入桌面遙控 0.6.3：電腦頁的記憶體列、版本後面的更新提醒、從手機重啟換新版小幫手，搭配小幫手 0.5.31）。
 - **手機上已經有工具箱**：新版直接覆蓋安裝在工具箱上，不要先刪；相簿與礦機的設定都會保留，不用重填。
 - **第一次從相簿換成工具箱**：覆蓋安裝在相簿上，相簿的連線設定、密碼與已存清單都會保留，不要先刪除相簿。
 - 主畫面名稱是「工具箱」。`Info.plist` 的 `CFBundleDisplayName` 是英文 `Toolbox`，因為 SideStore 拿它當 Apple App ID 名稱，不接受中文；中文名稱放在 `zh-Hant.lproj/InfoPlist.strings`。
@@ -47,7 +47,7 @@ bash scripts/build.sh
 
    | 測試組 | 項目數 | 內容 |
    | --- | --- | --- |
-   | 相簿單元測試 | 48 | 相簿自己的測試，原封不動（0.5.1 加了記憶體讀數與心跳兩項；0.5.2 加了 SIGPIPE 與重連重試五項） |
+   | 相簿單元測試 | 52 | 相簿自己的測試，原封不動（0.5.1 加了記憶體讀數與心跳兩項；0.5.2 加了 SIGPIPE 與重連重試五項；0.5.3 加了等 NAS 回應的四項） |
    | 礦機單元測試 | 126 | 礦機核心自己的測試，原封不動 |
    | 桌面遙控單元測試 | 45 | 桌面遙控核心自己的測試，原封不動 |
    | 工具箱 UI 測試 | 5 | 三個分頁都在、切換後畫面保留、礦機詳情頁在分頁裡能開也能返回、重開 App 回到上次的工具；桌面遙控在分頁裡連到假小幫手、電腦頁與對話在分頁裡開、輸入列在分頁列上面不被擋、切到相簿再回來畫面還在 |
@@ -75,4 +75,5 @@ bash scripts/build.sh
 - [run 41344142967](https://github.com/chunyen627-afk/mobile-apps/actions/runs/41344142967)（`2a996f4`，0.5.1 build 11，診斷記錄加記憶體／分頁／心跳，併入桌面遙控 0.6.3 與小幫手 0.5.31）：小幫手 157、相簿單元 43、礦機單元 126、桌面遙控單元 45、工具箱 UI 5、相簿 UI 6、桌面遙控 UI 41，全部 0 失敗；IPA 48,787,217 bytes（未上傳）。截圖已人工檢視：桌面遙控分頁的記憶體列與重啟小幫手、版本後的更新提醒、從手機回覆防火牆視窗都正常，設定頁顯示 0.5.1 (build 11)
 - 發布：使用者 11/02 同意後，以同一份程式再加這一行說明推 `[release-ipa]`，由發布的 run 重跑測試並上傳 IPA
 - 0.5.2 build 12（`15aaed4`，相簿連著 NAS 一段時間後點進資料夾不再閃退）：使用者 11/02 要求直接發布最新版，所以沒有先跑一次不發布的 CI，由帶 `[release-ipa]` 的 run 跑完全部七組測試（相簿單元改成 48 項），全過才上傳 IPA；截圖在發布後、裝手機前人工檢視
-- 發布：[run 41358807102](https://github.com/chunyen627-afk/mobile-apps/actions/runs/41358807102)（`71d913f`）小幫手 157、相簿單元 48、礦機單元 126、桌面遙控單元 45、工具箱 UI 5、相簿 UI 6、桌面遙控 UI 41，全部 0 失敗，發布公開 prerelease [toolbox-0.5.2-build12](https://github.com/chunyen627-afk/mobile-apps/releases/tag/toolbox-0.5.2-build12)；IPA 48,789,385 bytes，SHA256 `087b9545388944c0e9b6630070a1857702491d8ef8acfd064e102ced901f937c`。截圖已人工檢視：相簿分頁、診斷紀錄、桌面遙控電腦頁正常。0.5.1 build 11 也已發布（[run 41355453079](https://github.com/chunyen627-afk/mobile-apps/actions/runs/41355453079)，[toolbox-0.5.1-build11](https://github.com/chunyen627-afk/mobile-apps/releases/tag/toolbox-0.5.1-build11)），被 0.5.2 取代。**尚未實機**：閒置後點資料夾不再閃退要在手機上確認
+- 發布：[run 41358807102](https://github.com/chunyen627-afk/mobile-apps/actions/runs/41358807102)（`71d913f`）小幫手 157、相簿單元 48、礦機單元 126、桌面遙控單元 45、工具箱 UI 5、相簿 UI 6、桌面遙控 UI 41，全部 0 失敗，發布公開 prerelease [toolbox-0.5.2-build12](https://github.com/chunyen627-afk/mobile-apps/releases/tag/toolbox-0.5.2-build12)；IPA 48,789,385 bytes，SHA256 `087b9545388944c0e9b6630070a1857702491d8ef8acfd064e102ced901f937c`。截圖已人工檢視：相簿分頁、診斷紀錄、桌面遙控電腦頁正常。0.5.1 build 11 也已發布（[run 41355453079](https://github.com/chunyen627-afk/mobile-apps/actions/runs/41355453079)，[toolbox-0.5.1-build11](https://github.com/chunyen627-afk/mobile-apps/releases/tag/toolbox-0.5.1-build11)），被 0.5.2 取代。11/02 實機：使用者確認閒置後點資料夾**不再閃退**，但斷線後很難再連上（作業逾時），由 0.5.3 處理
+- 0.5.3 build 13（相簿連不到 NAS 時最多試 5 次）：尚未跑 CI、尚未發布

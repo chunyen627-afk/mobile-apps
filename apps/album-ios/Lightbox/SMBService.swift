@@ -24,14 +24,16 @@ final class SMBService: @unchecked Sendable {
         self.settings = settings
     }
 
-    func connect() async throws {
-        try await manager.connectShare(name: settings.share, encrypted: settings.encrypted)
+    func connect(retrying: @MainActor (Int) -> Void = { _ in }) async throws {
+        try await WaitingForNAS.perform(retrying: retrying) { [manager, settings] in
+            try await manager.connectShare(name: settings.share, encrypted: settings.encrypted)
+        }
     }
 
     func list(_ path: String) async throws -> [AlbumEntry] {
         try Task.checkCancellation()
         let folder = try AlbumPath.clean(path)
-        let rows = try await Reconnecting.perform(reconnect: connect) { [manager] in
+        let rows = try await Reconnecting.perform(reconnect: { try await self.connect() }) { [manager] in
             try await manager.contentsOfDirectory(atPath: folder)
         }
         try Task.checkCancellation()
@@ -51,7 +53,7 @@ final class SMBService: @unchecked Sendable {
     }
 
     func read(_ path: String, range: Range<Int64>) async throws -> Data {
-        try await Reconnecting.perform(reconnect: connect) { [manager] in
+        try await Reconnecting.perform(reconnect: { try await self.connect() }) { [manager] in
             try await CancellableRead.perform { shouldContinue in
                 try await manager.contents(atPath: path, range: range, progress: { _, _ in shouldContinue() })
             }
@@ -74,6 +76,39 @@ enum Reconnecting {
             DiagnosticStore.shared.recordError(.reconnecting, error: error)
             try await reconnect()
             return try await operation()
+        }
+    }
+}
+
+/// The phone reaches the NAS over ZeroTier, whose path goes quiet while the phone sleeps: the first
+/// connections afterwards time out (twice in a row on 10/21 and 10/24, 20 s each) and the next one
+/// gets through within a second. Keep trying while the error says the NAS was not reached, so a tap
+/// waits for the path instead of reporting a timeout; any other error (a wrong password, a missing
+/// share) and cancellation are reported at once.
+enum WaitingForNAS {
+    static let unreachableCodes: Set<Int32> = [ETIMEDOUT, EHOSTUNREACH, ENETUNREACH, ENETDOWN, EHOSTDOWN,
+                                               ECONNREFUSED, ECONNRESET, ECONNABORTED, ENOTCONN, EPIPE]
+
+    static func isUnreachable(_ error: Error) -> Bool {
+        let value = error as NSError
+        return value.domain == NSPOSIXErrorDomain && unreachableCodes.contains(Int32(value.code))
+    }
+
+    /// `retrying` hears the number of the attempt about to start (2 and up).
+    static func perform<T>(attempts: Int = 5, pause: Duration = .seconds(3),
+                           retrying: @MainActor (Int) -> Void = { _ in },
+                           _ operation: () async throws -> T) async throws -> T {
+        var attempt = 1
+        while true {
+            do {
+                return try await operation()
+            } catch let error where attempt < attempts && isUnreachable(error) {
+                try Task.checkCancellation()
+                DiagnosticStore.shared.recordError(.waitingForNAS, error: error)
+                attempt += 1
+                await retrying(attempt)
+                try await Task.sleep(for: pause)
+            }
         }
     }
 }

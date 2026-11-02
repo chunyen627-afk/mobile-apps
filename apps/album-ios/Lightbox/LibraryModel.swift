@@ -11,6 +11,8 @@ final class LibraryModel: ObservableObject {
     @Published var selections: [String: AlbumEntry] = [:]
     @Published var favorites = Set<String>()
     @Published var busy = false
+    /// The connection attempt under way; above 1 while the NAS is not answering yet.
+    @Published var connectAttempt = 1
     @Published var error: String?
     @Published var showScan = false
     @Published var scanFinished = false
@@ -50,13 +52,14 @@ final class LibraryModel: ObservableObject {
     func connect() async {
         DiagnosticStore.shared.record(.connectStarted)
         busy = true
-        defer { busy = false }
+        connectAttempt = 1
+        defer { busy = false; connectAttempt = 1 }
         do {
             settings.server = settings.server.trimmingCharacters(in: .whitespacesAndNewlines)
             settings.share = settings.share.trimmingCharacters(in: .whitespacesAndNewlines)
             let connected = try SMBService(settings: settings, password: password)
             let newRoot = try AlbumPath.clean(settings.folder)
-            try await connected.connect()
+            try await connected.connect(retrying: { self.connectAttempt = $0 })
             let rows = try await connected.list(newRoot)
             try PasswordStore.save(password, for: settings.identity)
             UserDefaults.standard.set(try JSONEncoder().encode(settings), forKey: "connection")
@@ -72,9 +75,15 @@ final class LibraryModel: ObservableObject {
             favorites = Set(UserDefaults.standard.stringArray(forKey: "favorites." + settings.identity) ?? [])
         } catch {
             DiagnosticStore.shared.recordError(.connectFailed, error: error)
-            self.error = "連線失敗：\(error.localizedDescription)\n請確認手機網路、主機／分享名稱及帳號密碼。電腦的 Z: 連線不會自動授權給手機。"
+            if WaitingForNAS.isUnreachable(error) {
+                self.error = Self.unreachableMessage
+            } else {
+                self.error = "連線失敗：\(error.localizedDescription)\n請確認手機網路、主機／分享名稱及帳號密碼。電腦的 Z: 連線不會自動授權給手機。"
+            }
         }
     }
+
+    static let unreachableMessage = "連不到 NAS（已試 5 次）。請打開 ZeroTier 確認已連線：SideStore 續簽會把 VPN 換成 LocalDevVPN，iOS 一次只能開一個 VPN。手機剛待機回來時，ZeroTier 也要一點時間才接通，稍等再試。"
 
     func navigate(_ path: String) async {
         guard let service, AlbumPath.contains(root, path) else { return }
@@ -89,7 +98,7 @@ final class LibraryModel: ObservableObject {
             entries = rows
         } catch {
             DiagnosticStore.shared.recordError(.navigationFailed, error: error)
-            if navigationID == ticket { self.error = error.localizedDescription }
+            if navigationID == ticket { self.error = WaitingForNAS.isUnreachable(error) ? Self.unreachableMessage : error.localizedDescription }
         }
     }
 

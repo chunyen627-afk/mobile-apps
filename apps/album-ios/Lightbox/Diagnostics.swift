@@ -19,6 +19,9 @@ enum DiagnosticAction: String {
     // A request failed on the NAS connection and the app reconnected to try once more (code and
     // domainClass say why): an idle connection the NAS closed shows up here.
     case reconnecting
+    // The NAS was not reached (code says how) and the app is about to try again: the phone's
+    // ZeroTier path waking after the phone slept shows up as a run of these before a success.
+    case waitingForNAS
 }
 
 enum MemoryReading {
