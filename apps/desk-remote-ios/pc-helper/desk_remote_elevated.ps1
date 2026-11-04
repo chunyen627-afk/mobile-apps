@@ -12,8 +12,14 @@
 # so a relay that showed the phone other content, or a replayed or late approval, is refused.
 # Approved content runs from an admin-only copy: what the phone saw is exactly what runs.
 #
-# ASCII only (PowerShell 5.1 reads BOM-less scripts in the ANSI code page).
-param([string]$Config = (Join-Path $env:ProgramData 'DeskRemote\elevated.json'))
+# Each request is also asked on the PC itself: a child of this script (-Ask <id>) shows an
+# approval window (an administrator's window, so no ordinary program can press it) and, on
+# Allow, signs the request with the key the way the phone would. Whoever is at the PC need not
+# reach for the phone (the user, 11/5); the phone still works, and whichever answers first wins.
+#
+# ASCII only (PowerShell 5.1 reads BOM-less scripts in the ANSI code page); Chinese is built from
+# code points with U.
+param([string]$Config = (Join-Path $env:ProgramData 'DeskRemote\elevated.json'), [string]$Ask = '')
 $ErrorActionPreference = 'Stop'
 
 $cfg = [IO.File]::ReadAllText($Config) | ConvertFrom-Json
@@ -44,6 +50,79 @@ function Log($text) {
 }
 
 function Now() { return [int64][DateTimeOffset]::UtcNow.ToUnixTimeSeconds() }
+
+function U($codes) { return -join (($codes -split ' ') | ForEach-Object { [char][Convert]::ToInt32($_, 16) }) }
+
+# One JSON line to this companion itself (from the -Ask child).
+function Call-Self($message) {
+  $client = New-Object Net.Sockets.TcpClient('127.0.0.1', [int]$cfg.port)
+  try {
+    $client.ReceiveTimeout = 3000; $client.SendTimeout = 3000
+    $stream = $client.GetStream()
+    $writer = New-Object IO.StreamWriter($stream, $utf8)
+    $reader = New-Object IO.StreamReader($stream, $utf8)
+    $json = $message | ConvertTo-Json -Compress -Depth 5
+    $json = [regex]::Replace($json, '[^\x00-\x7F]', { param($x) '\u{0:x4}' -f [int][char]$x.Value })
+    $writer.WriteLine($json); $writer.Flush()
+    return ($reader.ReadLine() | ConvertFrom-Json)
+  } finally { $client.Close() }
+}
+
+# The approval window on the PC for request $id: Allow signs and starts it, Deny refuses it; it
+# closes by itself once the request is no longer pending (the phone answered, or it expired).
+function Ask-OnPc($id) {
+  Add-Type -AssemblyName System.Windows.Forms
+  Add-Type -AssemblyName System.Drawing
+  $r = $null
+  try { $r = @((Call-Self @{ op = 'list'; token = $token }).pending | Where-Object { $_.id -eq $id })[0] } catch { }
+  if (-not $r) { return }
+  $form = New-Object Windows.Forms.Form
+  $form.Text = 'DeskRemote ' + (U '7ba1 7406 54e1 6307 4ee4 6838 51c6')
+  $form.StartPosition = 'CenterScreen'
+  $form.FormBorderStyle = 'FixedDialog'
+  $form.MinimizeBox = $false; $form.MaximizeBox = $false; $form.TopMost = $true
+  $form.Width = 640; $form.Height = 460
+  $font = New-Object Drawing.Font('Microsoft JhengHei UI', 10)
+  $form.Font = $font
+  $head = New-Object Windows.Forms.Label
+  $head.Text = (U '9019 53f0 96fb 8166 4e0a 7684 7a0b 5f0f 8981 4ee5 7cfb 7d71 7ba1 7406 54e1 8eab 5206 57f7 884c 4e0b 9762 7684 5167 5bb9 ff0c 4f60 5141 8a31 55ce ff1f') + "`r`n" + "$($r.name)"
+  $head.AutoSize = $false; $head.Width = 600; $head.Height = 48; $head.Left = 16; $head.Top = 12
+  $form.Controls.Add($head)
+  $body = New-Object Windows.Forms.TextBox
+  $body.Multiline = $true; $body.ReadOnly = $true; $body.ScrollBars = 'Vertical'
+  $body.Font = New-Object Drawing.Font('Consolas', 9)
+  $body.Text = "$($r.content)"
+  $body.Left = 16; $body.Top = 64; $body.Width = 600; $body.Height = 290
+  $form.Controls.Add($body)
+  $note = New-Object Windows.Forms.Label
+  $note.Text = (U '624b 6a5f 7684 684c 9762 9059 63a7 4e5f 80fd 6838 51c6 9019 500b 8acb 6c42 ff1b 31 30 20 5206 9418 5167 6c92 6709 6838 51c6 5c31 4f5c 5ee2 3002')
+  $note.AutoSize = $false; $note.Width = 600; $note.Height = 24; $note.Left = 16; $note.Top = 362
+  $form.Controls.Add($note)
+  $allow = New-Object Windows.Forms.Button
+  $allow.Text = (U '5141 8a31'); $allow.Width = 120; $allow.Height = 34; $allow.Left = 376; $allow.Top = 390
+  $deny = New-Object Windows.Forms.Button
+  $deny.Text = (U '62d2 7d55'); $deny.Width = 120; $deny.Height = 34; $deny.Left = 496; $deny.Top = 390
+  $form.Controls.Add($allow); $form.Controls.Add($deny)
+  $form.AcceptButton = $null; $form.CancelButton = $deny
+  $allow.Add_Click({
+    try { Call-Self @{ op = 'decide'; token = $token; id = $r.id; decision = 'allow'; hmac = (Expected-Mac $r) } | Out-Null } catch { }
+    $form.Close()
+  })
+  $deny.Add_Click({
+    try { Call-Self @{ op = 'decide'; token = $token; id = $r.id; decision = 'deny' } | Out-Null } catch { }
+    $form.Close()
+  })
+  $timer = New-Object Windows.Forms.Timer
+  $timer.Interval = 1500
+  $timer.Add_Tick({
+    $state = $null
+    try { $state = (Call-Self @{ op = 'status'; token = $token; id = $r.id }).state } catch { }
+    if ($state -ne 'pending') { $timer.Stop(); $form.Close() }
+  })
+  $timer.Start()
+  [void]$form.ShowDialog()
+  $timer.Stop()
+}
 
 function Same-Text($a, $b) {
   $x = $utf8.GetBytes("$a"); $y = $utf8.GetBytes("$b")
@@ -150,6 +229,12 @@ function Handle($m) {
               created = $now; expires = $now + $ttl; timeout = $timeout; state = 'pending' }
       $requests[$r.id] = $r
       Log "asked $($r.id) $kind"
+      try {
+        $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        # The console is hidden by PowerShell's own switch: Start-Process -WindowStyle Hidden would
+        # start the process with a hidden show state, which hides the approval window too (found 11/5).
+        Start-Process -FilePath $ps -ArgumentList @('-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"", '-Config', "`"$Config`"", '-Ask', $r.id) | Out-Null
+      } catch { Log "could not open the approval window: $($_.Exception.Message)" }
       return @{ ok = $true; id = $r.id; expires = $r.expires }
     }
     'list' {
@@ -187,6 +272,12 @@ function Handle($m) {
 
 function Escape-Json($json) {
   return [regex]::Replace($json, '[^\x00-\x7F]', { param($x) '\u{0:x4}' -f [int][char]$x.Value })
+}
+
+if ($Ask) {
+  if ($Ask -notmatch '^[0-9a-f]{16}$') { exit 1 }
+  Ask-OnPc $Ask
+  exit 0
 }
 
 $listener = New-Object Net.Sockets.TcpListener ([Net.IPAddress]::Loopback, [int]$cfg.port)

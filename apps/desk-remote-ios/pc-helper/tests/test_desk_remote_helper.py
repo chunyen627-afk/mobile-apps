@@ -1548,6 +1548,47 @@ class VersionTests(FakeEnvironment):
         run_all(runner)
         return runner.status(body['id'])
 
+    def test_an_administrators_window_is_pressed_by_the_elevated_companion(self):
+        # Live 11/5: the FlashPrint installer (past UAC) ignored the phone's 下一步; Windows lets no
+        # ordinary program press an administrator's window (UIPI). The companion presses it once
+        # the person allows, on the PC's own window or on the phone.
+        admin = {'hwnd': 4747, 'title': 'FlashPrint 5 安裝', 'process': 'FlashPrint 5_5.8.7_x64',
+                 'text': 'Select the setup language:', 'buttons': ['下一步 (N) >', '取消'], 'elevated': True}
+        hub, driver, watcher, runner = drive(self.fake)
+        hub.elevate = self.fake.elevate_relay()
+        before = len(self.fake.elevator.requests)
+        driver.fake_popups = [dict(admin)]
+        listed = watcher.check_popups()
+        self.assertTrue(listed[0]['elevated'])
+        self.assertTrue(watcher.popup_list()[0]['text'].endswith(h.ELEVATED_HINT), 'the phone is told')
+        status = self.finish(runner, runner.submit('popup', None, listed[0]['id'], {'button': '下一步 (N) >'}))
+        self.assertEqual((status['state'], status['verified']), ('done', False), status)
+        self.assertIn('提權夥伴代按「下一步 (N) >」', status['message'])
+        self.assertFalse([c for c in driver.calls if c[0] == 'press_popup'], 'not pressed by this user')
+        asked = [r for r in self.fake.elevator.requests.values() if r['name'] == '按「下一步 (N) >」：FlashPrint 5 安裝']
+        self.assertEqual((len(self.fake.elevator.requests) - before, len(asked)), (1, 1))
+        self.assertEqual(asked[0]['kind'], 'script')
+        self.assertIn("[IntPtr][int64]4747", asked[0]['content'])
+        self.assertIn("'下一步 (N) >'", asked[0]['content'])
+        self.assertIn('EnumChildWindows', asked[0]['content'])
+        self.assertIn('InvokePattern', asked[0]['content'], 'UI Automation as the fallback')
+        # Without the companion there is nothing to hand it to: the person presses on the PC.
+        hub.elevate = None
+        driver.fake_popups = [dict(admin, hwnd=4748)]
+        listed = watcher.check_popups()
+        status = self.finish(runner, runner.submit('popup', None, listed[0]['id'], {'button': '取消'}))
+        self.assertEqual((status['state'], status['error']), ('failed', 'elevated-window'), status)
+        self.assertIn('沒裝提權夥伴', status['message'])
+        # A question inside an app's page is never that, whatever the worker said.
+        driver.fake_popups = [dict(h.FAKE_QUIT_GUARD, elevated=True)]
+        self.assertFalse(watcher.check_popups()[0]['elevated'])
+
+    def test_the_press_script_quotes_the_windows_words(self):
+        script = h.elevated_press_script(99, "It's here", "Don't")
+        self.assertIn("'It''s here'", script)
+        self.assertIn("'Don''t'", script)
+        self.assertIn('[IntPtr][int64]99', script)
+
     def test_codexs_own_update_button_is_pressed_when_idle(self):
         _, driver, watcher, _, presence = self.version_setup(idle=30, codex=('26.1021.3705.0', '26.1021.3705.0'))
         driver.fake_update = {'codex': '更新'}

@@ -80,6 +80,35 @@ public static class DeskWin {
   public static void Press(IntPtr button) {
     SendMessage(GetParent(button), 0x0111, (IntPtr)(GetDlgCtrlID(button) & 0xFFFF), button);
   }
+  [DllImport("kernel32.dll")] public static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
+  [DllImport("kernel32.dll")] public static extern bool CloseHandle(IntPtr h);
+  [DllImport("advapi32.dll", SetLastError = true)] public static extern bool OpenProcessToken(IntPtr h, uint access, out IntPtr token);
+  [DllImport("advapi32.dll", SetLastError = true)] public static extern bool GetTokenInformation(IntPtr token, int cls, IntPtr info, uint len, out uint ret);
+  [DllImport("advapi32.dll")] public static extern IntPtr GetSidSubAuthorityCount(IntPtr sid);
+  [DllImport("advapi32.dll")] public static extern IntPtr GetSidSubAuthority(IntPtr sid, uint index);
+  // The process's integrity level (0x3000 = high, an administrator); -1 when the process cannot be
+  // opened at all, -2 when its token refuses this user (an administrator's or the system's).
+  public static int Integrity(uint pid) {
+    IntPtr h = OpenProcess(0x1000, false, pid);
+    if (h == IntPtr.Zero) return -1;
+    IntPtr tok;
+    if (!OpenProcessToken(h, 8, out tok)) { CloseHandle(h); return -2; }
+    int level = -1;
+    uint len;
+    GetTokenInformation(tok, 25, IntPtr.Zero, 0, out len);
+    if (len > 0) {
+      IntPtr buf = System.Runtime.InteropServices.Marshal.AllocHGlobal((int)len);
+      if (GetTokenInformation(tok, 25, buf, len, out len)) {
+        IntPtr sid = System.Runtime.InteropServices.Marshal.ReadIntPtr(buf);
+        byte count = System.Runtime.InteropServices.Marshal.ReadByte(GetSidSubAuthorityCount(sid));
+        level = System.Runtime.InteropServices.Marshal.ReadInt32(GetSidSubAuthority(sid, (uint)(count - 1)));
+      }
+      System.Runtime.InteropServices.Marshal.FreeHGlobal(buf);
+    }
+    CloseHandle(tok); CloseHandle(h);
+    return level;
+  }
+  public static bool IsElevated(uint pid) { int l = Integrity(pid); return l == -2 || l >= 0x3000; }
 }
 "@
 $AE = [System.Windows.Automation.AutomationElement]
@@ -1109,6 +1138,8 @@ $PopupSkip = @('ShellExperienceHost', 'StartMenuExperienceHost', 'SearchHost', '
 # ("New permissions required ... Allow this action / Decline", seen 10/31 while Claude Code
 # browsed); only windows with that title are searched, not every Chrome window.
 $ExtensionTitle = 'Claude for Chrome'
+# The elevated companion's own approval window on the PC (desk_remote_elevated.ps1 -Ask).
+$CompanionTitle = 'DeskRemote'
 $ExtensionAllow = 'Allow this action'
 $ExtensionDecline = 'Decline'
 
@@ -1160,6 +1191,7 @@ function Find-Popups {
       try { $proc = (Get-Process -Id $cur.ProcessId -ErrorAction Stop).ProcessName } catch { }
       if ($PopupSkip -contains $proc) { continue }
       if ($proc -eq 'explorer' -and -not $dialog) { continue }
+      if ("$($cur.Name)".StartsWith($CompanionTitle)) { continue }  # the companion asks on the PC itself
       if ($hasPattern -and $pattern.Current.CanMinimize -and -not $dialog) { continue }
       $hwnd = [IntPtr]$cur.NativeWindowHandle
       $buttons = @(Popup-Buttons $w | ForEach-Object { $_.Current.Name.Trim() } | Select-Object -Unique)
@@ -1167,12 +1199,15 @@ function Find-Popups {
         ForEach-Object { "$($_.Current.Name)".Trim() } | Where-Object { $_ } | Select-Object -Unique)
       if (-not $buttons -and $dialog) {
         $buttons = @(Dialog-Buttons $hwnd | ForEach-Object { [DeskWin]::Text($_) } | Select-Object -Unique)
-        $texts = @([DeskWin]::Children($hwnd, 'Static') | ForEach-Object { [DeskWin]::Text($_) } | Where-Object { $_ })
+        $texts = @([DeskWin]::Children($hwnd, 'Static') | Where-Object { [DeskWin]::IsWindowEnabled($_) } |
+          ForEach-Object { [DeskWin]::Text($_) } | Where-Object { $_ })
       }
       if (-not $buttons) { continue }
       $text = $texts -join "`n"
       if ($text.Length -gt 600) { $text = $text.Substring(0, 600) }
-      $found += @{ hwnd = [int64]$cur.NativeWindowHandle; title = "$($cur.Name)"; process = $proc; text = $text; buttons = $buttons }
+      $elevated = $false
+      try { $elevated = [DeskWin]::IsElevated([uint32]$cur.ProcessId) } catch { }
+      $found += @{ hwnd = [int64]$cur.NativeWindowHandle; title = "$($cur.Name)"; process = $proc; text = $text; buttons = $buttons; elevated = $elevated }
     } catch { continue }  # it closed while being read
   }
   # A desktop app's own question drawn inside its page: Claude asks there before restarting to

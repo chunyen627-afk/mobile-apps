@@ -38,7 +38,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.33'
+VERSION = '0.5.34'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -2606,10 +2606,14 @@ class UiWatcher:
             if self.allow_extension_read(raw):
                 continue
             key = f"{raw.get('hwnd')}\n{raw.get('title')}\n{raw.get('process')}"
+            elevated = bool(raw.get('elevated')) and not raw.get('page')
+            text = str(raw.get('text') or '')[:600]
+            if elevated:
+                text = (text + '\n' + ELEVATED_HINT).strip()
             listed.append({'id': hashlib.sha256(key.encode('utf-8')).hexdigest()[:12], 'hwnd': raw.get('hwnd'),
                            'title': str(raw.get('title') or ''), 'process': str(raw.get('process') or ''),
-                           'text': str(raw.get('text') or '')[:600],
-                           'buttons': [str(b) for b in raw['buttons']][:8], 'page': bool(raw.get('page'))})
+                           'text': text, 'buttons': [str(b) for b in raw['buttons']][:8], 'page': bool(raw.get('page')),
+                           'elevated': elevated})
         with self.lock:
             known = {p['id'] for p in self.popups}
             self.popups = listed
@@ -3371,6 +3375,8 @@ class ActionRunner:
             raise ActionError('popup-gone', '')
         button = action['button']
         self.update(action, title=popup['title'] or popup['process'])
+        if popup.get('elevated'):
+            return self.press_elevated(action, popup, button)
         self.presence.begin_own()  # a window without UI Automation buttons is clicked
         gone = self.driver.press_popup(popup, button)
         self.watcher.check_popups()
@@ -3382,6 +3388,28 @@ class ActionRunner:
         else:
             message = f'已按「{button}」，但視窗還在（可能要管理員權限，或還有下一步）'
         self.update(action, state='done', verified=bool(gone), message=message)
+
+    def press_elevated(self, action, popup, button):
+        """An administrator's window (an installer past UAC) refuses this user's press (UIPI): the
+        elevated companion presses it instead, once the person approves, on the PC's own approval
+        window or on the phone (the user 11/5: at the PC, reaching for the phone is odd)."""
+        title = popup['title'] or popup['process']
+        if self.hub.elevate is None:
+            raise ActionError('elevated-window', '')
+        content = elevated_press_script(popup['hwnd'], popup['title'], button)
+        try:
+            answer = self.hub.elevate.request({'op': 'request', 'kind': 'script', 'name': f'按「{button}」：{title}',
+                                               'content': content, 'cwd': '', 'timeout': 60})
+        except (OSError, ValueError):
+            raise ActionError('elevate-unavailable', '')
+        if not answer.get('ok'):
+            logging.warning('elevated press of %s refused: %s', button, answer.get('error'))
+            raise ActionError('elevate-refused', str(answer.get('error') or ''))
+        logging.info('elevated window %s: asked the companion to press %s (%s)', title, button, answer.get('id'))
+        self.hub.elevate.poll()
+        self.update(action, state='done', verified=False,
+                    message=f'這是系統管理員程式的視窗，手機直接按不到；已請提權夥伴代按「{button}」，'
+                            '在電腦上跳出的核准視窗按「允許」、或在手機的管理員指令頁核准後就會按')
 
     def verify(self, transcript, mark, text):
         """True when the transcript has the message, 'queued' when Claude accepted it into its
@@ -3631,6 +3659,62 @@ class ActionRunner:
             time.sleep(0.5)
 
 
+ELEVATED_HINT = '（系統管理員程式的視窗：手機按的按鈕會交給提權夥伴代按，在電腦上或手機核准）'
+
+
+def elevated_press_script(hwnd, title, button):
+    """PowerShell the elevated companion runs, as an administrator, to press `button` in the
+    window `hwnd` titled `title`: a window of an administrator's process (an installer past UAC,
+    FlashPrint 11/5) refuses this user's clicks and UI Automation (UIPI), so the helper's own
+    press did nothing. The button is found as a Win32 child window first (its text without the
+    & and spaces; the installer's buttons are plain Button controls that UI Automation showed as
+    panes, 11/5) and clicked with BM_CLICK, else through UI Automation by name. What the phone
+    (or the PC's approval window) shows is exactly this."""
+    def quoted(text):
+        return "'" + str(text).replace("'", "''") + "'"
+    return f"""# 桌面遙控：在系統管理員程式的視窗「{title}」按「{button}」（手機按不到這種視窗）
+Add-Type -Namespace DeskPress -Name Win -MemberDefinition @'
+public delegate bool EnumProc(IntPtr h, IntPtr l);
+[DllImport("user32.dll")] public static extern bool IsWindow(IntPtr h);
+[DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+[DllImport("user32.dll")] public static extern bool IsWindowEnabled(IntPtr h);
+[DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr p, EnumProc f, IntPtr l);
+[DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, System.Text.StringBuilder s, int n);
+[DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassName(IntPtr h, System.Text.StringBuilder s, int n);
+[DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
+public static string Norm(string s) {{ return s.Replace("&", "").Replace(" ", "").Trim(); }}
+public static string Title(IntPtr h) {{ var t = new System.Text.StringBuilder(512); GetWindowText(h, t, 512); return t.ToString(); }}
+public static IntPtr Find(IntPtr parent, string wanted) {{
+  IntPtr found = IntPtr.Zero; string want = Norm(wanted);
+  EnumChildWindows(parent, (h, l) => {{
+    var c = new System.Text.StringBuilder(64); GetClassName(h, c, 64);
+    if (found == IntPtr.Zero && IsWindowVisible(h) && IsWindowEnabled(h) && Norm(Title(h)) == want
+        && c.ToString().IndexOf("Button", StringComparison.OrdinalIgnoreCase) >= 0) found = h;
+    return true; }}, IntPtr.Zero);
+  return found;
+}}
+'@
+$h = [IntPtr][int64]{int(hwnd)}
+if (-not [DeskPress.Win]::IsWindow($h) -or [DeskPress.Win]::Title($h) -ne {quoted(title)}) {{ Write-Output '視窗已經不在了'; exit 2 }}
+$b = [DeskPress.Win]::Find($h, {quoted(button)})
+if ($b -ne [IntPtr]::Zero) {{
+  [DeskPress.Win]::SendMessage($b, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null  # BM_CLICK
+}} else {{
+  Add-Type -AssemblyName UIAutomationClient
+  Add-Type -AssemblyName UIAutomationTypes
+  $AE = [System.Windows.Automation.AutomationElement]
+  $w = $AE::FromHandle($h)
+  $e = $w.FindFirst([System.Windows.Automation.TreeScope]::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::NameProperty, {quoted(button)})))
+  $p = $null
+  if (-not $e -or -not $e.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$p)) {{ Write-Output '視窗裡找不到這個按鈕'; exit 3 }}
+  $p.Invoke()
+}}
+Start-Sleep -Milliseconds 800
+$still = [DeskPress.Win]::IsWindow($h) -and [DeskPress.Win]::IsWindowVisible($h) -and ([DeskPress.Win]::Title($h) -eq {quoted(title)})
+Write-Output ('已按「{button}」' + $(if ($still) {{ '，視窗還在（可能還有下一步）' }} else {{ '，視窗已關閉' }}))
+"""
+
+
 class ElevateRelay:
     """Passes administrator requests between the elevated companion and the phone (phase 3).
 
@@ -3728,6 +3812,9 @@ FAILURE_TEXT = {
     'worker-error': '畫面操作程式出錯',
     'popup-gone': '這個視窗已經關掉了',
     'press-failed': '按不下去（這個視窗可能要以管理員身分才能按）',
+    'elevated-window': '這是系統管理員程式的視窗，手機按不到；這台電腦沒裝提權夥伴，請到電腦上按',
+    'elevate-unavailable': '提權夥伴沒有在執行，請到電腦上按',
+    'elevate-refused': '提權夥伴拒絕了這個請求（可能太多請求在等核准）',
     'uac': '電腦跳出系統管理員確認（UAC）擋著，要到電腦前按',
 }
 
