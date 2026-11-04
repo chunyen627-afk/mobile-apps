@@ -36,6 +36,8 @@
     "permission_button": "變更權限",
     "modes": ["要求核准", "代我核准"],
     "stop": "停止",
+    "submit": "傳送",
+    "question_card": "問題",
     "fast_on": "啟用快速模式",
     "fast_off": "啟用標準模式",
     "update_prefix": "更新",

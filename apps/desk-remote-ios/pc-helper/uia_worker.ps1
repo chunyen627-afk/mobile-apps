@@ -587,6 +587,96 @@ function Answer-Questions($w, $page, $s, $questions) {
   }
 }
 
+# Codex's question panel above the composer ("question_card" heading, a dismiss button, the title,
+# one RadioButton per option or a box for words, skip and send): the container around the title's
+# text that holds the send button. (The group's own name is empty when the card has no options.)
+function Find-CodexCard($scope, $s, $question) {
+  $prefix = ($question -replace '\s', '')
+  $prefix = $prefix.Substring(0, [Math]::Min(15, $prefix.Length))
+  $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+  $texts = $scope.FindAll($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Text)))
+  foreach ($t in $texts) {
+    if (-not ($t.Current.Name -replace '\s', '').StartsWith($prefix)) { continue }
+    $box = $t
+    for ($i = 0; $i -lt 8; $i++) {
+      $box = $walker.GetParent($box)
+      if (-not $box) { break }
+      if (Find-ByName $box $CT::Button $s.submit) { return $box }
+    }
+  }
+  return $null
+}
+
+function Codex-Option($card, $label) {
+  $radios = $card.FindAll($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::RadioButton)))
+  foreach ($r in $radios) {
+    $n = $r.Current.Name
+    if ($n -eq $label -or $n.StartsWith("$label ")) { return $r }
+  }
+  return $null
+}
+
+function Codex-Card-Gone($scope, $s, $question, $ms) {
+  for ($i = 0; $i -lt ($ms / 250); $i++) {
+    Start-Sleep -Milliseconds 250
+    if (-not (Find-CodexCard $scope $s $question)) { return $true }
+  }
+  return -not (Find-CodexCard $scope $s $question)
+}
+
+# Codex: picking an option sends the answer by itself (live 11/5); words go into the card's box and
+# then its send button. Questions come one card at a time.
+function Answer-CodexQuestions($w, $page, $s, $questions) {
+  $before = [DeskWin]::GetForegroundWindow()
+  $cursor = New-Object DeskWin+POINT
+  [DeskWin]::GetCursorPos([ref]$cursor) | Out-Null
+  $hows = @()
+  try {
+    Bring-Front $w
+    foreach ($q in @($questions)) {
+      $card = $null
+      for ($i = 0; $i -lt 12 -and -not $card; $i++) {
+        $card = Find-CodexCard $page $s $q.question
+        if (-not $card) { $card = Find-CodexCard $w $s $q.question }
+        if (-not $card) { Start-Sleep -Milliseconds 250 }
+      }
+      if (-not $card) { Fail 'question-changed' 'the question is not on screen' }
+      $labels = @(@($q.labels) | Where-Object { $_ })
+      if ($labels.Count -gt 1) { Fail 'not-supported' 'one option per question' }
+      if ($labels.Count -eq 1) {
+        $option = Codex-Option $card $labels[0]
+        if (-not $option) { Fail 'not-found' 'option not on screen' }
+        Scroll-To $option
+        $p = $null
+        if ($option.TryGetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern, [ref]$p)) { $p.Select(); $hows += 'select' }
+        elseif (Invoke-Element $option) { $hows += 'invoke' }
+        else { Click-Element $w $option 'the option'; $hows += 'click' }
+        if (-not (Codex-Card-Gone $page $s $q.question 2000)) {
+          # The pattern may be taken without the page reacting: one real click on it.
+          $card = Find-CodexCard $page $s $q.question
+          $option = if ($card) { Codex-Option $card $labels[0] } else { $null }
+          if ($option) { Scroll-To $option; Click-Element $w $option 'the option'; $hows += 'click' }
+          if (-not (Codex-Card-Gone $page $s $q.question 2000)) { Fail 'toggle-failed' 'the card stayed after the pick' }
+        }
+      } else {
+        $edit = Card-Edit $card
+        if (-not $edit) { Fail 'not-found' 'no text box on the card' }
+        Scroll-To $edit
+        Paste-Text $w $edit $q.other
+        $send = Find-ByName $card $CT::Button $s.submit
+        if (-not $send) { Fail 'not-found' "no '$($s.submit)' button on the card" }
+        if (-not (Invoke-Element $send)) { Click-Element $w $send 'the send button' }
+        $hows += 'words:send'
+        if (-not (Codex-Card-Gone $page $s $q.question 2500)) { Fail 'toggle-failed' 'the card stayed after sending' }
+      }
+    }
+    return ($hows -join ',')
+  } finally {
+    [DeskWin]::SetCursorPos($cursor.X, $cursor.Y) | Out-Null
+    if ($before -ne [IntPtr]::Zero) { [DeskWin]::SetForegroundWindow($before) | Out-Null }
+  }
+}
+
 # Pastes into a text box without pressing Enter (the "other" answer), keeping the clipboard.
 function Paste-Text($w, $edit, $text) {
   $saved = Save-Clipboard
@@ -1390,6 +1480,7 @@ function Run-Command($c) {
     'choose' {
       $w = Need-Window $c.app
       $page = Need-Doc $w $c.doc
+      if ($c.app -eq 'codex') { return @{ ok = $true; how = (Answer-CodexQuestions $w $page $s @($c.questions)) } }
       return @{ ok = $true; how = (Answer-Questions $w $page $s @($c.questions)) }
     }
     default { Fail 'bad-command' "unknown command" }

@@ -38,7 +38,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.32'
+VERSION = '0.5.33'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -348,6 +348,8 @@ def summarize_input(name, data):
 
 
 QUESTION_TOOL = 'AskUserQuestion'
+CODEX_QUESTION_TOOL = 'request_user_input_async'
+CODEX_REPLY_TAG = 'send_user_message_question_reply'  # wraps the answer Codex's card sends as a user message
 INTERRUPTED = '[Request interrupted by user'
 COMPACTED = '對話已壓縮'  # the app squeezed the earlier part into a summary; the messages stay
 
@@ -370,6 +372,45 @@ def question_from(tool_id, data):
         questions.append({'question': str(item.get('question') or ''), 'header': item.get('header') or None,
                           'multiSelect': bool(item.get('multiSelect')), 'options': options})
     return {'questionId': tool_id, 'questions': questions} if questions else None
+
+
+def codex_question_from(call_id, data):
+    """Codex's `request_user_input_async` ({"questions": [{"title", "options": [str]?}]}) in the
+    phone's shape: one choice per question, a question without options takes words only."""
+    if not isinstance(data, dict) or not isinstance(data.get('questions'), list) or not call_id:
+        return None
+    questions = []
+    for item in data['questions']:
+        if not isinstance(item, dict) or not str(item.get('title') or '').strip():
+            continue
+        options = [{'label': str(o), 'description': None} for o in (item.get('options') or []) if str(o or '').strip()] \
+            if isinstance(item.get('options'), list) else []
+        questions.append({'question': str(item['title']), 'header': None, 'multiSelect': False, 'options': options})
+    return {'questionId': str(call_id), 'questions': questions} if questions else None
+
+
+def codex_reply(text):
+    """The answers in a `<send_user_message_question_reply>` message: [(call id, answer)], or None
+    when `text` is not one. The card writes `questionItemId` as '["request_user_input_async","call_x",0]'."""
+    if not isinstance(text, str) or f'<{CODEX_REPLY_TAG}>' not in text:
+        return None
+    body = text.split(f'<{CODEX_REPLY_TAG}>', 1)[1].split(f'</{CODEX_REPLY_TAG}>', 1)[0]
+    try:
+        items = json.loads(body)
+    except ValueError:
+        return []
+    out = []
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            parts = json.loads(item.get('questionItemId') or '')
+        except ValueError:
+            parts = []
+        call_id = next((p for p in parts if isinstance(p, str) and p.startswith('call_')), None) \
+            if isinstance(parts, list) else None
+        out.append((call_id, str(item.get('answer') or '')))
+    return out
 
 
 def suggestions_from(data):
@@ -555,6 +596,7 @@ class CodexParser:
         self.modern = False
         self.calls = {}
         self.status = 'idle'
+        self.question = None  # the card above the composer: one option per question, or words
         self.model = self.effort = self.mode = None
         self.turn_ts = None  # when the last turn_context (model, effort, mode) was written
         self.context = self.window = None
@@ -593,7 +635,11 @@ class CodexParser:
                 return self.item(payload.get('item') or {}, ts)
             if not self.modern and ptype in ('user_message', 'agent_message'):
                 text = payload.get('message') or ''
+                if ptype == 'user_message' and codex_reply(text) is not None:
+                    return self.answered(codex_reply(text), ts)
                 if text.strip() and not is_noise(text):
+                    if ptype == 'user_message':
+                        self.question = None  # the person moved on; the card is no longer the next thing
                     return [{'kind': 'user' if ptype == 'user_message' else 'assistant', 'text': text, 'ts': ts}]
             return []
         if kind == 'compacted':
@@ -607,9 +653,14 @@ class CodexParser:
                     data = json.loads(raw) if isinstance(raw, str) else raw
                 except ValueError:
                     data = raw
+                if name == CODEX_QUESTION_TOOL:
+                    self.question = codex_question_from(payload.get('call_id'), data) or self.question
+                    return []  # a card on the phone, not a tool row
                 text = summarize_input(name, data) if isinstance(data, dict) else str(raw or '')
                 return [{'kind': 'tool_call', 'tool': name, 'text': text, 'ts': ts}]
             if ptype in ('function_call_output', 'custom_tool_call_output'):
+                if self.calls.get(payload.get('call_id')) == CODEX_QUESTION_TOOL:
+                    return []  # '{"accepted":true}': the card is up, nothing was answered yet
                 output = payload.get('output')
                 if isinstance(output, dict):
                     output = output.get('content', output)
@@ -617,15 +668,30 @@ class CodexParser:
                          'text': flatten(output), 'ts': ts}]
         return []
 
+    def answered(self, answers, ts):
+        """The card's reply (from the PC or the phone): the question is done, shown as a status."""
+        if self.question and any(call_id == self.question['questionId'] for call_id, _ in answers):
+            self.question = None
+        chosen = '、'.join(answer for _, answer in answers if answer.strip())
+        return [{'kind': 'status', 'text': f'已回答選項題：{chosen}' if chosen else '已回答選項題', 'ts': ts}]
+
     def item(self, item, ts):
         itype = item.get('type')
         if itype == 'UserMessage':
             text = flatten(item.get('content'))
+            if codex_reply(text) is not None:
+                return self.answered(codex_reply(text), ts)
             images = images_of(item.get('content'))
             if not (text.strip() and not is_noise(text)):
                 return []
+            self.question = None  # the person moved on; the card is no longer the next thing
             return [{'kind': 'user', 'text': text, 'ts': ts, 'images': images}]
         if itype == 'AgentMessage':
+            if isinstance(item.get('questions'), list):
+                # `request_user_input_async`: the message's text repeats the card's words (title and
+                # options), so the card alone is shown (live 11/5).
+                self.question = codex_question_from(item.get('id'), {'questions': item['questions']}) or self.question
+                return []
             text = flatten(item.get('content'))  # Automation heartbeats are echoed back; hide those too.
             return [{'kind': 'assistant', 'text': text, 'ts': ts}] if text.strip() and not is_noise(text) else []
         if itype == 'CommandExecution':
@@ -2177,9 +2243,8 @@ class WindowsDriver:
         return self.ask(app, cmd='answer', doc=doc, decision=decision, expect=expect).get('how')
 
     def answer_question(self, app, doc, question, answers):
-        """Turns on each chosen option (and 其他 with its text) in the question's card, then 提交."""
-        if app != 'claude':
-            raise ActionError('not-supported', 'option questions are only read from Claude')
+        """Claude: turns on each chosen option (and 其他 with its text) in the question's card, then
+        提交. Codex: picking the option sends it by itself; words go in the card's box, then 傳送."""
         items = [{'question': q['question'], 'labels': a.get('labels') or [], 'other': a.get('other') or ''}
                  for q, a in zip(question['questions'], answers)]
         return self.ask(app, cmd='choose', doc=doc, questions=items).get('how')
@@ -4353,10 +4418,18 @@ class FakeDriver:
         session_id = self.session_for_doc(app, doc)
         path = self.hub.sources[app].transcript_path(session_id)
         chosen = ['、'.join(a.get('labels') or []) or (a.get('other') or '') for a in answers]
-        pairs = ', '.join(f'"{q["question"]}"="{c}"' for q, c in zip(question['questions'], chosen))
-        line = {'type': 'user', 'timestamp': datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%S.000Z'),
-                'message': {'role': 'user', 'content': [{'type': 'tool_result', 'tool_use_id': question['questionId'],
-                                                         'content': f'User has answered your questions: {pairs}.'}]}}
+        ts = datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%S.000Z')
+        if app == 'codex':
+            reply = [{'questionItemId': json.dumps([CODEX_QUESTION_TOOL, question['questionId'], n]),
+                      'question': q['question'], 'answer': c} for n, (q, c) in enumerate(zip(question['questions'], chosen))]
+            text = f'<{CODEX_REPLY_TAG}>\n{json.dumps(reply, ensure_ascii=False)}\n</{CODEX_REPLY_TAG}>\n'
+            line = {'timestamp': ts, 'type': 'event_msg', 'payload': {'type': 'item_completed', 'item': {
+                'type': 'UserMessage', 'content': [{'type': 'text', 'text': text}]}}}
+        else:
+            pairs = ', '.join(f'"{q["question"]}"="{c}"' for q, c in zip(question['questions'], chosen))
+            line = {'type': 'user', 'timestamp': ts,
+                    'message': {'role': 'user', 'content': [{'type': 'tool_result', 'tool_use_id': question['questionId'],
+                                                             'content': f'User has answered your questions: {pairs}.'}]}}
         with self.lock:
             with Path(path).open('a', encoding='utf-8') as handle:
                 handle.write(json.dumps(line, ensure_ascii=False) + '\n')

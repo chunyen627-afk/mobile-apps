@@ -189,6 +189,130 @@ class CodexTests(FakeEnvironment):
             ('tool_result', '2026年10月26日 13:00:04'), ('assistant', '建議先做模擬器版本，再整合進工具箱。')])
 
 
+def codex_question_lines(call_id='call_q1', title='哪一顆行星最靠近太陽？', options=('A. 金星', 'B. 水星', 'C. 火星')):
+    """What Codex writes for `request_user_input_async` (live 11/5): the card as an AgentMessage
+    carrying `questions`, its words repeated as text, then a plain message and the turn's end."""
+    question = {'title': title}
+    if options:
+        question['options'] = list(options)
+    text = title + ''.join(f'\n- {o}' for o in options or [])
+    return [{'timestamp': '2026-11-04T16:21:18Z', 'type': 'event_msg', 'payload': {'type': 'item_completed', 'item': {
+                'type': 'AgentMessage', 'id': call_id, 'content': [{'type': 'Text', 'text': text}],
+                'phase': 'final_answer', 'delivery': 'async', 'questions': [question]}}},
+            {'timestamp': '2026-11-04T16:21:21Z', 'type': 'event_msg', 'payload': {'type': 'item_completed', 'item': {
+                'type': 'AgentMessage', 'id': 'msg_after', 'content': [{'type': 'Text', 'text': '請點選你的答案。'}]}}},
+            {'timestamp': '2026-11-04T16:21:21Z', 'type': 'event_msg', 'payload': {'type': 'task_complete'}}]
+
+
+def codex_reply_line(call_id, title, answer):
+    item_id = json.dumps(['request_user_input_async', call_id, 0])
+    text = ('<send_user_message_question_reply>\n' + json.dumps([{'questionItemId': item_id, 'question': title, 'answer': answer}],
+            ensure_ascii=False) + '\n</send_user_message_question_reply>\n')
+    return {'timestamp': '2026-11-04T16:22:53Z', 'type': 'event_msg', 'payload': {'type': 'item_completed', 'item': {
+        'type': 'UserMessage', 'content': [{'type': 'text', 'text': text}]}}}
+
+
+def append_lines(path, lines):
+    with Path(path).open('a', encoding='utf-8') as handle:
+        for line in lines:
+            handle.write(json.dumps(line, ensure_ascii=False) + '\n')
+
+
+class CodexQuestionTests(FakeEnvironment):
+    """Codex's option card (`request_user_input_async`): read from the rollout, answered on the PC
+    or from the phone, both seen through the reply the card writes (the user asked on 11/5 that
+    either place works, since they often sit at the PC)."""
+
+    def test_the_card_is_read_and_its_reply_ends_it(self):
+        transcript = h.Transcript(self.sources['codex'].transcript_path(X), h.CodexParser)
+        drain(transcript)
+        append_lines(transcript.path, codex_question_lines())
+        transcript.refresh()
+        page = transcript.page(0, '')
+        self.assertEqual(page['question'], {'questionId': 'call_q1', 'questions': [
+            {'question': '哪一顆行星最靠近太陽？', 'header': None, 'multiSelect': False,
+             'options': [{'label': 'A. 金星', 'description': None}, {'label': 'B. 水星', 'description': None},
+                         {'label': 'C. 火星', 'description': None}]}]})
+        texts = [e['text'] for e in page['events']]
+        self.assertNotIn('哪一顆行星最靠近太陽？\n- A. 金星\n- B. 水星\n- C. 火星', texts, 'the card is not a message too')
+        self.assertIn('請點選你的答案。', texts)
+        # Answered on the PC (or by the worker): the card's reply is a user message with a tag.
+        append_lines(transcript.path, [codex_reply_line('call_q1', '哪一顆行星最靠近太陽？', 'B. 水星')])
+        transcript.refresh()
+        page = transcript.page(0, '')
+        self.assertIsNone(page['question'])
+        self.assertEqual((page['events'][-1]['kind'], page['events'][-1]['text']), ('status', '已回答選項題：B. 水星'))
+        self.assertFalse([e for e in page['events'] if 'send_user_message_question_reply' in e['text']])
+
+    def test_a_question_without_options_takes_words_and_a_plain_message_ends_it(self):
+        transcript = h.Transcript(self.sources['codex'].transcript_path(X), h.CodexParser)
+        drain(transcript)
+        append_lines(transcript.path, codex_question_lines('call_q2', '兩片板子之間的間距是多少 mm？', ()))
+        transcript.refresh()
+        question = transcript.page(0, '')['question']
+        self.assertEqual((question['questionId'], question['questions'][0]['options']), ('call_q2', []))
+        # The person typed something else instead: the card is no longer what comes next.
+        append_lines(transcript.path, [{'timestamp': '2026-11-04T16:30:00Z', 'type': 'event_msg', 'payload': {
+            'type': 'item_completed', 'item': {'type': 'UserMessage', 'content': [{'type': 'text', 'text': '殼上下鎖起來就好'}]}}}])
+        transcript.refresh()
+        page = transcript.page(0, '')
+        self.assertIsNone(page['question'])
+        self.assertEqual(page['events'][-1]['text'], '殼上下鎖起來就好')
+
+    def test_an_older_rollout_reads_the_question_from_the_tool_call(self):
+        parser = h.CodexParser()
+        call = {'type': 'response_item', 'payload': {'type': 'function_call', 'name': 'request_user_input_async',
+                'arguments': json.dumps({'questions': [{'title': '要用哪種線材？', 'options': ['PLA', 'PETG']}]}),
+                'call_id': 'call_old'}}
+        self.assertEqual(parser.feed(call), [], 'a card, not a tool row')
+        self.assertEqual([o['label'] for o in parser.question['questions'][0]['options']], ['PLA', 'PETG'])
+        out = parser.feed({'type': 'response_item', 'payload': {'type': 'function_call_output', 'call_id': 'call_old',
+                                                                 'output': '{"accepted":true}'}})
+        self.assertEqual(out, [], 'the card being up is not a result')
+        reply = codex_reply_line('call_old', '要用哪種線材？', 'PETG')['payload']['item']['content'][0]['text']
+        out = parser.feed({'type': 'event_msg', 'payload': {'type': 'user_message', 'message': reply}})
+        self.assertEqual((out[0]['kind'], out[0]['text'], parser.question), ('status', '已回答選項題：PETG', None))
+        self.assertIsNone(h.codex_reply('普通訊息'))
+        self.assertEqual(h.codex_reply('<send_user_message_question_reply>\nnot json\n</send_user_message_question_reply>'), [])
+
+    def test_codexs_question_is_answered_from_the_phone(self):
+        hub, driver, _, runner = drive(self.fake)
+        path = hub.sources['codex'].transcript_path(X)
+        append_lines(path, codex_question_lines())
+        hub.transcript('codex', X).refresh()
+        self.assertEqual(hub.transcript('codex', X).page(0, '')['question']['questionId'], 'call_q1')
+        def submit(answers):
+            return runner.submit('answer', 'codex', X, {'questionId': 'call_q1', 'answers': answers})
+        self.assertEqual(submit([{'labels': ['A. 金星', 'B. 水星']}])[0], 400, 'one pick per Codex question')
+        self.assertEqual(submit([{'labels': ['D. 木星']}])[0], 400)
+        code, body = submit([{'labels': ['B. 水星']}])
+        self.assertEqual(code, 202)
+        run_all(runner)
+        status = runner.status(body['id'])
+        self.assertEqual((status['state'], status['message']), ('done', '已回答'), status)
+        self.assertIn(('answer_question', 'codex', 'call_q1'), driver.calls)
+        page = hub.transcript('codex', X).page(0, '')
+        self.assertIsNone(page['question'])
+        self.assertIn('已回答選項題：B. 水星', [e['text'] for e in page['events']])
+        self.assertEqual(submit([{'labels': ['B. 水星']}])[1]['error'], 'question-changed')
+        # Words instead of an option go through the same path.
+        append_lines(path, codex_question_lines('call_q3', '間距多少？', ()))
+        hub.transcript('codex', X).refresh()
+        code, body = runner.submit('answer', 'codex', X, {'questionId': 'call_q3', 'answers': [{'labels': [], 'other': '12 mm'}]})
+        self.assertEqual(code, 202)
+        run_all(runner)
+        self.assertEqual(runner.status(body['id'])['message'], '已回答')
+        self.assertIn('已回答選項題：12 mm', [e['text'] for e in hub.transcript('codex', X).page(0, '')['events']])
+
+    def test_a_new_codex_question_is_notified_once(self):
+        sent = []
+        hub, _, watcher, _ = drive(self.fake, notify=lambda *a: sent.append(a))
+        append_lines(hub.sources['codex'].transcript_path(X), codex_question_lines())
+        watcher.check_turns()
+        watcher.check_turns()
+        self.assertEqual([s[0] for s in sent if s[0].startswith('❓')], ['❓ Codex 在等你選擇'])
+
+
 class TranscriptTests(unittest.TestCase):
     def setUp(self):
         folder = Path(tempfile.mkdtemp())
