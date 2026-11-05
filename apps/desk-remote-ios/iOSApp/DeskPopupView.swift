@@ -52,24 +52,44 @@ struct DeskPopupList: View {
     }
 }
 
+/// Folded by default above a chat (the user 11/5: the card took the screen and hid the box to
+/// type in): the window's name and its buttons stay, its words open on the chevron.
 struct DeskPopupCard: View {
     let popup: HelperState.Popup
     let busy: Bool
     var compact = false
     let press: (String) -> Void
     @State private var asking: String?
+    @State private var opened: Bool?
+
+    private var open: Bool { opened ?? !compact }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Label("電腦跳出視窗：\(popup.name)", systemImage: "exclamationmark.triangle.fill")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.orange)
-            if !popup.text.isEmpty {
+            HStack(alignment: .firstTextBaseline) {
+                Label("電腦跳出視窗：\(popup.name)", systemImage: "exclamationmark.triangle.fill")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.orange)
+                    .lineLimit(open ? 3 : 1)
+                    .multilineTextAlignment(.leading)
+                Spacer(minLength: 8)
+                Button { opened = !open } label: {
+                    Image(systemName: open ? "chevron.up" : "chevron.down")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(4)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("popup-toggle")
+            }
+            .contentShape(Rectangle())
+            .onTapGesture { opened = !open }
+            if open && !popup.text.isEmpty {
                 Text(popup.text)
                     .font(.footnote)
-                    .lineLimit(compact ? 3 : 8)
+                    .lineLimit(8)
             }
-            if !compact {
+            if open && !compact {
                 Text("這個視窗開著時，電腦上的桌面版收不到訊息。")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
@@ -92,17 +112,19 @@ struct DeskPopupCard: View {
         }
     }
 
+    // One row that scrolls sideways: a wizard page's four buttons stacked up took half the screen.
     @ViewBuilder
     private var buttons: some View {
-        let layout = popup.buttons.count > 3 ? AnyLayout(VStackLayout(alignment: .leading)) : AnyLayout(HStackLayout())
-        layout {
-            ForEach(popup.buttons, id: \.self) { button in
-                Button(button) { asking = button }
-                    .buttonStyle(.bordered)
-                    .disabled(busy)
-                    .accessibilityIdentifier("popup-button-\(button)")
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(popup.buttons, id: \.self) { button in
+                    Button(button) { asking = button }
+                        .buttonStyle(.bordered)
+                        .disabled(busy)
+                        .accessibilityIdentifier("popup-button-\(button)")
+                }
+                if busy { ProgressView() }
             }
-            if busy { ProgressView() }
         }
     }
 }
