@@ -899,7 +899,7 @@ final class DeskRemoteUITests: XCTestCase {
     func test40ToolCallsInARowFoldIntoOneLine() throws {
         try launchWithHelper()
         openChat("claude", claudeA)
-        XCTAssertTrue(text("整理好了，安裝段落改成三步").waitForExistence(timeout: 10), "chat did not load")
+        XCTAssertTrue(text("整理好了，安裝段落改成三步").waitForExistence(timeout: 30), "chat did not load (the huge messages of test39 are in this chat)")
         let input = element("chat-input")
         input.tap()
         input.typeText("多工具 列出檔案")
@@ -919,7 +919,7 @@ final class DeskRemoteUITests: XCTestCase {
     func test41TaskListShowsUnderTheChat() throws {
         try launchWithHelper()
         openChat("claude", claudeA)
-        XCTAssertTrue(text("整理好了，安裝段落改成三步").waitForExistence(timeout: 10), "chat did not load")
+        XCTAssertTrue(text("整理好了，安裝段落改成三步").waitForExistence(timeout: 30), "chat did not load (the huge messages of test39 are in this chat)")
         let input = element("chat-input")
         input.tap()
         input.typeText("計畫 做三件事")
