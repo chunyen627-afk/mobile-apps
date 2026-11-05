@@ -1194,10 +1194,14 @@ function Find-Popups {
       if ("$($cur.Name)".StartsWith($CompanionTitle)) { continue }  # the companion asks on the PC itself
       if ($hasPattern -and $pattern.Current.CanMinimize -and -not $dialog) { continue }
       $hwnd = [IntPtr]$cur.NativeWindowHandle
+      $elevated = $false
+      try { $elevated = [DeskWin]::IsElevated([uint32]$cur.ProcessId) } catch { }
       $buttons = @(Popup-Buttons $w | ForEach-Object { $_.Current.Name.Trim() } | Select-Object -Unique)
       $texts = @($w.FindAll($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Text))) |
         ForEach-Object { "$($_.Current.Name)".Trim() } | Where-Object { $_ } | Select-Object -Unique)
-      if (-not $buttons -and $dialog) {
+      # An administrator's window shows this user only panes (UIPI): its buttons and words are read
+      # as Win32 child windows, like a standard dialog's (an MSI wizard page, 11/5).
+      if (-not $buttons -and ($dialog -or $elevated)) {
         $buttons = @(Dialog-Buttons $hwnd | ForEach-Object { [DeskWin]::Text($_) } | Select-Object -Unique)
         $texts = @([DeskWin]::Children($hwnd, 'Static') | Where-Object { [DeskWin]::IsWindowEnabled($_) } |
           ForEach-Object { [DeskWin]::Text($_) } | Where-Object { $_ })
@@ -1205,8 +1209,6 @@ function Find-Popups {
       if (-not $buttons) { continue }
       $text = $texts -join "`n"
       if ($text.Length -gt 600) { $text = $text.Substring(0, 600) }
-      $elevated = $false
-      try { $elevated = [DeskWin]::IsElevated([uint32]$cur.ProcessId) } catch { }
       $found += @{ hwnd = [int64]$cur.NativeWindowHandle; title = "$($cur.Name)"; process = $proc; text = $text; buttons = $buttons; elevated = $elevated }
     } catch { continue }  # it closed while being read
   }
