@@ -186,12 +186,18 @@ struct DeskChatView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
                 // The cards above the box to type in never take more than a part of the screen: past
-                // that they scroll, so the box stays in reach (the user 11/5).
-                ViewThatFits(in: .vertical) {
+                // that they scroll, so the box stays in reach (the user 11/5). Their own height is
+                // measured: a frame(maxHeight:) alone grew to the full 240 even when empty and squeezed
+                // the chat to a third of the screen (CI 11/5, test36/40/41).
+                ScrollView {
                     bottomCards
-                    ScrollView { bottomCards }
+                        .background(GeometryReader { geometry in
+                            Color.clear.preference(key: DeskCardsHeightKey.self, value: geometry.size.height)
+                        })
                 }
-                .frame(maxHeight: 240)
+                .onPreferenceChange(DeskCardsHeightKey.self) { cardsHeight = $0 }
+                .frame(height: min(cardsHeight, 240))
+                .scrollDisabled(cardsHeight <= 240)
                 DeskInputBar(text: $draft, photos: $photos, limit: pcState?.photoLimit ?? 1,
                              focused: $inputFocused) { submitDraft() }
             }
@@ -211,6 +217,8 @@ struct DeskChatView: View {
         .onDisappear { DeskLogCache.shared.save(pc: pcID, app: app, session: session.id) }
         .onChange(of: scenePhase) { if scenePhase != .active { DeskLogCache.shared.save(pc: pcID, app: app, session: session.id) } }
     }
+
+    @State private var cardsHeight: CGFloat = 0
 
     @ViewBuilder
     private var bottomCards: some View {
@@ -1083,6 +1091,12 @@ struct DeskQuestionCard: View {
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("question-card")
     }
+}
+
+/// The natural height of the cards above the input bar (plan, next-step box).
+struct DeskCardsHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 
 /// The next-step box's reply buttons: tapping one sends its message like typing it.
