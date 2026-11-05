@@ -1192,10 +1192,13 @@ function Find-Popups {
       if ($PopupSkip -contains $proc) { continue }
       if ($proc -eq 'explorer' -and -not $dialog) { continue }
       if ("$($cur.Name)".StartsWith($CompanionTitle)) { continue }  # the companion asks on the PC itself
-      if ($hasPattern -and $pattern.Current.CanMinimize -and -not $dialog) { continue }
-      $hwnd = [IntPtr]$cur.NativeWindowHandle
       $elevated = $false
       try { $elevated = [DeskWin]::IsElevated([uint32]$cur.ProcessId) } catch { }
+      # An installer's wizard page can be minimized but not maximized (the MSI folder page, 11/5):
+      # an administrator's window like that is a question too, not a main window.
+      $wizard = $elevated -and $hasPattern -and -not $pattern.Current.CanMaximize
+      if ($hasPattern -and $pattern.Current.CanMinimize -and -not $dialog -and -not $wizard) { continue }
+      $hwnd = [IntPtr]$cur.NativeWindowHandle
       $buttons = @(Popup-Buttons $w | ForEach-Object { $_.Current.Name.Trim() } | Select-Object -Unique)
       $texts = @($w.FindAll($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Text))) |
         ForEach-Object { "$($_.Current.Name)".Trim() } | Where-Object { $_ } | Select-Object -Unique)
