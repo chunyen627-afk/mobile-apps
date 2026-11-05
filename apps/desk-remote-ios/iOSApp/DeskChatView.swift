@@ -185,13 +185,13 @@ struct DeskChatView: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
-                // The task list under the latest message, as the desktop keeps it (asked 11/1).
-                if let plan = log.plan, !plan.isEmpty {
-                    DeskPlanCard(items: plan)
+                // The cards above the box to type in never take more than a part of the screen: past
+                // that they scroll, so the box stays in reach (the user 11/5).
+                ViewThatFits(in: .vertical) {
+                    bottomCards
+                    ScrollView { bottomCards }
                 }
-                if let suggestions = log.suggestions, pending.isEmpty, log.question == nil, log.prompt == nil {
-                    DeskQuickReplies(suggestions: suggestions) { reply in submit(reply.message) }
-                }
+                .frame(maxHeight: 240)
                 DeskInputBar(text: $draft, photos: $photos, limit: pcState?.photoLimit ?? 1,
                              focused: $inputFocused) { submitDraft() }
             }
@@ -210,6 +210,19 @@ struct DeskChatView: View {
         .onAppear { store.opened.insert(session.id) }
         .onDisappear { DeskLogCache.shared.save(pc: pcID, app: app, session: session.id) }
         .onChange(of: scenePhase) { if scenePhase != .active { DeskLogCache.shared.save(pc: pcID, app: app, session: session.id) } }
+    }
+
+    @ViewBuilder
+    private var bottomCards: some View {
+        VStack(spacing: 0) {
+            // The task list under the latest message, as the desktop keeps it (asked 11/1).
+            if let plan = log.plan, !plan.isEmpty {
+                DeskPlanCard(items: plan)
+            }
+            if let suggestions = log.suggestions, pending.isEmpty, log.question == nil, log.prompt == nil {
+                DeskQuickReplies(suggestions: suggestions) { reply in submit(reply.message) }
+            }
+        }
     }
 
     @ViewBuilder
@@ -1076,16 +1089,32 @@ struct DeskQuestionCard: View {
 struct DeskQuickReplies: View {
     let suggestions: ReplySuggestions
     let send: (ReplySuggestions.Reply) -> Void
+    @State private var open = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            // The next-step box as the desktop draws it: recap, question, reply buttons.
+            // The next-step box as the desktop draws it: recap, question, reply buttons. The recap
+            // is one line until tapped (the user 11/5: it pushed the box to type in off the screen).
             if let recap = suggestions.recap {
-                Text(recap).font(.footnote).lineLimit(4)
-                    .accessibilityIdentifier("next-step-recap")
+                HStack(alignment: .firstTextBaseline) {
+                    Text(recap).font(.footnote).lineLimit(open ? 12 : 1)
+                        .multilineTextAlignment(.leading)
+                        .accessibilityIdentifier("next-step-recap")
+                    Spacer(minLength: 8)
+                    Button { open.toggle() } label: {
+                        Image(systemName: open ? "chevron.up" : "chevron.down")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .padding(4)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("next-step-toggle")
+                }
+                .contentShape(Rectangle())
+                .onTapGesture { open.toggle() }
             }
             if let ask = suggestions.ask {
-                Text(ask).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                Text(ask).font(.caption).foregroundStyle(.secondary).lineLimit(open ? 4 : 2)
             }
             if !suggestions.replies.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {

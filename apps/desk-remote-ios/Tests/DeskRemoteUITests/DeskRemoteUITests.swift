@@ -289,6 +289,9 @@ final class DeskRemoteUITests: XCTestCase {
         let reply = element("quick-reply-好，繼續")
         XCTAssertTrue(reply.waitForExistence(timeout: 10), "quick reply missing")
         XCTAssertFalse(element("quick-reply-commit").exists, "app actions are not quick replies")
+        // The recap is one line until its chevron is tapped (0.6.4).
+        XCTAssertTrue(element("next-step-recap").exists, "recap missing")
+        element("next-step-toggle").tap()
         snapshot("17a-quick-replies")
         reply.tap()
         XCTAssertTrue(text("（示範）收到：好，繼續寫下週計畫。").waitForExistence(timeout: 25), "quick reply was not sent")
@@ -585,6 +588,12 @@ final class DeskRemoteUITests: XCTestCase {
         XCTAssertTrue(element("popup-card").waitForExistence(timeout: 15), "the pop-up is not above the chat")
         let allow = element("popup-button-允許")
         XCTAssertTrue(allow.waitForExistence(timeout: 5), "the pop-up's button is missing")
+        // Above a chat the card is folded to its title and buttons (0.6.4); the chevron shows the words.
+        XCTAssertFalse(text("Windows 防火牆已封鎖").exists, "the folded card shows its words")
+        element("popup-toggle").tap()
+        XCTAssertTrue(text("Windows 防火牆已封鎖").waitForExistence(timeout: 5), "the words did not open")
+        snapshot("32c-popup-opened")
+        element("popup-toggle").tap()
         allow.tap()
         let confirm = app.buttons["按「允許」"]
         XCTAssertTrue(confirm.waitForExistence(timeout: 5), "pressing was not confirmed first")

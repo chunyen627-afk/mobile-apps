@@ -189,6 +189,130 @@ class CodexTests(FakeEnvironment):
             ('tool_result', '2026年10月26日 13:00:04'), ('assistant', '建議先做模擬器版本，再整合進工具箱。')])
 
 
+def codex_question_lines(call_id='call_q1', title='哪一顆行星最靠近太陽？', options=('A. 金星', 'B. 水星', 'C. 火星')):
+    """What Codex writes for `request_user_input_async` (live 11/5): the card as an AgentMessage
+    carrying `questions`, its words repeated as text, then a plain message and the turn's end."""
+    question = {'title': title}
+    if options:
+        question['options'] = list(options)
+    text = title + ''.join(f'\n- {o}' for o in options or [])
+    return [{'timestamp': '2026-11-04T16:21:18Z', 'type': 'event_msg', 'payload': {'type': 'item_completed', 'item': {
+                'type': 'AgentMessage', 'id': call_id, 'content': [{'type': 'Text', 'text': text}],
+                'phase': 'final_answer', 'delivery': 'async', 'questions': [question]}}},
+            {'timestamp': '2026-11-04T16:21:21Z', 'type': 'event_msg', 'payload': {'type': 'item_completed', 'item': {
+                'type': 'AgentMessage', 'id': 'msg_after', 'content': [{'type': 'Text', 'text': '請點選你的答案。'}]}}},
+            {'timestamp': '2026-11-04T16:21:21Z', 'type': 'event_msg', 'payload': {'type': 'task_complete'}}]
+
+
+def codex_reply_line(call_id, title, answer):
+    item_id = json.dumps(['request_user_input_async', call_id, 0])
+    text = ('<send_user_message_question_reply>\n' + json.dumps([{'questionItemId': item_id, 'question': title, 'answer': answer}],
+            ensure_ascii=False) + '\n</send_user_message_question_reply>\n')
+    return {'timestamp': '2026-11-04T16:22:53Z', 'type': 'event_msg', 'payload': {'type': 'item_completed', 'item': {
+        'type': 'UserMessage', 'content': [{'type': 'text', 'text': text}]}}}
+
+
+def append_lines(path, lines):
+    with Path(path).open('a', encoding='utf-8') as handle:
+        for line in lines:
+            handle.write(json.dumps(line, ensure_ascii=False) + '\n')
+
+
+class CodexQuestionTests(FakeEnvironment):
+    """Codex's option card (`request_user_input_async`): read from the rollout, answered on the PC
+    or from the phone, both seen through the reply the card writes (the user asked on 11/5 that
+    either place works, since they often sit at the PC)."""
+
+    def test_the_card_is_read_and_its_reply_ends_it(self):
+        transcript = h.Transcript(self.sources['codex'].transcript_path(X), h.CodexParser)
+        drain(transcript)
+        append_lines(transcript.path, codex_question_lines())
+        transcript.refresh()
+        page = transcript.page(0, '')
+        self.assertEqual(page['question'], {'questionId': 'call_q1', 'questions': [
+            {'question': '哪一顆行星最靠近太陽？', 'header': None, 'multiSelect': False,
+             'options': [{'label': 'A. 金星', 'description': None}, {'label': 'B. 水星', 'description': None},
+                         {'label': 'C. 火星', 'description': None}]}]})
+        texts = [e['text'] for e in page['events']]
+        self.assertNotIn('哪一顆行星最靠近太陽？\n- A. 金星\n- B. 水星\n- C. 火星', texts, 'the card is not a message too')
+        self.assertIn('請點選你的答案。', texts)
+        # Answered on the PC (or by the worker): the card's reply is a user message with a tag.
+        append_lines(transcript.path, [codex_reply_line('call_q1', '哪一顆行星最靠近太陽？', 'B. 水星')])
+        transcript.refresh()
+        page = transcript.page(0, '')
+        self.assertIsNone(page['question'])
+        self.assertEqual((page['events'][-1]['kind'], page['events'][-1]['text']), ('status', '已回答選項題：B. 水星'))
+        self.assertFalse([e for e in page['events'] if 'send_user_message_question_reply' in e['text']])
+
+    def test_a_question_without_options_takes_words_and_a_plain_message_ends_it(self):
+        transcript = h.Transcript(self.sources['codex'].transcript_path(X), h.CodexParser)
+        drain(transcript)
+        append_lines(transcript.path, codex_question_lines('call_q2', '兩片板子之間的間距是多少 mm？', ()))
+        transcript.refresh()
+        question = transcript.page(0, '')['question']
+        self.assertEqual((question['questionId'], question['questions'][0]['options']), ('call_q2', []))
+        # The person typed something else instead: the card is no longer what comes next.
+        append_lines(transcript.path, [{'timestamp': '2026-11-04T16:30:00Z', 'type': 'event_msg', 'payload': {
+            'type': 'item_completed', 'item': {'type': 'UserMessage', 'content': [{'type': 'text', 'text': '殼上下鎖起來就好'}]}}}])
+        transcript.refresh()
+        page = transcript.page(0, '')
+        self.assertIsNone(page['question'])
+        self.assertEqual(page['events'][-1]['text'], '殼上下鎖起來就好')
+
+    def test_an_older_rollout_reads_the_question_from_the_tool_call(self):
+        parser = h.CodexParser()
+        call = {'type': 'response_item', 'payload': {'type': 'function_call', 'name': 'request_user_input_async',
+                'arguments': json.dumps({'questions': [{'title': '要用哪種線材？', 'options': ['PLA', 'PETG']}]}),
+                'call_id': 'call_old'}}
+        self.assertEqual(parser.feed(call), [], 'a card, not a tool row')
+        self.assertEqual([o['label'] for o in parser.question['questions'][0]['options']], ['PLA', 'PETG'])
+        out = parser.feed({'type': 'response_item', 'payload': {'type': 'function_call_output', 'call_id': 'call_old',
+                                                                 'output': '{"accepted":true}'}})
+        self.assertEqual(out, [], 'the card being up is not a result')
+        reply = codex_reply_line('call_old', '要用哪種線材？', 'PETG')['payload']['item']['content'][0]['text']
+        out = parser.feed({'type': 'event_msg', 'payload': {'type': 'user_message', 'message': reply}})
+        self.assertEqual((out[0]['kind'], out[0]['text'], parser.question), ('status', '已回答選項題：PETG', None))
+        self.assertIsNone(h.codex_reply('普通訊息'))
+        self.assertEqual(h.codex_reply('<send_user_message_question_reply>\nnot json\n</send_user_message_question_reply>'), [])
+
+    def test_codexs_question_is_answered_from_the_phone(self):
+        hub, driver, _, runner = drive(self.fake)
+        path = hub.sources['codex'].transcript_path(X)
+        append_lines(path, codex_question_lines())
+        hub.transcript('codex', X).refresh()
+        self.assertEqual(hub.transcript('codex', X).page(0, '')['question']['questionId'], 'call_q1')
+        def submit(answers):
+            return runner.submit('answer', 'codex', X, {'questionId': 'call_q1', 'answers': answers})
+        self.assertEqual(submit([{'labels': ['A. 金星', 'B. 水星']}])[0], 400, 'one pick per Codex question')
+        self.assertEqual(submit([{'labels': ['D. 木星']}])[0], 400)
+        code, body = submit([{'labels': ['B. 水星']}])
+        self.assertEqual(code, 202)
+        run_all(runner)
+        status = runner.status(body['id'])
+        self.assertEqual((status['state'], status['message']), ('done', '已回答'), status)
+        self.assertIn(('answer_question', 'codex', 'call_q1'), driver.calls)
+        page = hub.transcript('codex', X).page(0, '')
+        self.assertIsNone(page['question'])
+        self.assertIn('已回答選項題：B. 水星', [e['text'] for e in page['events']])
+        self.assertEqual(submit([{'labels': ['B. 水星']}])[1]['error'], 'question-changed')
+        # Words instead of an option go through the same path.
+        append_lines(path, codex_question_lines('call_q3', '間距多少？', ()))
+        hub.transcript('codex', X).refresh()
+        code, body = runner.submit('answer', 'codex', X, {'questionId': 'call_q3', 'answers': [{'labels': [], 'other': '12 mm'}]})
+        self.assertEqual(code, 202)
+        run_all(runner)
+        self.assertEqual(runner.status(body['id'])['message'], '已回答')
+        self.assertIn('已回答選項題：12 mm', [e['text'] for e in hub.transcript('codex', X).page(0, '')['events']])
+
+    def test_a_new_codex_question_is_notified_once(self):
+        sent = []
+        hub, _, watcher, _ = drive(self.fake, notify=lambda *a: sent.append(a))
+        append_lines(hub.sources['codex'].transcript_path(X), codex_question_lines())
+        watcher.check_turns()
+        watcher.check_turns()
+        self.assertEqual([s[0] for s in sent if s[0].startswith('❓')], ['❓ Codex 在等你選擇'])
+
+
 class TranscriptTests(unittest.TestCase):
     def setUp(self):
         folder = Path(tempfile.mkdtemp())
@@ -972,6 +1096,32 @@ for line in sys.stdin:
         # A card older than the file, or none, leaves the earlier rules.
         self.assertEqual(h.merge_claude_usage(sample, button, t, t, rows, t - 2 * 86400)['windows'][-1]['percent'], 63)
 
+    def test_a_per_model_week_on_the_button_does_not_pass_for_the_all_models_week(self):
+        # Live 11/2 (Claude 4.29, a Team plan with a Fable week): the button read "每週 · Fable：23%"
+        # after the card, and the phone showed 每週 23% in place of the card's 21%.
+        t = 1793600000
+        rows = [{'label': '5 小時限制', 'percent': 5, 'reset': '於 下午10:30 重設'},
+                {'label': '每週 · 所有模型', 'percent': 21, 'reset': '週日上午11:00 重設'},
+                {'label': '每週 · Fable', 'percent': 22, 'reset': '週日上午11:00 重設'}]
+        button = h.ui_usage('使用量：每週 · Fable：23% 週日上午11:00 重設', '使用量：')
+        self.assertEqual(button, {'label': '每週 · Fable', 'percent': 23, 'resetsText': '週日上午11:00 重設'})
+        merged = h.merge_claude_usage(None, button, t + 30, t + 60, rows, t)
+        self.assertEqual([(w['label'], w['percent']) for w in merged['windows']],
+                         [('5 小時', 5), ('每週', 21), ('每週 · Fable', 23)])  # the card's order, Fable's row renewed
+        # Read before the card, the button changes nothing.
+        older = h.merge_claude_usage(None, button, t - 30, t + 60, rows, t)
+        self.assertEqual([(w['label'], w['percent']) for w in older['windows']], [('5 小時', 5), ('每週', 21), ('每週 · Fable', 22)])
+        # Without a card, the file's all-models week stays and the button's row is added after it.
+        sample = {'windows': [{'label': '每週', 'percent': 40, 'resetsAt': None, 'resetsText': None}], 'sampledAt': h.iso(t)}
+        merged = h.merge_claude_usage(sample, button, t + 30, t + 60)
+        self.assertEqual([(w['label'], w['percent'], w['resetsText']) for w in merged['windows']],
+                         [('每週', 40, None), ('每週 · Fable', 23, '週日上午11:00 重設')])
+        self.assertEqual(merged['sampledAt'], h.iso(t))
+        # An all-models button still replaces the file's week, as before.
+        all_models = h.ui_usage('使用量：每週 · 所有模型：41% 週日上午11:00 重設', '使用量：')
+        merged = h.merge_claude_usage(sample, all_models, t + 30, t + 60)
+        self.assertEqual([(w['label'], w['percent']) for w in merged['windows']], [('每週', 41)])
+
     def test_claude_4_29_card_rows_keep_their_wording_and_expire(self):
         read = h.datetime(2026, 10, 28, 23, 34).timestamp()  # a Wednesday, local time
         self.assertEqual(h.datetime(2026, 10, 28).weekday(), 2)
@@ -1397,6 +1547,47 @@ class VersionTests(FakeEnvironment):
         self.assertEqual(code, 202, body)
         run_all(runner)
         return runner.status(body['id'])
+
+    def test_an_administrators_window_is_pressed_by_the_elevated_companion(self):
+        # Live 11/5: the FlashPrint installer (past UAC) ignored the phone's 下一步; Windows lets no
+        # ordinary program press an administrator's window (UIPI). The companion presses it once
+        # the person allows, on the PC's own window or on the phone.
+        admin = {'hwnd': 4747, 'title': 'FlashPrint 5 安裝', 'process': 'FlashPrint 5_5.8.7_x64',
+                 'text': 'Select the setup language:', 'buttons': ['下一步 (N) >', '取消'], 'elevated': True}
+        hub, driver, watcher, runner = drive(self.fake)
+        hub.elevate = self.fake.elevate_relay()
+        before = len(self.fake.elevator.requests)
+        driver.fake_popups = [dict(admin)]
+        listed = watcher.check_popups()
+        self.assertTrue(listed[0]['elevated'])
+        self.assertTrue(watcher.popup_list()[0]['text'].endswith(h.ELEVATED_HINT), 'the phone is told')
+        status = self.finish(runner, runner.submit('popup', None, listed[0]['id'], {'button': '下一步 (N) >'}))
+        self.assertEqual((status['state'], status['verified']), ('done', False), status)
+        self.assertIn('提權夥伴代按「下一步 (N) >」', status['message'])
+        self.assertFalse([c for c in driver.calls if c[0] == 'press_popup'], 'not pressed by this user')
+        asked = [r for r in self.fake.elevator.requests.values() if r['name'] == '按「下一步 (N) >」：FlashPrint 5 安裝']
+        self.assertEqual((len(self.fake.elevator.requests) - before, len(asked)), (1, 1))
+        self.assertEqual(asked[0]['kind'], 'script')
+        self.assertIn("[IntPtr][int64]4747", asked[0]['content'])
+        self.assertIn("'下一步 (N) >'", asked[0]['content'])
+        self.assertIn('EnumChildWindows', asked[0]['content'])
+        self.assertIn('InvokePattern', asked[0]['content'], 'UI Automation as the fallback')
+        # Without the companion there is nothing to hand it to: the person presses on the PC.
+        hub.elevate = None
+        driver.fake_popups = [dict(admin, hwnd=4748)]
+        listed = watcher.check_popups()
+        status = self.finish(runner, runner.submit('popup', None, listed[0]['id'], {'button': '取消'}))
+        self.assertEqual((status['state'], status['error']), ('failed', 'elevated-window'), status)
+        self.assertIn('沒裝提權夥伴', status['message'])
+        # A question inside an app's page is never that, whatever the worker said.
+        driver.fake_popups = [dict(h.FAKE_QUIT_GUARD, elevated=True)]
+        self.assertFalse(watcher.check_popups()[0]['elevated'])
+
+    def test_the_press_script_quotes_the_windows_words(self):
+        script = h.elevated_press_script(99, "It's here", "Don't")
+        self.assertIn("'It''s here'", script)
+        self.assertIn("'Don''t'", script)
+        self.assertIn('[IntPtr][int64]99', script)
 
     def test_codexs_own_update_button_is_pressed_when_idle(self):
         _, driver, watcher, _, presence = self.version_setup(idle=30, codex=('26.1021.3705.0', '26.1021.3705.0'))

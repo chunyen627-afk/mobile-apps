@@ -80,6 +80,35 @@ public static class DeskWin {
   public static void Press(IntPtr button) {
     SendMessage(GetParent(button), 0x0111, (IntPtr)(GetDlgCtrlID(button) & 0xFFFF), button);
   }
+  [DllImport("kernel32.dll")] public static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
+  [DllImport("kernel32.dll")] public static extern bool CloseHandle(IntPtr h);
+  [DllImport("advapi32.dll", SetLastError = true)] public static extern bool OpenProcessToken(IntPtr h, uint access, out IntPtr token);
+  [DllImport("advapi32.dll", SetLastError = true)] public static extern bool GetTokenInformation(IntPtr token, int cls, IntPtr info, uint len, out uint ret);
+  [DllImport("advapi32.dll")] public static extern IntPtr GetSidSubAuthorityCount(IntPtr sid);
+  [DllImport("advapi32.dll")] public static extern IntPtr GetSidSubAuthority(IntPtr sid, uint index);
+  // The process's integrity level (0x3000 = high, an administrator); -1 when the process cannot be
+  // opened at all, -2 when its token refuses this user (an administrator's or the system's).
+  public static int Integrity(uint pid) {
+    IntPtr h = OpenProcess(0x1000, false, pid);
+    if (h == IntPtr.Zero) return -1;
+    IntPtr tok;
+    if (!OpenProcessToken(h, 8, out tok)) { CloseHandle(h); return -2; }
+    int level = -1;
+    uint len;
+    GetTokenInformation(tok, 25, IntPtr.Zero, 0, out len);
+    if (len > 0) {
+      IntPtr buf = System.Runtime.InteropServices.Marshal.AllocHGlobal((int)len);
+      if (GetTokenInformation(tok, 25, buf, len, out len)) {
+        IntPtr sid = System.Runtime.InteropServices.Marshal.ReadIntPtr(buf);
+        byte count = System.Runtime.InteropServices.Marshal.ReadByte(GetSidSubAuthorityCount(sid));
+        level = System.Runtime.InteropServices.Marshal.ReadInt32(GetSidSubAuthority(sid, (uint)(count - 1)));
+      }
+      System.Runtime.InteropServices.Marshal.FreeHGlobal(buf);
+    }
+    CloseHandle(tok); CloseHandle(h);
+    return level;
+  }
+  public static bool IsElevated(uint pid) { int l = Integrity(pid); return l == -2 || l >= 0x3000; }
 }
 "@
 $AE = [System.Windows.Automation.AutomationElement]
@@ -587,6 +616,96 @@ function Answer-Questions($w, $page, $s, $questions) {
   }
 }
 
+# Codex's question panel above the composer ("question_card" heading, a dismiss button, the title,
+# one RadioButton per option or a box for words, skip and send): the container around the title's
+# text that holds the send button. (The group's own name is empty when the card has no options.)
+function Find-CodexCard($scope, $s, $question) {
+  $prefix = ($question -replace '\s', '')
+  $prefix = $prefix.Substring(0, [Math]::Min(15, $prefix.Length))
+  $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+  $texts = $scope.FindAll($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Text)))
+  foreach ($t in $texts) {
+    if (-not ($t.Current.Name -replace '\s', '').StartsWith($prefix)) { continue }
+    $box = $t
+    for ($i = 0; $i -lt 8; $i++) {
+      $box = $walker.GetParent($box)
+      if (-not $box) { break }
+      if (Find-ByName $box $CT::Button $s.submit) { return $box }
+    }
+  }
+  return $null
+}
+
+function Codex-Option($card, $label) {
+  $radios = $card.FindAll($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::RadioButton)))
+  foreach ($r in $radios) {
+    $n = $r.Current.Name
+    if ($n -eq $label -or $n.StartsWith("$label ")) { return $r }
+  }
+  return $null
+}
+
+function Codex-Card-Gone($scope, $s, $question, $ms) {
+  for ($i = 0; $i -lt ($ms / 250); $i++) {
+    Start-Sleep -Milliseconds 250
+    if (-not (Find-CodexCard $scope $s $question)) { return $true }
+  }
+  return -not (Find-CodexCard $scope $s $question)
+}
+
+# Codex: picking an option sends the answer by itself (live 11/5); words go into the card's box and
+# then its send button. Questions come one card at a time.
+function Answer-CodexQuestions($w, $page, $s, $questions) {
+  $before = [DeskWin]::GetForegroundWindow()
+  $cursor = New-Object DeskWin+POINT
+  [DeskWin]::GetCursorPos([ref]$cursor) | Out-Null
+  $hows = @()
+  try {
+    Bring-Front $w
+    foreach ($q in @($questions)) {
+      $card = $null
+      for ($i = 0; $i -lt 12 -and -not $card; $i++) {
+        $card = Find-CodexCard $page $s $q.question
+        if (-not $card) { $card = Find-CodexCard $w $s $q.question }
+        if (-not $card) { Start-Sleep -Milliseconds 250 }
+      }
+      if (-not $card) { Fail 'question-changed' 'the question is not on screen' }
+      $labels = @(@($q.labels) | Where-Object { $_ })
+      if ($labels.Count -gt 1) { Fail 'not-supported' 'one option per question' }
+      if ($labels.Count -eq 1) {
+        $option = Codex-Option $card $labels[0]
+        if (-not $option) { Fail 'not-found' 'option not on screen' }
+        Scroll-To $option
+        $p = $null
+        if ($option.TryGetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern, [ref]$p)) { $p.Select(); $hows += 'select' }
+        elseif (Invoke-Element $option) { $hows += 'invoke' }
+        else { Click-Element $w $option 'the option'; $hows += 'click' }
+        if (-not (Codex-Card-Gone $page $s $q.question 2000)) {
+          # The pattern may be taken without the page reacting: one real click on it.
+          $card = Find-CodexCard $page $s $q.question
+          $option = if ($card) { Codex-Option $card $labels[0] } else { $null }
+          if ($option) { Scroll-To $option; Click-Element $w $option 'the option'; $hows += 'click' }
+          if (-not (Codex-Card-Gone $page $s $q.question 2000)) { Fail 'toggle-failed' 'the card stayed after the pick' }
+        }
+      } else {
+        $edit = Card-Edit $card
+        if (-not $edit) { Fail 'not-found' 'no text box on the card' }
+        Scroll-To $edit
+        Paste-Text $w $edit $q.other
+        $send = Find-ByName $card $CT::Button $s.submit
+        if (-not $send) { Fail 'not-found' "no '$($s.submit)' button on the card" }
+        if (-not (Invoke-Element $send)) { Click-Element $w $send 'the send button' }
+        $hows += 'words:send'
+        if (-not (Codex-Card-Gone $page $s $q.question 2500)) { Fail 'toggle-failed' 'the card stayed after sending' }
+      }
+    }
+    return ($hows -join ',')
+  } finally {
+    [DeskWin]::SetCursorPos($cursor.X, $cursor.Y) | Out-Null
+    if ($before -ne [IntPtr]::Zero) { [DeskWin]::SetForegroundWindow($before) | Out-Null }
+  }
+}
+
 # Pastes into a text box without pressing Enter (the "other" answer), keeping the clipboard.
 function Paste-Text($w, $edit, $text) {
   $saved = Save-Clipboard
@@ -1019,6 +1138,8 @@ $PopupSkip = @('ShellExperienceHost', 'StartMenuExperienceHost', 'SearchHost', '
 # ("New permissions required ... Allow this action / Decline", seen 10/31 while Claude Code
 # browsed); only windows with that title are searched, not every Chrome window.
 $ExtensionTitle = 'Claude for Chrome'
+# The elevated companion's own approval window on the PC (desk_remote_elevated.ps1 -Ask).
+$CompanionTitle = 'DeskRemote'
 $ExtensionAllow = 'Allow this action'
 $ExtensionDecline = 'Decline'
 
@@ -1070,19 +1191,28 @@ function Find-Popups {
       try { $proc = (Get-Process -Id $cur.ProcessId -ErrorAction Stop).ProcessName } catch { }
       if ($PopupSkip -contains $proc) { continue }
       if ($proc -eq 'explorer' -and -not $dialog) { continue }
-      if ($hasPattern -and $pattern.Current.CanMinimize -and -not $dialog) { continue }
+      if ("$($cur.Name)".StartsWith($CompanionTitle)) { continue }  # the companion asks on the PC itself
+      $elevated = $false
+      try { $elevated = [DeskWin]::IsElevated([uint32]$cur.ProcessId) } catch { }
+      # An installer's wizard page can be minimized but not maximized (the MSI folder page, 11/5):
+      # an administrator's window like that is a question too, not a main window.
+      $wizard = $elevated -and $hasPattern -and -not $pattern.Current.CanMaximize
+      if ($hasPattern -and $pattern.Current.CanMinimize -and -not $dialog -and -not $wizard) { continue }
       $hwnd = [IntPtr]$cur.NativeWindowHandle
       $buttons = @(Popup-Buttons $w | ForEach-Object { $_.Current.Name.Trim() } | Select-Object -Unique)
       $texts = @($w.FindAll($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Text))) |
         ForEach-Object { "$($_.Current.Name)".Trim() } | Where-Object { $_ } | Select-Object -Unique)
-      if (-not $buttons -and $dialog) {
+      # An administrator's window shows this user only panes (UIPI): its buttons and words are read
+      # as Win32 child windows, like a standard dialog's (an MSI wizard page, 11/5).
+      if (-not $buttons -and ($dialog -or $elevated)) {
         $buttons = @(Dialog-Buttons $hwnd | ForEach-Object { [DeskWin]::Text($_) } | Select-Object -Unique)
-        $texts = @([DeskWin]::Children($hwnd, 'Static') | ForEach-Object { [DeskWin]::Text($_) } | Where-Object { $_ })
+        $texts = @([DeskWin]::Children($hwnd, 'Static') | Where-Object { [DeskWin]::IsWindowEnabled($_) } |
+          ForEach-Object { [DeskWin]::Text($_) } | Where-Object { $_ })
       }
       if (-not $buttons) { continue }
       $text = $texts -join "`n"
       if ($text.Length -gt 600) { $text = $text.Substring(0, 600) }
-      $found += @{ hwnd = [int64]$cur.NativeWindowHandle; title = "$($cur.Name)"; process = $proc; text = $text; buttons = $buttons }
+      $found += @{ hwnd = [int64]$cur.NativeWindowHandle; title = "$($cur.Name)"; process = $proc; text = $text; buttons = $buttons; elevated = $elevated }
     } catch { continue }  # it closed while being read
   }
   # A desktop app's own question drawn inside its page: Claude asks there before restarting to
@@ -1390,6 +1520,7 @@ function Run-Command($c) {
     'choose' {
       $w = Need-Window $c.app
       $page = Need-Doc $w $c.doc
+      if ($c.app -eq 'codex') { return @{ ok = $true; how = (Answer-CodexQuestions $w $page $s @($c.questions)) } }
       return @{ ok = $true; how = (Answer-Questions $w $page $s @($c.questions)) }
     }
     default { Fail 'bad-command' "unknown command" }
