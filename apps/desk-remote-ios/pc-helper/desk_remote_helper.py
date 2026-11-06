@@ -38,7 +38,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.34'
+VERSION = '0.5.35'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -2147,14 +2147,17 @@ class WindowsDriver:
 
     def send(self, app, doc, text, images=None):
         """Pastes each of `images` (file paths) first, then `text`, then Enter."""
-        return self.ask(app, cmd='send', doc=doc, text=text, images=list(images or [])).get('replaced') or None
+        answer = self.ask(app, cmd='send', doc=doc, text=text, images=list(images or []))
+        # Codex at work kept the message in its queue (the card with 引導 follows): read by do_send.
+        self.queued = bool(answer.get('queued'))
+        return answer.get('replaced') or None
 
     def new_send(self, app, button, text):
         self.ask(app, cmd='new_send', name=button, text=text)
 
     def popups(self):
         """Windows on the desktop waiting for an answer: [{hwnd, title, process, text, buttons}]."""
-        found = self.worker.request({'cmd': 'popups'}).get('popups') or []
+        found = self.worker.request({'cmd': 'popups', 'codex': self.strings.get('codex') or {}}).get('popups') or []
         return [found] if isinstance(found, dict) else found
 
     def extension_popups(self):
@@ -2237,7 +2240,8 @@ class WindowsDriver:
     def press_popup(self, popup, button):
         """Presses `button` in `popup` while it still has its title; True once it has closed."""
         return bool(self.worker.request({'cmd': 'press_popup', 'hwnd': popup['hwnd'], 'title': popup['title'],
-                                         'button': button, 'page': bool(popup.get('page'))}).get('gone'))
+                                         'button': button, 'page': bool(popup.get('page')), 'queue': bool(popup.get('queue')),
+                                         'codex': self.strings.get('codex') or {}}).get('gone'))
 
     def answer(self, app, doc, decision, expect):
         return self.ask(app, cmd='answer', doc=doc, decision=decision, expect=expect).get('how')
@@ -2613,7 +2617,7 @@ class UiWatcher:
             listed.append({'id': hashlib.sha256(key.encode('utf-8')).hexdigest()[:12], 'hwnd': raw.get('hwnd'),
                            'title': str(raw.get('title') or ''), 'process': str(raw.get('process') or ''),
                            'text': text, 'buttons': [str(b) for b in raw['buttons']][:8], 'page': bool(raw.get('page')),
-                           'elevated': elevated})
+                           'elevated': elevated, 'queue': bool(raw.get('queue'))})
         with self.lock:
             known = {p['id'] for p in self.popups}
             self.popups = listed
@@ -3360,6 +3364,15 @@ class ActionRunner:
             # The phone's message always wins over unsent text in the box (the user's rule 10/31);
             # only its length is logged, never the text.
             logging.info('send %s replaced %d unsent characters in the box', app, len(replaced))
+        if getattr(self.driver, 'queued', False):
+            # Codex keeps a message typed while it works in a queue until the turn ends (home PC
+            # 11/6): the card with its 引導 button is listed at once, so the phone can hand it in now.
+            self.watcher.check_popups(notify=False)
+            message = f'已送出，但 Codex 正在工作，訊息先排在佇列裡：要馬上插話，按對話上方「{CODEX_QUEUE_TITLE}」卡片的「引導」'
+            if replaced:
+                message += f'（覆蓋了電腦輸入框裡原本沒送出的 {len(replaced)} 個字）'
+            self.update(action, state='done', verified=True, message=message)
+            return
         self.update(action, message='已送出，確認中')
         verified = self.verify(transcript, mark, text if text.strip() else '[圖片]')
         message = {True: '已送出', 'queued': '已送出，排在等待中的權限詢問之後'}.get(
@@ -3380,7 +3393,10 @@ class ActionRunner:
         self.presence.begin_own()  # a window without UI Automation buttons is clicked
         gone = self.driver.press_popup(popup, button)
         self.watcher.check_popups()
-        if self.presence.snapshot().get('locked'):
+        if popup.get('queue'):
+            what = '排隊的訊息已交給 Codex 目前的工作' if button == '引導' else '排隊的訊息已刪除'
+            message = f'已在電腦上按「{button}」，{what}' if gone else f'已按「{button}」，但排隊的訊息還在'
+        elif self.presence.snapshot().get('locked'):
             # A secure-desktop prompt (UAC) reads as locked; nothing on it can be pressed from here.
             message = f'已按「{button}」，接著跳出系統管理員確認（UAC），手機無法代按，請到電腦上按'
         elif gone:
@@ -3659,6 +3675,8 @@ class ActionRunner:
             time.sleep(0.5)
 
 
+# Codex's queued message, as the phone's card is titled (ui_strings codex.queue_title).
+CODEX_QUEUE_TITLE = 'Codex 排隊中的訊息'
 ELEVATED_HINT = '（系統管理員程式的視窗：手機按的按鈕會交給提權夥伴代按，在電腦上或手機核准）'
 
 
@@ -4633,6 +4651,9 @@ FAKE_TABLE = '''
 - 再看溫度'''
 
 # The window that blocked sending on 10/29, as fake mode shows it (a made-up program name).
+# Codex's queued message with its steer/delete buttons, as the worker lists it (home PC 11/6).
+FAKE_QUEUE = {'hwnd': 777, 'title': CODEX_QUEUE_TITLE, 'process': 'ChatGPT', 'text': '螢幕也有點閃',
+              'buttons': ['引導', '刪除'], 'page': True, 'queue': True}
 FAKE_POPUP = {'hwnd': 4242, 'title': 'Windows 安全性', 'process': 'SecurityHealthHost',
               'text': '是否要允許公開和私人網路存取此應用程式?\nWindows 防火牆已封鎖所有公用和私人網路上 示範程式 的部分功能。\n示範程式',
               'buttons': ['允許', '取消']}

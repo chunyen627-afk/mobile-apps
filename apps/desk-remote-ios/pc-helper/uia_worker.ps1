@@ -1171,7 +1171,7 @@ function Dialog-Buttons($hwnd) {
   return @([DeskWin]::Children($hwnd, 'Button') | Where-Object { [DeskWin]::IsWindowEnabled($_) -and [DeskWin]::Text($_) })
 }
 
-function Find-Popups {
+function Find-Popups($c) {
   $found = @()
   $windows = @($AE::RootElement.FindAll($Tree::Children, [System.Windows.Automation.Condition]::TrueCondition))
   $listed = @{}
@@ -1236,7 +1236,60 @@ function Find-Popups {
     } catch { continue }
   }
   $found += @(Find-ExtensionCards $windows)
+  $found += @(Find-CodexQueue $c.codex)
   return $found
+}
+
+# A message typed while Codex works waits in a queue above its box, named "<prefix> 1 <...>:
+# <the message>", with a steer button (handed to the running turn now) and a delete button
+# (home PC 11/6). Listed as a card so the phone can press either; the words come from
+# ui_strings' codex entry, passed as $s.
+function Codex-QueueGroup($w, $s) {
+  $groups = $w.FindAll($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Group)))
+  foreach ($g in $groups) {
+    if ("$($g.Current.Name)".StartsWith($s.queue_prefix)) { return $g }
+  }
+  return $null
+}
+
+function Find-CodexQueue($s) {
+  if (-not $s -or -not $s.queue_prefix) { return @() }
+  $w = Find-Window 'codex'
+  if (-not $w) { return @() }
+  try {
+    $g = Codex-QueueGroup $w $s
+    if (-not $g) { return @() }
+    $text = "$($g.Current.Name)"
+    $sep = $text.IndexOf([string]$s.queue_sep)
+    if ($sep -ge 0) { $text = $text.Substring($sep + $s.queue_sep.Length).Trim() }
+    if ($text.Length -gt 600) { $text = $text.Substring(0, 600) }
+    return @(@{ hwnd = [int64]$w.Current.NativeWindowHandle; title = $s.queue_title; process = 'ChatGPT'; text = $text
+                buttons = @($s.steer, $s.queue_delete_short); page = $true; queue = $true })
+  } catch { return @() }
+}
+
+# Presses the steer or delete button beside Codex's queued message. True once the queue is gone.
+function Press-CodexQueue($c) {
+  $s = $c.codex
+  $w = Find-Window 'codex'
+  if (-not $w) { Fail 'popup-gone' 'Codex is not open' }
+  $g = Codex-QueueGroup $w $s
+  if (-not $g) { Fail 'popup-gone' 'the queued message is gone' }
+  $wanted = if ($c.button -eq $s.queue_delete_short) { $s.queue_delete } else { $s.steer }
+  $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+  $parent = $walker.GetParent($g)
+  if (-not $parent) { Fail 'not-found' 'the queued message has no parent' }
+  $button = @(Any-Buttons $parent | Where-Object { $_.Current.Name.Trim() -eq $wanted }) | Select-Object -First 1
+  if (-not $button) { Fail 'not-found' 'no such button beside the queued message' }
+  if (-not (Invoke-Element $button)) {
+    Bring-Front $w
+    Click-Element $w $button 'the queue button'
+  }
+  for ($i = 0; $i -lt 12; $i++) {
+    Start-Sleep -Milliseconds 250
+    if (-not (Codex-QueueGroup $w $s)) { return $true }
+  }
+  return $false
 }
 
 # Claude for Chrome's permission card, in its own window: looked for on its own every second or
@@ -1294,6 +1347,7 @@ function Page-Dialog($c) {
 # Presses the button named $c.button in the pop-up $c.hwnd, only while that window still has
 # the title it was listed with. True when the window has closed within 3 s.
 function Press-Popup($c) {
+  if ($c.queue) { return Press-CodexQueue $c }
   if ($c.page) {
     $d = Page-Dialog $c
     if (-not $d) { Fail 'popup-gone' 'the dialog is gone' }
@@ -1468,9 +1522,15 @@ function Run-Command($c) {
       $w = Need-Window $c.app
       $page = Need-Doc $w $c.doc
       $replaced = Paste-Send $w $page $s.edit $c.text @($c.images)
-      return @{ ok = $true; replaced = "$replaced" }
+      # Codex at work keeps the message in its queue (a card with a steer button follows).
+      $queued = $false
+      if ($c.app -eq 'codex' -and $s.queue_prefix) {
+        Start-Sleep -Milliseconds 500
+        try { $queued = [bool](Codex-QueueGroup $w $s) } catch { }
+      }
+      return @{ ok = $true; replaced = "$replaced"; queued = $queued }
     }
-    'popups' { return @{ ok = $true; popups = @(Find-Popups) } }
+    'popups' { return @{ ok = $true; popups = @(Find-Popups $c) } }
     'extension' {
       $windows = @($AE::RootElement.FindAll($Tree::Children, [System.Windows.Automation.Condition]::TrueCondition))
       return @{ ok = $true; popups = @(Find-ExtensionCards $windows) }

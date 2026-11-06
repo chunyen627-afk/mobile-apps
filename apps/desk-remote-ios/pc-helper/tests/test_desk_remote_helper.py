@@ -1583,6 +1583,43 @@ class VersionTests(FakeEnvironment):
         driver.fake_popups = [dict(h.FAKE_QUIT_GUARD, elevated=True)]
         self.assertFalse(watcher.check_popups()[0]['elevated'])
 
+    def test_codexs_queued_message_is_a_card_the_phone_steers_in(self):
+        """Codex keeps a message typed while it works in a queue with a 引導 button (home PC 11/6):
+        listed as a card without a notification; pressing 引導 hands it in."""
+        sent = []
+        hub, driver, watcher, runner = drive(self.fake, notify=lambda *a: sent.append(a))
+        driver.fake_popups = [dict(h.FAKE_QUEUE)]
+        sent.clear()
+        watcher.tick()
+        self.assertEqual(sent, [], 'a queued message is not a permission question')
+        popups = hub.state()['popups']
+        self.assertEqual([(p['title'], p['text'], p['buttons']) for p in popups],
+                         [(h.CODEX_QUEUE_TITLE, '螢幕也有點閃', ['引導', '刪除'])])
+        code, body = runner.submit('popup', None, popups[0]['id'], {'button': '引導'})
+        self.assertEqual(code, 202, body)
+        run_all(runner)
+        status = runner.status(body['id'])
+        self.assertEqual((status['state'], status['verified']), ('done', True), status)
+        self.assertIn('已交給 Codex', status['message'])
+        self.assertIn(('press_popup', h.CODEX_QUEUE_TITLE, '引導'), driver.calls)
+        self.assertEqual(hub.state()['popups'], [])
+
+    def test_a_message_codex_queues_is_reported_with_the_steer_hint(self):
+        class BusyDriver(h.FakeDriver):
+            def send(self, app, doc, text, images=None):
+                self.calls.append(('send', app, doc))
+                self.queued = True
+                self.fake_popups = [dict(h.FAKE_QUEUE, text=text)]
+                return None
+        hub, driver, _, runner = drive(self.fake, driver_class=BusyDriver)
+        body = runner.submit('send', 'codex', Y, {'text': '螢幕也有點閃'})[1]
+        run_all(runner)
+        status = runner.status(body['id'])
+        self.assertEqual((status['state'], status['verified']), ('done', True), status)
+        self.assertIn('按對話上方', status['message'])
+        self.assertIn('引導', status['message'])
+        self.assertEqual([p['text'] for p in hub.state()['popups']], ['螢幕也有點閃'], 'the card is listed at once')
+
     def test_the_press_script_quotes_the_windows_words(self):
         script = h.elevated_press_script(99, "It's here", "Don't")
         self.assertIn("'It''s here'", script)
