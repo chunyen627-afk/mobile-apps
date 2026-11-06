@@ -61,5 +61,6 @@ API（讀取都是 GET；寫入只有 `POST /labels`）：
 ## 驗證狀態
 
 - 電腦端（2026-11-06，Windows office 電腦，Intel 藍牙）：實際讀到一顆刷了 pvvx 5.9 的 LYWSD03MMC（BTHome v2 明文）；閘道在 ZeroTier 位址上回應 `/sensors`，從另一台 ZeroTier 電腦連得到。閘道單元測試 30 項通過（本機 Python 3.11）。
-- App：程式已寫好，**尚未編譯**（只能在 macOS CI 編譯）；編譯、單元測試、模擬器 UI 測試與實機結果見工具箱 README。
+- App：工具箱 [run 42174825284](https://github.com/chunyen627-afk/mobile-apps/actions/runs/42174825284) 編譯通過，溫濕度單元測試 32 項、閘道 38 項與工具箱 UI 測試（含溫濕度兩項）全過，模擬器截圖已檢視；**尚未發布、未實機**。
+- 推播：office 閘道 11/06 已開，`--test-notify` 測試通知已送出（手機是否收到待使用者確認）。
 - ESP32 閘道：尚未實作（規劃用 ESP32-2432S028，提供同樣的 `/sensors`／`/history`）。
