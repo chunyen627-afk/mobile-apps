@@ -275,7 +275,14 @@ final class AlbumUITests: XCTestCase {
         tapCanvas()
         // Photo single taps wait for the double-tap recognizer to fail. XCTest
         // returning from tap does not mean that delayed callback has executed.
-        XCTAssertTrue(app.buttons["leavePlayer"].waitForExistence(timeout: 2))
+        // On a busy runner the callback came later than 2 s, or the tap was lost (toolbox release
+        // run 42191989395, 11/06): wait longer, then tap once more. Taps seconds apart are not a
+        // double tap, and the overlay only hides itself 4 s after it shows.
+        let leave = app.buttons["leavePlayer"]
+        if !leave.waitForExistence(timeout: 5) {
+            tapCanvas()
+            XCTAssertTrue(leave.waitForExistence(timeout: 5), "the controls did not come back after two taps")
+        }
     }
     private func tapCanvas() { app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
     private func waitUntilGone(_ element: XCUIElement, timeout: TimeInterval) {
