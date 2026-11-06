@@ -23,6 +23,7 @@ struct ThermoListView: View {
     @ObservedObject var model: ThermoModel
     let showSettings: () -> Void
     @State private var showHidden = false
+    @State private var renaming: ThermoSensor?
 
     var body: some View {
         List {
@@ -62,6 +63,7 @@ struct ThermoListView: View {
             }
         }
         .refreshable { await model.refresh() }
+        .thermoRenameAlert(model: model, target: $renaming)
     }
 
     @ViewBuilder
@@ -99,10 +101,23 @@ struct ThermoListView: View {
     }
 
     private func row(_ gateway: ThermoGatewayState, _ sensor: ThermoSensor) -> some View {
-        NavigationLink(value: ThermoSensorRef(gateway: gateway.id, sensor: sensor.id)) {
+        let isHidden = model.preferences.hidden.contains(sensor.id)
+        return NavigationLink(value: ThermoSensorRef(gateway: gateway.id, sensor: sensor.id)) {
             ThermoRow(sensor: sensor, name: model.displayName(sensor), now: gateway.gatewayNow(phoneNow: Date()) ?? 0)
         }
         .accessibilityIdentifier("thermo-row-\(sensor.id)")
+        // Long press or swipe left, as in Mi Home's device list.
+        .contextMenu {
+            Button { renaming = sensor } label: { Label("重新命名", systemImage: "pencil") }
+            Button { model.preferences.setHidden(sensor.id, !isHidden) } label: {
+                Label(isHidden ? "取消隱藏" : "在列表中隱藏", systemImage: isHidden ? "eye" : "eye.slash")
+            }
+        }
+        .swipeActions(edge: .trailing) {
+            Button { renaming = sensor } label: { Label("改名", systemImage: "pencil") }
+                .tint(.blue)
+                .accessibilityIdentifier("thermo-swipe-rename")
+        }
     }
 }
 
@@ -169,7 +184,7 @@ struct ThermoRow: View {
 struct ThermoDetailView: View {
     @ObservedObject var model: ThermoModel
     let ref: ThermoSensorRef
-    @State private var nameText = ""
+    @State private var renaming: ThermoSensor?
 
     var body: some View {
         if let found = model.sensor(ref) {
@@ -208,19 +223,18 @@ struct ThermoDetailView: View {
             }
             ThermoHistorySection(model: model, ref: ref)
             Section {
-                TextField(sensor.name, text: $nameText)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .submitLabel(.done)
-                    .onSubmit { saveName(sensor) }
-                    .accessibilityIdentifier("thermo-name-field")
-                Button("儲存名稱") { saveName(sensor) }
-                    .disabled(nameText.trimmingCharacters(in: .whitespaces) == (model.preferences.names[sensor.id] ?? ""))
-                    .accessibilityIdentifier("thermo-name-save")
-            } header: {
-                Text("名稱")
+                Button { renaming = sensor } label: {
+                    LabeledContent("名稱") {
+                        HStack(spacing: 6) {
+                            Text(model.displayName(sensor))
+                            Image(systemName: "pencil")
+                        }
+                    }
+                }
+                .foregroundStyle(.primary)
+                .accessibilityIdentifier("thermo-rename")
             } footer: {
-                Text("名稱只存在這支手機。留空會用閘道上的名稱「\(sensor.name)」。")
+                Text("名稱只存在這支手機。在列表上長按或往左滑也能改名。")
             }
             Section("狀態") {
                 LabeledContent("最後更新", value: ThermoText.age(updated: sensor.updated, now: now))
@@ -244,12 +258,50 @@ struct ThermoDetailView: View {
         }
         .navigationTitle(model.displayName(sensor))
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear { nameText = model.preferences.names[sensor.id] ?? "" }
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { renaming = sensor } label: { Image(systemName: "square.and.pencil") }
+                    .accessibilityLabel("重新命名")
+            }
+        }
+        .thermoRenameAlert(model: model, target: $renaming)
     }
+}
 
-    private func saveName(_ sensor: ThermoSensor) {
-        model.preferences.rename(sensor.id, to: nameText)
-        nameText = model.preferences.names[sensor.id] ?? ""
+extension View {
+    /// The rename dialog, as in Mi Home: it opens with the current name; an empty name, or the
+    /// gateway's own, goes back to the gateway's name.
+    func thermoRenameAlert(model: ThermoModel, target: Binding<ThermoSensor?>) -> some View {
+        modifier(ThermoRenameAlert(model: model, target: target))
+    }
+}
+
+struct ThermoRenameAlert: ViewModifier {
+    @ObservedObject var model: ThermoModel
+    @Binding var target: ThermoSensor?
+    @State private var text = ""
+
+    func body(content: Content) -> some View {
+        content
+            .alert("重新命名", isPresented: Binding(get: { target != nil }, set: { if !$0 { target = nil } })) {
+                TextField("名稱", text: $text)
+                    .accessibilityIdentifier("thermo-rename-field")
+                Button("取消", role: .cancel) { target = nil }
+                Button("儲存") {
+                    if let sensor = target {
+                        model.preferences.rename(sensor, to: text)
+                    }
+                    target = nil
+                }
+                .accessibilityIdentifier("thermo-rename-save")
+            } message: {
+                Text("留空會用閘道上的名稱「\(target?.name ?? "")」。")
+            }
+            .onChange(of: target?.id) { _, _ in
+                if let sensor = target {
+                    text = model.displayName(sensor)
+                }
+            }
     }
 }
 

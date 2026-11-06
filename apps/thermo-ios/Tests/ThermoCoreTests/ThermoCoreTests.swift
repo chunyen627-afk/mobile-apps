@@ -238,6 +238,17 @@ final class PreferencesTests: XCTestCase {
         XCTAssertEqual(prefs.displayName(sensors[1]), "客廳")
     }
 
+    func testRenameDialogFollowsTheGatewayName() {
+        var prefs = ThermoPreferences()
+        let sensor = sensors[1]
+        prefs.rename(sensor, to: " 書房 ")
+        XCTAssertEqual(prefs.displayName(sensor), "書房")
+        prefs.rename(sensor, to: "客廳")
+        XCTAssertNil(prefs.names[sensor.id], "the gateway's own name is not stored as a custom name")
+        prefs.rename(sensor, to: "")
+        XCTAssertEqual(prefs.displayName(sensor), "客廳")
+    }
+
     func testArrangeSortsByNameAndSplitsHidden() {
         var prefs = ThermoPreferences()
         prefs.setHidden("A4:C1:38:00:00:02", true)

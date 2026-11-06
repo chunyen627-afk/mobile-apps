@@ -163,15 +163,40 @@ final class ToolboxUITests: XCTestCase {
         app.segmentedControls["thermo-metric"].buttons["濕度"].tap()
         XCTAssertTrue(poll(timeout: 10) { self.element("thermo-summary").label.contains("%") }, "humidity summary missing")
         snapshot("10-thermo-demo-chart-week-humidity")
-        let field = element("thermo-name-field")
-        field.tap()
-        field.typeText("Office A")
-        element("thermo-name-save").tap()
+        // Rename as in Mi Home: the name row opens a dialog holding the current name.
+        let renameRow = element("thermo-rename")
+        for _ in 0..<6 where !renameRow.isHittable {
+            app.swipeUp()
+        }
+        renameRow.tap()
+        renameIn(alertWith: "客廳", to: "Office A", shot: "11-thermo-rename-dialog")
         XCTAssertTrue(app.navigationBars["Office A"].waitForExistence(timeout: 5), "title did not take the new name")
         app.navigationBars.buttons.firstMatch.tap()
         XCTAssertTrue(row.waitForExistence(timeout: 10), "list did not come back")
         XCTAssertTrue(poll(timeout: 10) { self.shows("Office A", in: row) }, "new name not in the list: \(row.label)")
         XCTAssertFalse(shows("客廳", in: row), "old name still shown: \(row.label)")
+        // Swipe left on another thermometer in the list.
+        let bedroom = element("thermo-row-A4:C1:38:00:00:02")
+        bedroom.swipeLeft()
+        let swipe = app.buttons["thermo-swipe-rename"].exists ? app.buttons["thermo-swipe-rename"] : app.buttons["改名"]
+        XCTAssertTrue(swipe.waitForExistence(timeout: 5), "swipe action missing")
+        swipe.tap()
+        renameIn(alertWith: "臥室", to: "Bedroom B", shot: nil)
+        XCTAssertTrue(poll(timeout: 10) { self.shows("Bedroom B", in: bedroom) }, "swipe rename not in the list: \(bedroom.label)")
+        snapshot("12-thermo-renamed-list")
+    }
+
+    /// Fills the rename dialog, which must open holding `current`.
+    private func renameIn(alertWith current: String, to name: String, shot: String?) {
+        let alert = app.alerts.firstMatch
+        XCTAssertTrue(alert.waitForExistence(timeout: 5), "rename dialog did not open")
+        let field = alert.textFields.firstMatch
+        XCTAssertTrue(poll(timeout: 5) { (field.value as? String) == current }, "dialog should hold \(current): \(String(describing: field.value))")
+        if let shot { snapshot(shot) }
+        field.tap()
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: current.count + 4) + name)
+        alert.buttons["儲存"].tap()
+        XCTAssertTrue(poll(timeout: 5) { !alert.exists }, "rename dialog did not close")
     }
 
     /// The thermometer tab against two gateways: the fake gateway that scripts/build.sh serves
@@ -191,10 +216,10 @@ final class ToolboxUITests: XCTestCase {
         XCTAssertTrue(shows("40 分鐘前", in: room), "stale age missing: \(room.label)")
         XCTAssertTrue(shows("連線讀取失敗", in: element("thermo-row-A4:C1:38:00:00:04")), "thermometer error missing")
         XCTAssertTrue(element("thermo-gateway-error").waitForExistence(timeout: 30), "the dead gateway shows no error")
-        snapshot("11-thermo-gateways")
+        snapshot("13-thermo-gateways")
         room.tap()
         XCTAssertTrue(element("thermo-summary").waitForExistence(timeout: 15), "history from the fake gateway missing")
-        snapshot("12-thermo-gateway-chart")
+        snapshot("14-thermo-gateway-chart")
         let hide = app.switches["thermo-hide"]
         for _ in 0..<6 where !hide.isHittable {
             app.swipeUp()
@@ -205,10 +230,10 @@ final class ToolboxUITests: XCTestCase {
         let hidden = element("thermo-hidden-group")
         XCTAssertTrue(hidden.waitForExistence(timeout: 10), "hidden section missing")
         XCTAssertFalse(room.exists, "hidden thermometer still in its gateway's list")
-        snapshot("13-thermo-hidden")
+        snapshot("15-thermo-hidden")
         element("thermo-settings").tap()
         XCTAssertTrue(element("thermo-gateways").waitForExistence(timeout: 10), "gateway settings did not open")
-        snapshot("14-thermo-settings")
+        snapshot("16-thermo-settings")
     }
 
     private var thermoTab: XCUIElement { app.tabBars.buttons["溫濕度"] }

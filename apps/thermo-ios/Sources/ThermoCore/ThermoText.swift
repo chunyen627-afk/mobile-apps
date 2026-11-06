@@ -102,6 +102,13 @@ public struct ThermoPreferences: Codable, Equatable, Sendable {
         names[id] = trimmed.isEmpty ? nil : String(trimmed.prefix(Self.maxNameLength))
     }
 
+    /// Renames from the rename dialog, which starts with the current name: the gateway's own
+    /// name, or an empty one, goes back to following the gateway.
+    public mutating func rename(_ sensor: ThermoSensor, to text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        rename(sensor.id, to: trimmed == sensor.name ? "" : trimmed)
+    }
+
     public mutating func setHidden(_ id: String, _ isHidden: Bool) {
         if isHidden {
             hidden.insert(id)
