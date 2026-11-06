@@ -2,8 +2,9 @@ import Charts
 import SwiftUI
 import ThermoCore
 
-/// The history chart on a thermometer's page: 24 hours, 7 days or 30 days of temperature,
-/// humidity or battery, with the lowest, highest and mean value of the period.
+/// The history on a thermometer's page, as in Mi Home: day (a line of 30-minute points), week and
+/// month (one bar per day from its lowest to its highest), for temperature, humidity or battery,
+/// with the period's lowest, mean and highest.
 struct ThermoHistorySection: View {
     @ObservedObject var model: ThermoModel
     let ref: ThermoSensorRef
@@ -12,6 +13,8 @@ struct ThermoHistorySection: View {
     @State private var history: ThermoHistory?
     @State private var error: ThermoFetchError?
     @State private var loading = false
+
+    private var fahrenheit: Bool { model.preferences.fahrenheit }
 
     var body: some View {
         Section {
@@ -30,56 +33,73 @@ struct ThermoHistorySection: View {
                 .accessibilityIdentifier("thermo-chart")
             if let history, let summary = history.summary(metric) {
                 HStack {
-                    stat("最低", metric.format(summary.min), .blue)
+                    stat("最低", metric.format(summary.min, fahrenheit: fahrenheit), .blue)
                     Spacer()
-                    stat("平均", metric.format(summary.average), .primary)
+                    stat("平均", metric.format(summary.average, fahrenheit: fahrenheit), .primary)
                     Spacer()
-                    stat("最高", metric.format(summary.max), .red)
+                    stat("最高", metric.format(summary.max, fahrenheit: fahrenheit), .red)
                 }
                 .accessibilityElement(children: .combine)
                 .accessibilityIdentifier("thermo-summary")
             }
         } header: {
-            Text("紀錄")
+            Text("歷史紀錄")
         } footer: {
-            Text("閘道每 5 分鐘記一筆；圖上每點是 \(bucketText) 的平均。閘道沒收到的時段會留白。")
+            Text(range.isDaily ? "每天一條：從當天最低到最高。閘道沒收到的日子留白。"
+                               : "每 30 分鐘一點的平均。閘道沒收到的時段留白。")
         }
         .task(id: range) { await load() }
     }
 
-    private var bucketText: String {
-        switch range {
-        case .day: return "5 分鐘"
-        case .week: return "30 分鐘"
-        case .month: return "2 小時"
-        }
-    }
+    private var bars: Bool { range.isDaily && metric != .battery }
 
     @ViewBuilder
     private var chart: some View {
         if let history, !history.segments(metric).isEmpty {
             let segments = history.segments(metric)
-            let values = segments.flatMap { $0 }.compactMap { $0.value(metric) }
-            let low = values.min() ?? 0, high = values.max() ?? 1
+            let points = segments.flatMap { $0 }
+            let lows = points.compactMap { $0.low(metric) }.map { metric.display($0, fahrenheit: fahrenheit) }
+            let highs = points.compactMap { $0.high(metric) }.map { metric.display($0, fahrenheit: fahrenheit) }
+            let low = lows.min() ?? 0, high = highs.max() ?? 1
             let pad = Swift.max(0.5, (high - low) * 0.15)
             Chart {
-                ForEach(Array(segments.enumerated()), id: \.offset) { index, segment in
-                    ForEach(segment) { point in
-                        LineMark(
-                            x: .value("時間", point.date),
-                            y: .value(metric.title, point.value(metric) ?? 0),
-                            series: .value("段", index)
+                if bars {
+                    ForEach(points) { point in
+                        BarMark(
+                            x: .value("日期", point.date, unit: .day),
+                            yStart: .value("最低", metric.display(point.low(metric) ?? 0, fahrenheit: fahrenheit)),
+                            yEnd: .value("最高", metric.display(point.high(metric) ?? 0, fahrenheit: fahrenheit)),
+                            width: .ratio(0.5)
                         )
-                        .interpolationMethod(.monotone)
-                        .foregroundStyle(color)
+                        .foregroundStyle(color.gradient)
+                        .clipShape(Capsule())
+                    }
+                } else {
+                    ForEach(Array(segments.enumerated()), id: \.offset) { index, segment in
+                        ForEach(segment) { point in
+                            LineMark(
+                                x: .value("時間", point.date),
+                                y: .value(metric.title, metric.display(point.value(metric) ?? 0, fahrenheit: fahrenheit)),
+                                series: .value("段", index)
+                            )
+                            .interpolationMethod(.monotone)
+                            .foregroundStyle(color)
+                        }
                     }
                 }
             }
             .chartYScale(domain: (low - pad)...(high + pad))
             .chartXAxis {
-                AxisMarks(values: .automatic(desiredCount: 5)) { _ in
-                    AxisGridLine()
-                    AxisValueLabel(format: range == .day ? .dateTime.hour() : .dateTime.month(.defaultDigits).day())
+                if range == .day {
+                    AxisMarks(values: .stride(by: .hour, count: 6)) { _ in
+                        AxisGridLine()
+                        AxisValueLabel(format: .dateTime.hour())
+                    }
+                } else {
+                    AxisMarks(values: .stride(by: .day, count: range == .week ? 1 : 7)) { _ in
+                        AxisGridLine()
+                        AxisValueLabel(format: .dateTime.month(.defaultDigits).day())
+                    }
                 }
             }
         } else if loading {

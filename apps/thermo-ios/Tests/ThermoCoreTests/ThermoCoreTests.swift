@@ -151,36 +151,128 @@ final class HistoryTests: XCTestCase {
 
     func testSummary() throws {
         let h = history([ThermoPoint(t: 0, temperature: 20, humidity: nil, battery: 90),
-                         ThermoPoint(t: 300, temperature: 26, humidity: 50, battery: 80),
-                         ThermoPoint(t: 600, temperature: nil, humidity: 70, battery: nil)])
+                         ThermoPoint(t: 1800, temperature: 26, humidity: 50, battery: 80),
+                         ThermoPoint(t: 3600, temperature: nil, humidity: 70, battery: nil)])
         XCTAssertEqual(h.summary(.temperature), ThermoSummary(min: 20, max: 26, average: 23))
         XCTAssertEqual(h.summary(.humidity), ThermoSummary(min: 50, max: 70, average: 60))
         XCTAssertEqual(h.summary(.battery)?.min, 80)
         XCTAssertNil(history([]).summary(.temperature))
     }
 
+    func testDailySummaryUsesEachDaysLowestAndHighest() {
+        let h = history([ThermoPoint(t: 0, temperature: 22, humidity: 50, battery: 90, temperatureMin: 18, temperatureMax: 27,
+                                     humidityMin: 40, humidityMax: 66),
+                         ThermoPoint(t: 86400, temperature: 24, humidity: 60, battery: 89, temperatureMin: 21, temperatureMax: 29)],
+                        range: .week)
+        XCTAssertEqual(h.summary(.temperature), ThermoSummary(min: 18, max: 29, average: 23))
+        XCTAssertEqual(h.summary(.humidity), ThermoSummary(min: 40, max: 66, average: 55))
+        XCTAssertEqual(h.points[1].low(.humidity), 60, "a day without its own lowest uses its mean")
+    }
+
+    func testDecodesDailyPoints() throws {
+        let body = #"{"version": 1, "id": "x", "range": "week", "bucket": 86400, "time": 1, "utc_offset": 28800, "points": [{"t": 0, "temperature": 22.5, "humidity": 50.0, "battery": 90, "temperature_min": 20.1, "temperature_max": 25.0, "humidity_min": 40.0, "humidity_max": 61.0}]}"#
+        let h = try ThermoHistory.decode(Data(body.utf8))
+        XCTAssertEqual(h.utcOffset, 28800)
+        XCTAssertEqual(h.points[0].high(.temperature), 25.0)
+        XCTAssertEqual(h.points[0].low(.humidity), 40.0)
+    }
+
     func testGapsSplitTheLine() {
-        let h = history([300, 600, 900, 2400, 2700].map { ThermoPoint(t: $0, temperature: 20, humidity: nil, battery: nil) })
-        XCTAssertEqual(h.segments(.temperature).map { $0.map(\.t) }, [[300, 600, 900], [2400, 2700]])
+        let h = history([1800, 3600, 5400, 12600, 14400].map { ThermoPoint(t: $0, temperature: 20, humidity: nil, battery: nil) })
+        XCTAssertEqual(h.segments(.temperature).map { $0.map(\.t) }, [[1800, 3600, 5400], [12600, 14400]])
         XCTAssertEqual(h.segments(.humidity).count, 0)
     }
 
     func testDemoHistoryEndsAtTheReading() {
-        let sensor = ThermoFeed.demo(now: 1_000_000).sensors[0]
-        for range in ThermoRange.allCases {
-            let h = ThermoHistory.demo(for: sensor, range: range, now: 1_000_000)
-            XCTAssertEqual(h.points.count, range.seconds / range.bucket, range.rawValue)
-            XCTAssertEqual(h.segments(.temperature).count, 1)
-            XCTAssertLessThan(h.points.last!.t, 1_000_000)
-            let summary = h.summary(.temperature)!
-            XCTAssertGreaterThan(summary.max - summary.min, 2)
+        let taipei = 8 * 3600
+        let now = 20 * 86400 - taipei + 10 * 3600  // 10:00 local
+        let sensor = ThermoFeed.demo(now: now).sensors[0]
+        let day = ThermoHistory.demo(for: sensor, range: .day, now: now, utcOffset: taipei)
+        XCTAssertEqual(day.points.count, 48)
+        XCTAssertEqual(day.segments(.temperature).count, 1)
+        XCTAssertLessThanOrEqual(day.points.last!.t, now)
+        XCTAssertGreaterThan(day.summary(.temperature)!.max - day.summary(.temperature)!.min, 2)
+        for range in [ThermoRange.week, .month] {
+            let h = ThermoHistory.demo(for: sensor, range: range, now: now, utcOffset: taipei)
+            XCTAssertEqual(h.points.count, range.days, range.rawValue)
+            XCTAssertTrue(h.points.allSatisfy { ($0.t + taipei) % 86400 == 0 }, "days start at local midnight")
+            XCTAssertGreaterThan(h.points[0].high(.temperature)! - h.points[0].low(.temperature)!, 2)
         }
     }
 
     func testRangesAndMetrics() {
-        XCTAssertEqual(ThermoRange.allCases.map(\.title), ["24 小時", "7 天", "30 天"])
+        XCTAssertEqual(ThermoRange.allCases.map(\.title), ["日", "週", "月"])
+        XCTAssertEqual(ThermoRange.allCases.map(\.bucket), [1800, 86400, 86400])
         XCTAssertEqual(ThermoMetric.allCases.map(\.title), ["溫度", "濕度", "電量"])
         XCTAssertEqual(ThermoMetric.battery.format(87.4), "87%")
+        XCTAssertEqual(ThermoMetric.temperature.format(25, fahrenheit: true), "77.0°F")
+        XCTAssertEqual(ThermoMetric.temperature.display(100, fahrenheit: true), 212)
+        XCTAssertEqual(ThermoMetric.humidity.display(50, fahrenheit: true), 50)
+    }
+}
+
+final class ComfortTests: XCTestCase {
+    func testLevels() {
+        let zone = ThermoComfortZone.standard
+        XCTAssertEqual(ThermoComfort.level(temperature: 23, humidity: 50, zone: zone), .comfortable)
+        XCTAssertEqual(ThermoComfort.level(temperature: 28, humidity: 70, zone: zone).text, "偏熱・潮濕")
+        XCTAssertEqual(ThermoComfort.level(temperature: 18, humidity: 30, zone: zone).text, "偏冷・乾燥")
+        XCTAssertEqual(ThermoComfort.level(temperature: nil, humidity: 65, zone: zone).text, "潮濕")
+        XCTAssertEqual(ThermoComfort.level(temperature: nil, humidity: nil, zone: zone), .unknown)
+        XCTAssertTrue(ThermoComfort.level(temperature: 26, humidity: 60, zone: zone).isComfortable, "the limits are comfortable")
+    }
+
+    func testZoneKeepsLowBelowHigh() {
+        var zone = ThermoComfortZone.standard
+        zone.temperatureLow = 30
+        zone.humidityLow = 70
+        zone.normalize()
+        XCTAssertEqual(zone.temperatureHigh, 31)
+        XCTAssertEqual(zone.humidityHigh, 75)
+    }
+}
+
+final class RoomTests: XCTestCase {
+    private let sensors = [
+        ThermoSensor(id: "A4:C1:38:00:00:01", name: "Sensor 1"),
+        ThermoSensor(id: "A4:C1:38:00:00:02", name: "Sensor 2"),
+        ThermoSensor(id: "A4:C1:38:00:00:03", name: "Sensor 3"),
+        ThermoSensor(id: "A4:C1:38:00:00:04", name: "Sensor 4"),
+    ]
+
+    func testGroupsByRoomWithTheUnassignedLast() {
+        var prefs = ThermoPreferences()
+        prefs.setRoom("A4:C1:38:00:00:01", " 臥室 ")
+        prefs.setRoom("A4:C1:38:00:00:02", "Bedroom")
+        prefs.setRoom("A4:C1:38:00:00:03", "臥室")
+        prefs.setHidden("A4:C1:38:00:00:03", true)
+        let groups = prefs.byRoom(sensors) { $0 }
+        XCTAssertEqual(groups.map(\.room), ["Bedroom", "臥室", ThermoPreferences.noRoom])
+        XCTAssertEqual(groups.map { $0.items.map(\.name) }, [["Sensor 2"], ["Sensor 1"], ["Sensor 4"]])
+        XCTAssertEqual(prefs.allRooms, ["Bedroom", "臥室"])
+        prefs.setRoom("A4:C1:38:00:00:01", "  ")
+        XCTAssertNil(prefs.room("A4:C1:38:00:00:01"))
+    }
+
+    func testOlderSettingsStillLoad() {
+        let old = Data(#"{"names": {"a": "A"}, "hidden": ["b"]}"#.utf8)
+        let prefs = ThermoPreferences.decoded(old)
+        XCTAssertEqual(prefs.names, ["a": "A"])
+        XCTAssertEqual(prefs.hidden, ["b"])
+        XCTAssertEqual(prefs.comfort, .standard)
+        XCTAssertFalse(prefs.fahrenheit)
+        XCTAssertTrue(prefs.rooms.isEmpty)
+    }
+
+    func testUnitAndComfortRoundTrip() {
+        var prefs = ThermoPreferences()
+        prefs.fahrenheit = true
+        prefs.comfort.temperatureHigh = 28
+        prefs.setRoom("a", "書房")
+        let again = ThermoPreferences.decoded(prefs.encoded())
+        XCTAssertEqual(again, prefs)
+        XCTAssertEqual(again.temperature(25), "77.0°F")
+        XCTAssertEqual(again.comfortLevel(ThermoSensor(id: "a", name: "a", temperature: 27, humidity: 50)), .comfortable)
     }
 }
 
@@ -189,6 +281,7 @@ final class TextTests: XCTestCase {
         XCTAssertEqual(ThermoText.temperature(24.76), "24.8°")
         XCTAssertEqual(ThermoText.temperature(-3.04), "-3.0°")
         XCTAssertEqual(ThermoText.temperature(nil), "--")
+        XCTAssertEqual(ThermoText.temperature(24.76, fahrenheit: true), "76.6°F")
         XCTAssertEqual(ThermoText.humidity(68.37), "68%")
         XCTAssertEqual(ThermoText.battery(93), "93%")
         XCTAssertEqual(ThermoText.voltage(2.953), "2.953 V")

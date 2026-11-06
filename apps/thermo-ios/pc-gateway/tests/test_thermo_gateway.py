@@ -143,29 +143,47 @@ class StoreTests(unittest.TestCase):
 
 class HistoryTests(unittest.TestCase):
     def test_records_only_recently_heard_thermometers(self):
-        clock = Clock(1_000_000.0)  # a multiple of 300 minus 200: 999_900 is the interval start
+        clock = Clock(1_000_000.0)  # 999_900 is the 5-minute interval start
         store = tg.Store([{"mac": "A4:C1:38:00:00:09", "name": "沒聲音"}], clock=clock)
         store.update("A4:C1:38:00:00:01", {"temperature": 21.0, "humidity": 50.0, "battery": 90})
         clock.now -= 400
         store.update("A4:C1:38:00:00:02", {"temperature": 30.0})
         clock.now += 400
-        history = tg.History(clock=clock)
+        history = tg.History(clock=clock, utc_offset=0)
         self.assertEqual(history.record(store), 1)
+        rows = history.db.execute("SELECT mac, t FROM samples").fetchall()
+        self.assertEqual(rows, [("A4:C1:38:00:00:01", 999_900)])
         result = history.query("a4:c1:38:00:00:01", "day")
-        self.assertEqual(result["points"], [{"t": 999_900, "temperature": 21.0, "humidity": 50.0, "battery": 90}])
+        self.assertEqual(result["points"], [{"t": 999_000, "temperature": 21.0, "humidity": 50.0, "battery": 90,
+                                             "temperature_min": 21.0, "temperature_max": 21.0,
+                                             "humidity_min": 50.0, "humidity_max": 50.0}])
         self.assertEqual(history.query("A4:C1:38:00:00:02", "day")["points"], [])
 
-    def test_buckets_average_and_ranges(self):
-        clock = Clock(10 * 86400.0)
-        history = tg.History(clock=clock)
+    def test_day_is_half_hours_and_week_is_local_calendar_days(self):
+        taipei = 8 * 3600
+        midnight = 20 * 86400 - taipei          # local midnight in UTC+8
+        clock = Clock(midnight + 10 * 3600)     # 10:00 local
+        history = tg.History(clock=clock, utc_offset=taipei)
         mac = "A4:C1:38:00:00:01"
-        history.add([(mac, 10 * 86400 - 1800, 20.0, 40.0, 80), (mac, 10 * 86400 - 1500, 22.0, 60.0, 79),
-                     (mac, 10 * 86400 - 2 * 86400, 10.0, 10.0, 90)])
+        history.add([
+            (mac, midnight + 9 * 3600, 20.0, 40.0, 80), (mac, midnight + 9 * 3600 + 600, 24.0, 60.0, 79),
+            (mac, midnight - 3600, 30.0, 70.0, 81),           # 23:00 yesterday, local
+            (mac, midnight - 6 * 86400 + 60, 15.0, 30.0, 90),  # 6 days ago: still in the week
+            (mac, midnight - 7 * 86400 + 60, 99.0, 99.0, 99),  # 7 days ago: out of the week
+        ])
+        day = history.query(mac, "day")
+        self.assertEqual(day["bucket"], 1800)
+        self.assertEqual(day["utc_offset"], taipei)
+        self.assertEqual([p["t"] for p in day["points"]], [midnight - 3600, midnight + 9 * 3600])
+        self.assertEqual(day["points"][-1]["temperature"], 22.0)
         week = history.query(mac, "week")
-        self.assertEqual(week["bucket"], 1800)
-        self.assertEqual(week["points"][-1], {"t": 10 * 86400 - 1800, "temperature": 21.0, "humidity": 50.0, "battery": 79})
-        self.assertEqual(len(week["points"]), 2)
-        self.assertEqual(len(history.query(mac, "day")["points"]), 2)  # the 2-day-old sample is out
+        self.assertEqual(week["bucket"], 86400)
+        self.assertEqual([p["t"] for p in week["points"]], [midnight - 6 * 86400, midnight - 86400, midnight])
+        today = week["points"][-1]
+        self.assertEqual((today["temperature_min"], today["temperature_max"], today["humidity_min"], today["humidity_max"]),
+                         (20.0, 24.0, 40.0, 60.0))
+        self.assertEqual(today["battery"], 79)
+        self.assertEqual(len(history.query(mac, "month")["points"]), 4)
 
     def test_old_samples_are_dropped(self):
         clock = Clock(100 * 86400.0)
@@ -191,7 +209,8 @@ class HistoryTests(unittest.TestCase):
         history = tg.History(clock=clock)
         history.seed_demo(store)
         month = history.query("A4:C1:38:00:00:01", "month")["points"]
-        self.assertGreater(len(month), 350)
+        self.assertIn(len(month), (30, 31))
+        self.assertGreater(month[-2]["temperature_max"] - month[-2]["temperature_min"], 2.0)
         temps = [p["temperature"] for p in history.query("A4:C1:38:00:00:01", "day")["points"]]
         self.assertGreater(max(temps) - min(temps), 2.0)
         self.assertEqual(history.query("A4:C1:38:00:00:04", "day")["points"], [])
@@ -251,8 +270,9 @@ class FakeAndHttpTests(unittest.TestCase):
         base = self._serve(tg.check_bind("127.0.0.1", ["127.0.0.0/8"]))
         code, body, _ = self._get(base + "/history?id=a4%3Ac1%3A38%3A00%3A00%3A01&range=week")
         self.assertEqual(code, 200)
-        self.assertEqual((body["version"], body["id"], body["range"], body["bucket"]), (1, "A4:C1:38:00:00:01", "week", 1800))
-        self.assertEqual(set(body["points"][0]), {"t", "temperature", "humidity", "battery"})
+        self.assertEqual((body["version"], body["id"], body["range"], body["bucket"]), (1, "A4:C1:38:00:00:01", "week", 86400))
+        self.assertEqual(set(body["points"][0]), {"t", "temperature", "humidity", "battery", "temperature_min",
+                                                  "temperature_max", "humidity_min", "humidity_max"})
         self.assertEqual(self._get(base + "/history?id=A4:C1:38:00:00:01")[1]["range"], "day")
         self.assertEqual(self._get(base + "/history?id=A4:C1:38:00:00:01&range=year")[0], 400)
         self.assertEqual(self._get(base + "/history?id=A4:C1:38:00:00:77")[0], 404)

@@ -133,7 +133,7 @@ final class ThermoModel: ObservableObject {
         let gateway = found.0, thermometer = found.1
         if isDemo {
             let now = gateway.gatewayNow(phoneNow: Date()) ?? Int(Date().timeIntervalSince1970)
-            return .success(.demo(for: thermometer, range: range, now: now))
+            return .success(.demo(for: thermometer, range: range, now: now, utcOffset: TimeZone.current.secondsFromGMT()))
         }
         do {
             return .success(try await client.history(gateway.endpoint, id: thermometer.id, range: range))
@@ -148,12 +148,62 @@ final class ThermoModel: ObservableObject {
         preferences.displayName(sensor)
     }
 
-    /// Hidden thermometers from every gateway, for the bottom section.
-    var hiddenRows: [ThermoRowItem] {
+    /// Every thermometer from every gateway shown.
+    var allRows: [ThermoRowItem] {
         shown.flatMap { gateway in
-            preferences.arrange(gateway.feed?.sensors ?? []).hidden.map { ThermoRowItem(gateway: gateway, sensor: $0) }
+            (gateway.feed?.sensors ?? []).map { ThermoRowItem(gateway: gateway, sensor: $0) }
         }
     }
+
+    /// Visible thermometers by room, as Mi Home lists devices.
+    var roomGroups: [ThermoRoomGroup<ThermoRowItem>] {
+        preferences.byRoom(allRows) { $0.sensor }
+    }
+
+    /// Hidden thermometers from every gateway, for the bottom section.
+    var hiddenRows: [ThermoRowItem] {
+        allRows.filter { preferences.hidden.contains($0.sensor.id) }
+            .sorted { displayName($0.sensor).localizedStandardCompare(displayName($1.sensor)) == .orderedAscending }
+    }
+
+    /// Visible thermometers whose battery needs replacing.
+    var lowBatteryRows: [ThermoRowItem] {
+        allRows.filter { !preferences.hidden.contains($0.sensor.id) && ThermoText.isBatteryLow($0.sensor.battery) }
+    }
+
+    /// Gateways with something to say: unreachable, still loading, or hearing no thermometer.
+    var gatewayNotices: [ThermoGatewayNotice] {
+        guard !isDemo else { return [] }
+        return gateways.compactMap { gateway in
+            if let error = gateway.error {
+                let suffix = gateway.feed == nil ? "" : "（顯示上次讀到的資料）"
+                return ThermoGatewayNotice(id: gateway.id, title: gateway.title, text: error.displayText + suffix, isError: true)
+            }
+            guard let feed = gateway.feed else {
+                return ThermoGatewayNotice(id: gateway.id, title: gateway.title, text: "讀取中…", isError: false)
+            }
+            if feed.sensors.isEmpty {
+                return ThermoGatewayNotice(id: gateway.id, title: gateway.title, text: "還沒聽到任何溫濕度計", isError: false)
+            }
+            return nil
+        }
+    }
+
+    /// Rooms to offer: Mi Home's usual rooms plus every room already in use.
+    var roomChoices: [String] {
+        var out = ["客廳", "臥室", "書房", "廚房", "浴室", "陽台", "辦公室"]
+        for room in preferences.allRooms where !out.contains(room) {
+            out.append(room)
+        }
+        return out
+    }
+}
+
+struct ThermoGatewayNotice: Identifiable {
+    let id: String
+    let title: String
+    let text: String
+    let isError: Bool
 }
 
 struct ThermoRowItem: Identifiable {

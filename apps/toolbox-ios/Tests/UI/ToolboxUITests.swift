@@ -151,15 +151,19 @@ final class ToolboxUITests: XCTestCase {
         XCTAssertTrue(element("thermo-row-A4:C1:38:00:00:03").exists, "third demo thermometer missing")
         XCTAssertTrue(shows("26.1°", in: row), "temperature not shown: \(row.label)")
         XCTAssertTrue(shows("12%", in: element("thermo-row-A4:C1:38:00:00:03")), "low battery not shown")
+        XCTAssertTrue(element("thermo-low-battery").exists, "low battery reminder missing")
+        XCTAssertTrue(element("thermo-room-header-\(unassigned)").exists, "unassigned room section missing")
         snapshot("08-thermo-demo-list")
         row.tap()
         XCTAssertTrue(element("thermo-detail-reading").waitForExistence(timeout: 10), "thermometer page did not open")
         XCTAssertTrue(element("thermo-detail-battery").label.contains("93%"), "battery missing: \(element("thermo-detail-battery").label)")
+        // 26.1 °C and 64.5 % are above the standard comfortable range (20–26 °C, 40–60 %).
+        XCTAssertTrue(element("thermo-comfort").label.contains("偏熱"), "comfort: \(element("thermo-comfort").label)")
         let summary = element("thermo-summary")
         XCTAssertTrue(summary.waitForExistence(timeout: 10), "history summary missing")
         XCTAssertTrue(summary.label.contains("最高"), "summary: \(summary.label)")
         snapshot("09-thermo-demo-chart-day")
-        app.segmentedControls["thermo-range"].buttons["7 天"].tap()
+        app.segmentedControls["thermo-range"].buttons["週"].tap()
         app.segmentedControls["thermo-metric"].buttons["濕度"].tap()
         XCTAssertTrue(poll(timeout: 10) { self.element("thermo-summary").label.contains("%") }, "humidity summary missing")
         snapshot("10-thermo-demo-chart-week-humidity")
@@ -171,8 +175,20 @@ final class ToolboxUITests: XCTestCase {
         renameRow.tap()
         renameIn(alertWith: "客廳", to: "Office A", shot: "11-thermo-rename-dialog")
         XCTAssertTrue(app.navigationBars["Office A"].waitForExistence(timeout: 5), "title did not take the new name")
+        // Put it in a room, as Mi Home groups devices by room.
+        let roomRow = element("thermo-room")
+        for _ in 0..<4 where !roomRow.isHittable {
+            app.swipeUp()
+        }
+        roomRow.tap()
+        let study = element("thermo-room-書房")
+        XCTAssertTrue(study.waitForExistence(timeout: 10), "room choices missing")
+        snapshot("12-thermo-room-picker")
+        study.tap()
+        XCTAssertTrue(poll(timeout: 10) { roomRow.label.contains("書房") }, "room not set: \(roomRow.label)")
         app.navigationBars.buttons.firstMatch.tap()
         XCTAssertTrue(row.waitForExistence(timeout: 10), "list did not come back")
+        XCTAssertTrue(element("thermo-room-header-書房").waitForExistence(timeout: 10), "room section missing")
         XCTAssertTrue(poll(timeout: 10) { self.shows("Office A", in: row) }, "new name not in the list: \(row.label)")
         XCTAssertFalse(shows("客廳", in: row), "old name still shown: \(row.label)")
         // Swipe left on another thermometer in the list.
@@ -183,8 +199,18 @@ final class ToolboxUITests: XCTestCase {
         swipe.tap()
         renameIn(alertWith: "臥室", to: "Bedroom B", shot: nil)
         XCTAssertTrue(poll(timeout: 10) { self.shows("Bedroom B", in: bedroom) }, "swipe rename not in the list: \(bedroom.label)")
-        snapshot("12-thermo-renamed-list")
+        // Fahrenheit, from the settings.
+        element("thermo-settings").tap()
+        let unit = app.segmentedControls["thermo-unit"]
+        XCTAssertTrue(unit.waitForExistence(timeout: 10), "unit setting missing")
+        unit.buttons["華氏 °F"].tap()
+        snapshot("13-thermo-settings")
+        app.buttons["取消"].tap()
+        XCTAssertTrue(poll(timeout: 10) { self.shows("79.0°F", in: row) }, "Fahrenheit not shown: \(row.label)")
+        snapshot("14-thermo-rooms-fahrenheit")
     }
+
+    private var unassigned: String { "未指定房間" }
 
     /// Fills the rename dialog, which must open holding `current`.
     private func renameIn(alertWith current: String, to name: String, shot: String?) {
@@ -212,17 +238,21 @@ final class ToolboxUITests: XCTestCase {
         let room = element("thermo-row-A4:C1:38:00:00:03")
         XCTAssertTrue(room.waitForExistence(timeout: 30), "fake gateway's thermometers missing")
         XCTAssertFalse(element("thermo-demo-banner").exists, "demo banner shown with gateways set")
-        XCTAssertTrue(app.staticTexts["示範閘道"].exists, "gateway name missing")
         XCTAssertTrue(shows("40 分鐘前", in: room), "stale age missing: \(room.label)")
         XCTAssertTrue(shows("連線讀取失敗", in: element("thermo-row-A4:C1:38:00:00:04")), "thermometer error missing")
         XCTAssertTrue(element("thermo-gateway-error").waitForExistence(timeout: 30), "the dead gateway shows no error")
-        snapshot("13-thermo-gateways")
+        snapshot("15-thermo-gateways")
         room.tap()
         XCTAssertTrue(element("thermo-summary").waitForExistence(timeout: 15), "history from the fake gateway missing")
-        snapshot("14-thermo-gateway-chart")
+        snapshot("16-thermo-gateway-chart")
+        let gatewayRow = element("thermo-detail-gateway")
+        for _ in 0..<8 where !(gatewayRow.exists && gatewayRow.isHittable) {
+            app.swipeUp()
+        }
+        XCTAssertTrue(gatewayRow.label.contains("示範閘道"), "gateway name missing: \(gatewayRow.label)")
         let hide = app.switches["thermo-hide"]
         for _ in 0..<6 where !hide.isHittable {
-            app.swipeUp()
+            app.swipeDown()
         }
         hide.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
         XCTAssertTrue(poll(timeout: 5) { (hide.value as? String) == "1" }, "hide switch did not turn on")
@@ -230,10 +260,15 @@ final class ToolboxUITests: XCTestCase {
         let hidden = element("thermo-hidden-group")
         XCTAssertTrue(hidden.waitForExistence(timeout: 10), "hidden section missing")
         XCTAssertFalse(room.exists, "hidden thermometer still in its gateway's list")
-        snapshot("15-thermo-hidden")
+        snapshot("17-thermo-hidden")
         element("thermo-settings").tap()
-        XCTAssertTrue(element("thermo-gateways").waitForExistence(timeout: 10), "gateway settings did not open")
-        snapshot("16-thermo-settings")
+        XCTAssertTrue(app.segmentedControls["thermo-unit"].waitForExistence(timeout: 10), "settings did not open")
+        let gateways = element("thermo-gateways")
+        for _ in 0..<4 where !(gateways.exists && gateways.isHittable) {
+            app.swipeUp()
+        }
+        XCTAssertTrue(gateways.exists, "gateway addresses missing from the settings")
+        snapshot("18-thermo-settings-gateways")
     }
 
     private var thermoTab: XCUIElement { app.tabBars.buttons["溫濕度"] }

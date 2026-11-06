@@ -18,8 +18,12 @@ public enum ThermoFreshness: Equatable, Sendable {
 
 /// Display text for the thermometer screens (Traditional Chinese).
 public enum ThermoText {
-    public static func temperature(_ value: Double?) -> String {
+    /// Celsius as "24.8°"; Fahrenheit (the phone's unit setting) as "76.6°F".
+    public static func temperature(_ value: Double?, fahrenheit: Bool = false) -> String {
         guard let value else { return "--" }
+        if fahrenheit {
+            return String(format: "%.1f°F", value * 9 / 5 + 32)
+        }
         return String(format: "%.1f°", value)
     }
 
@@ -81,15 +85,81 @@ public enum ThermoText {
     }
 }
 
+public struct ThermoRoomGroup<Item>: Identifiable {
+    public let room: String
+    public let items: [Item]
+
+    public var id: String { room }
+}
+
 /// The phone's own names and hidden thermometers, keyed by the thermometer's address. Stored
 /// only on this phone; the gateway's names are the defaults.
 public struct ThermoPreferences: Codable, Equatable, Sendable {
     public static let maxNameLength = 40
+    public static let noRoom = "未指定房間"
 
     public var names: [String: String] = [:]
     public var hidden: Set<String> = []
+    /// Room per thermometer, as Mi Home groups devices by room.
+    public var rooms: [String: String] = [:]
+    public var fahrenheit = false
+    public var comfort = ThermoComfortZone.standard
 
     public init() {}
+
+    enum CodingKeys: String, CodingKey {
+        case names, hidden, rooms, fahrenheit, comfort
+    }
+
+    /// Settings saved by an earlier version miss the newer keys; those take their defaults.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        names = try container.decodeIfPresent([String: String].self, forKey: .names) ?? [:]
+        hidden = try container.decodeIfPresent(Set<String>.self, forKey: .hidden) ?? []
+        rooms = try container.decodeIfPresent([String: String].self, forKey: .rooms) ?? [:]
+        fahrenheit = try container.decodeIfPresent(Bool.self, forKey: .fahrenheit) ?? false
+        comfort = try container.decodeIfPresent(ThermoComfortZone.self, forKey: .comfort) ?? .standard
+    }
+
+    public func room(_ id: String) -> String? {
+        rooms[id]
+    }
+
+    /// An empty room clears it.
+    public mutating func setRoom(_ id: String, _ room: String?) {
+        let trimmed = (room ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        rooms[id] = trimmed.isEmpty ? nil : String(trimmed.prefix(Self.maxNameLength))
+    }
+
+    /// Every room in use, sorted.
+    public var allRooms: [String] {
+        Set(rooms.values).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+
+    public func comfortLevel(_ sensor: ThermoSensor) -> ThermoComfortLevel {
+        ThermoComfort.level(temperature: sensor.temperature, humidity: sensor.humidity, zone: comfort)
+    }
+
+    public func temperature(_ value: Double?) -> String {
+        ThermoText.temperature(value, fahrenheit: fahrenheit)
+    }
+
+    /// Visible thermometers grouped by room: named rooms sorted, then the unassigned ones.
+    public func byRoom<Item>(_ items: [Item], sensor: (Item) -> ThermoSensor) -> [ThermoRoomGroup<Item>] {
+        let visible = items.filter { !hidden.contains(sensor($0).id) }
+        let sorted = visible.sorted {
+            let order = displayName(sensor($0)).localizedStandardCompare(displayName(sensor($1)))
+            return order == .orderedSame ? sensor($0).id < sensor($1).id : order == .orderedAscending
+        }
+        var groups: [String: [Item]] = [:]
+        for item in sorted {
+            groups[rooms[sensor(item).id] ?? Self.noRoom, default: []].append(item)
+        }
+        let named = groups.keys.filter { $0 != Self.noRoom }.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        return (named + (groups[Self.noRoom] == nil ? [] : [Self.noRoom])).map {
+            ThermoRoomGroup(room: $0, items: groups[$0] ?? [])
+        }
+    }
 
     public func displayName(_ sensor: ThermoSensor) -> String {
         if let name = names[sensor.id], !name.isEmpty { return name }

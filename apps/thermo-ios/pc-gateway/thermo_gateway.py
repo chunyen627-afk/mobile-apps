@@ -217,8 +217,9 @@ class Store:
 
 
 SAMPLE_SECONDS = 300
-# range -> (span in seconds, bucket in seconds); about 300 points each.
-RANGES = {"day": (86400, 300), "week": (7 * 86400, 1800), "month": (30 * 86400, 7200)}
+# range -> (days, bucket in seconds): the day as 30-minute points, as in Mi Home's day view;
+# the week and month as one point per local calendar day with its lowest and highest.
+RANGES = {"day": (1, 1800), "week": (7, 86400), "month": (30, 86400)}
 
 
 def _round2(value):
@@ -228,9 +229,10 @@ def _round2(value):
 class History:
     """5-minute samples per thermometer in SQLite, averaged into buckets when queried."""
 
-    def __init__(self, path=":memory:", keep_days=90, clock=time.time):
+    def __init__(self, path=":memory:", keep_days=90, clock=time.time, utc_offset=None):
         self.clock = clock
         self.keep_days = keep_days
+        self.offset = utc_offset  # None: this PC's local time zone (days start at local midnight)
         self.lock = threading.Lock()
         self.db = sqlite3.connect(str(path), check_same_thread=False)
         self.db.execute("CREATE TABLE IF NOT EXISTS samples (mac TEXT NOT NULL, t INTEGER NOT NULL, "
@@ -255,18 +257,33 @@ class History:
             self.db.execute("DELETE FROM samples WHERE t < ?", (round(self.clock()) - self.keep_days * 86400,))
             self.db.commit()
 
+    def utc_offset(self):
+        if self.offset is not None:
+            return self.offset
+        return time.localtime(self.clock()).tm_gmtoff
+
     def query(self, mac, range_name):
-        span, bucket = RANGES[range_name]
+        """day: the last 24 hours in 30-minute points; week and month: one point per local
+        calendar day (the last 7 or 30, today included), each with the day's lowest and highest."""
+        days, bucket = RANGES[range_name]
         now = round(self.clock())
+        off = self.utc_offset()
+        if range_name == "day":
+            start = now - 86400
+        else:
+            start = (now + off) // 86400 * 86400 - off - (days - 1) * 86400
         with self.lock:
             rows = self.db.execute(
-                "SELECT (t / ?) * ? AS b, AVG(temperature), AVG(humidity), MIN(battery) FROM samples "
+                "SELECT ((t + ?) / ?) * ? - ? AS b, AVG(temperature), AVG(humidity), MIN(battery), "
+                "MIN(temperature), MAX(temperature), MIN(humidity), MAX(humidity) FROM samples "
                 "WHERE mac = ? AND t >= ? GROUP BY b ORDER BY b",
-                (bucket, bucket, normalize_mac(mac), now - span)).fetchall()
-        points = [{"t": b, "temperature": _round2(temp), "humidity": _round2(hum), "battery": batt}
-                  for b, temp, hum, batt in rows]
+                (off, bucket, bucket, off, normalize_mac(mac), start)).fetchall()
+        points = [{"t": b, "temperature": _round2(temp), "humidity": _round2(hum), "battery": batt,
+                   "temperature_min": _round2(tmin), "temperature_max": _round2(tmax),
+                   "humidity_min": _round2(hmin), "humidity_max": _round2(hmax)}
+                  for b, temp, hum, batt, tmin, tmax, hmin, hmax in rows]
         return {"version": API_VERSION, "id": normalize_mac(mac), "range": range_name, "bucket": bucket,
-                "time": now, "points": points}
+                "time": now, "utc_offset": off, "points": points}
 
     def seed_demo(self, store, days=30):
         """Made-up daily curves for the fake mode, ending at each thermometer's reading."""
