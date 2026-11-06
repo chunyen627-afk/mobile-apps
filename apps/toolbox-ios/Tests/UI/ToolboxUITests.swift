@@ -238,7 +238,8 @@ final class ToolboxUITests: XCTestCase {
         let room = element("thermo-row-A4:C1:38:00:00:03")
         XCTAssertTrue(room.waitForExistence(timeout: 30), "fake gateway's thermometers missing")
         XCTAssertFalse(element("thermo-demo-banner").exists, "demo banner shown with gateways set")
-        XCTAssertTrue(shows("40 分鐘前", in: room), "stale age missing: \(room.label)")
+        // The fixture is 40 minutes old when the fake gateway starts, and ages with it.
+        XCTAssertTrue(shows("分鐘前", in: room) && !shows("剛剛", in: room), "stale age missing: \(room.label)")
         XCTAssertTrue(shows("連線讀取失敗", in: element("thermo-row-A4:C1:38:00:00:04")), "thermometer error missing")
         XCTAssertTrue(element("thermo-gateway-error").waitForExistence(timeout: 30), "the dead gateway shows no error")
         snapshot("15-thermo-gateways")

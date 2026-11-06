@@ -225,7 +225,7 @@ final class HistoryTests: XCTestCase {
 
     func testDemoHistoryEndsAtTheReading() {
         let taipei = 8 * 3600
-        let now = 20 * 86400 - taipei + 10 * 3600  // 10:00 local
+        let now = 20_000 * 86400 - taipei + 10 * 3600  // 10:00 local, in 2024 (a month back stays after 1970)
         let sensor = ThermoFeed.demo(now: now).sensors[0]
         let day = ThermoHistory.demo(for: sensor, range: .day, now: now, utcOffset: taipei)
         XCTAssertEqual(day.points.count, 48)

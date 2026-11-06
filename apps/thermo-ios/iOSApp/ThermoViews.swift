@@ -63,6 +63,7 @@ struct ThermoListView: View {
                           systemImage: "battery.25")
                         .font(.footnote)
                         .foregroundStyle(.red)
+                        .accessibilityElement(children: .combine)
                         .accessibilityIdentifier("thermo-low-battery")
                 }
             }
@@ -137,29 +138,37 @@ struct ThermoRow: View {
         let freshness = ThermoFreshness.of(updated: sensor.updated, now: now)
         let comfort = preferences.comfortLevel(sensor)
         HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(name)
                     .font(.headline)
                     .lineLimit(1)
-                HStack(spacing: 10) {
-                    if comfort != .unknown {
-                        Text(comfort.text)
-                            .foregroundStyle(comfort.isComfortable ? Color.green : Color.orange)
-                    }
+                if comfort != .unknown {
+                    Text(comfort.text)
+                        .font(.caption)
+                        .foregroundStyle(comfort.isComfortable ? Color.green : Color.orange)
+                        .lineLimit(1)
+                }
+                // One line, never wrapped letter by letter: time first, then the battery.
+                HStack(spacing: 8) {
                     Label(ThermoText.age(updated: sensor.updated, now: now), systemImage: Self.symbol(freshness))
                         .foregroundStyle(Self.color(freshness))
+                        .fixedSize()
                     if sensor.battery != nil {
                         Label(ThermoText.battery(sensor.battery), systemImage: ThermoText.batterySymbol(sensor.battery))
                             .foregroundStyle(ThermoText.isBatteryLow(sensor.battery) ? Color.red : Color.secondary)
+                            .fixedSize()
                     }
                 }
                 .font(.caption)
+                .labelStyle(ThermoCompactLabel())
                 if let error = sensor.error {
                     Text(error)
                         .font(.caption)
                         .foregroundStyle(.red)
+                        .lineLimit(2)
                 }
             }
+            .layoutPriority(1)
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 2) {
                 Text(preferences.temperature(sensor.temperature))
@@ -170,7 +179,9 @@ struct ThermoRow: View {
                     .font(.subheadline)
                     .monospacedDigit()
                     .foregroundStyle(.blue)
+                    .labelStyle(ThermoCompactLabel())
             }
+            .fixedSize()
         }
         .padding(.vertical, 4)
     }
@@ -189,6 +200,16 @@ struct ThermoRow: View {
         case .fresh: return .secondary
         case .stale: return .orange
         case .lost, .never: return .red
+        }
+    }
+}
+
+/// Icon and text close together, as Mi Home's small status lines.
+struct ThermoCompactLabel: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 3) {
+            configuration.icon
+            configuration.title
         }
     }
 }
@@ -229,6 +250,7 @@ struct ThermoDetailView: View {
                     Label(comfort.text, systemImage: comfort.isComfortable ? "face.smiling" : "exclamationmark.circle")
                         .font(.headline)
                         .foregroundStyle(comfort.isComfortable ? Color.green : Color.orange)
+                        .accessibilityElement(children: .combine)
                         .accessibilityIdentifier("thermo-comfort")
                 }
                 HStack {
@@ -236,6 +258,7 @@ struct ThermoDetailView: View {
                     Spacer()
                     Label("電量 \(ThermoText.battery(sensor.battery))", systemImage: ThermoText.batterySymbol(sensor.battery))
                         .foregroundStyle(ThermoText.isBatteryLow(sensor.battery) ? Color.red : Color.primary)
+                        .accessibilityElement(children: .combine)
                         .accessibilityIdentifier("thermo-detail-battery")
                 }
                 .font(.subheadline)
@@ -282,6 +305,7 @@ struct ThermoDetailView: View {
                 LabeledContent("訊號", value: ThermoText.rssi(sensor.rssi))
                 LabeledContent("讀取方式", value: ThermoText.format(sensor.format))
                 LabeledContent("閘道", value: gateway.title)
+                    .accessibilityElement(children: .combine)
                     .accessibilityIdentifier("thermo-detail-gateway")
                 LabeledContent("裝置位址", value: sensor.id)
                 if let error = sensor.error {
@@ -308,6 +332,7 @@ struct ThermoDetailView: View {
                 Text("示範資料沒有通知。設定閘道後，這裡會列出閘道的推播條件。").foregroundStyle(.secondary)
             } else if let alerts {
                 LabeledContent("推播", value: alerts.enabled ? "開啟（ntfy）" : "閘道沒有設定推播")
+                    .accessibilityElement(children: .combine)
                     .accessibilityIdentifier("thermo-alerts-enabled")
                 ForEach(alerts.lines(fahrenheit: model.preferences.fahrenheit)) { line in
                     LabeledContent(line.title, value: line.value)
