@@ -7,7 +7,7 @@
 | App | 平台 | 用途 | 驗證狀態 |
 | --- | --- | --- | --- |
 | [光盒相簿](apps/album-ios) | iPhone / iOS 17+ | SMB 相簿、資料夾索引、照片預載、影片播放與診斷匯出 | 0.3.1 的 39 項測試、畫面檢查及封裝通過；已覆蓋安裝並讀回確認 build 4，新版功能回歸與偶發退出問題待實機驗證 |
-| [工具箱](apps/toolbox-ios) | iPhone / iOS 17+ | 相簿、礦機狀態與桌面遙控合成一個 App，底部分頁切換，只佔 1 個側載名額；沿用相簿的 Bundle ID 覆蓋安裝 | 0.4.3 build 9（相簿＋礦機）已發布；0.5.0 build 10 加入桌面遙控分頁，見 [apps/toolbox-ios/README.md](apps/toolbox-ios/README.md) 的驗證狀態 |
+| [工具箱](apps/toolbox-ios) | iPhone / iOS 17+ | 相簿、礦機狀態、桌面遙控與溫濕度合成一個 App，底部分頁切換，只佔 1 個側載名額；沿用相簿的 Bundle ID 覆蓋安裝 | 0.4.3 build 9（相簿＋礦機）已發布；0.5.0 build 10 加入桌面遙控分頁；0.6.0 build 15 加入溫濕度分頁（開發中），見 [apps/toolbox-ios/README.md](apps/toolbox-ios/README.md) 的驗證狀態 |
 | [桌面遙控](apps/desk-remote-ios) | iPhone / iOS 17+ | 在手機上看 Claude／Codex 桌面版的對話、傳訊息、回答問題、按視窗、核准提權；電腦端有 Python 小幫手 | 0.6.2 build 14 已裝在手機；程式在 `claude/desk-remote` 分支，已併進工具箱的 `claude/toolbox-ios` |
 | [礦機狀態](apps/miner-status-ios) | iPhone / iOS 16+ | 以燈號與白名單詳情顯示礦機狀態；預設離線示範，可手動設定唯讀來源（僅前景） | macOS CI 編譯通過；80 項單元測試、11 項模擬器 UI 測試 0 失敗，截圖已人工檢視（[run 40109294512](https://github.com/chunyen627-afk/mobile-apps/actions/runs/40109294512)）；IPA 以公開 prerelease 發布；**build 2 實機通過**（打得開、畫面正常），接電腦端唯讀服務的真實資料兩台皆綠燈；iPad 未驗證 |
 
@@ -18,12 +18,13 @@ apps/
   album-ios/               光盒相簿（SwiftUI 原生 App）
   miner-status-ios/        礦機狀態（SwiftUI、XcodeGen，沿用相簿架構）
   desk-remote-ios/         桌面遙控（SwiftUI；pc-helper/ 是電腦端小幫手）
-  toolbox-ios/             工具箱（直接編譯上面三個 App 的原始碼，不複製）
+  thermo-ios/              溫濕度（只在工具箱裡；pc-gateway/ 是藍牙閘道）
+  toolbox-ios/             工具箱（直接編譯上面四個工具的原始碼，不複製）
 .github/workflows/
   album-ios.yml            相簿的 macOS 編譯與測試
   miner-status-ios.yml     礦機的 macOS 編譯與測試（只在開發分支 push 時觸發，不上傳大檔）
   desk-remote-ios.yml      桌面遙控的 macOS 編譯與測試（只在開發分支 push 時觸發）
-  toolbox-ios.yml          工具箱的 macOS 編譯與測試（相簿、礦機或桌面遙控原始碼改動時也會執行）
+  toolbox-ios.yml          工具箱的 macOS 編譯與測試（相簿、礦機、桌面遙控或溫濕度原始碼改動時也會執行）
 docs/
   ios-app-autonomous-ci.md 新 App 的 AI 自主建置流程與實戰日記
 ```

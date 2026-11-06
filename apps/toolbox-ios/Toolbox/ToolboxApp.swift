@@ -3,7 +3,8 @@ import SwiftUI
 /// The toolbox: one app on the phone (one Apple App ID, one renewal) with each tool as a tab.
 /// It keeps the photo album's bundle identifier, so installing it over the album keeps the
 /// album's settings and saved password. The tools' screens come from their own app folders
-/// (apps/album-ios, apps/miner-status-ios, apps/desk-remote-ios); nothing is copied here.
+/// (apps/album-ios, apps/miner-status-ios, apps/desk-remote-ios, apps/thermo-ios); nothing is
+/// copied here.
 @main
 struct ToolboxApp: App {
     var body: some Scene {
@@ -15,7 +16,7 @@ struct ToolboxApp: App {
 }
 
 enum ToolboxTool: String, CaseIterable {
-    case album, miner, desk
+    case album, miner, desk, thermo
 }
 
 struct ToolboxRoot: View {
@@ -35,6 +36,9 @@ struct ToolboxRoot: View {
             DeskRemoteRootView(link: $deskLink)
                 .tabItem { Label("桌面遙控", systemImage: "desktopcomputer") }
                 .tag(ToolboxTool.desk.rawValue)
+            ThermoRootView()
+                .tabItem { Label("溫濕度", systemImage: "thermometer.medium") }
+                .tag(ToolboxTool.thermo.rawValue)
         }
         .onAppear { tool = Self.startTool(stored: tool) }
         // Logged with the album's diagnostics, so an unexpected end shows which tab was in use.

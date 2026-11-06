@@ -1,0 +1,12 @@
+{
+  "bind_ip": "192.0.2.10",
+  "port": 18787,
+  "allowed_networks": ["192.0.2.0/24"],
+  "gateway_name": "辦公室",
+  "discover": true,
+  "gatt_poll_seconds": 300,
+  "sensors": [
+    {"mac": "A4:C1:38:00:00:01", "name": "座位"},
+    {"mac": "A4:C1:38:00:00:02", "name": "原廠韌體那顆", "gatt": true}
+  ]
+}

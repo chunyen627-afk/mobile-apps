@@ -19,6 +19,7 @@ on:
       - 'apps/desk-remote-ios/Tests/**'
       - 'apps/desk-remote-ios/fixtures/**'
       - 'apps/desk-remote-ios/pc-helper/**'
+      - 'apps/thermo-ios/**'
       - '.github/workflows/toolbox-ios.yml'
 # Write access is used only to publish an approved release and to force-push simulator
 # screenshots (fixture and demo data only) to one dedicated branch.
@@ -87,9 +88,10 @@ jobs:
           notes=$(printf '%s\n' \
             "未簽署 IPA，需用自己的 Apple 帳號簽署後安裝。沿用相簿的 Bundle ID，覆蓋安裝會保留相簿與礦機設定；只含模擬器測試資料與離線示範資料，不含任何真實位址、密碼或金鑰。" \
             "桌面遙控分頁要重新配對電腦（單獨的桌面遙控 App 的設定不會帶過來）；電腦端小幫手在 apps/desk-remote-ios/pc-helper。" \
+            "溫濕度分頁要在設定填入閘道網址；閘道程式在 apps/thermo-ios/pc-gateway。" \
             "" \
             "- 來源 commit：${GITHUB_SHA}" \
-            "- 建置與測試：run ${GITHUB_RUN_ID}（小幫手、相簿、礦機與桌面遙控的單元測試，工具箱、相簿與桌面遙控的模擬器 UI 測試皆通過才發布）" \
+            "- 建置與測試：run ${GITHUB_RUN_ID}（小幫手、溫濕度閘道、相簿、礦機、桌面遙控與溫濕度的單元測試，工具箱（含溫濕度分頁）、相簿與桌面遙控的模擬器 UI 測試皆通過才發布）" \
             "- 大小：${size} bytes" \
             "- SHA256：${sha}" \
             "- ${symbols}：閃退分析用符號檔")
@@ -102,7 +104,7 @@ jobs:
         working-directory: ${{ env.APP_DIR }}/build
         run: |
           mkdir -p reports
-          for f in test-summary.txt desk-helper-tests.log fake-helper.log; do [ -f "$f" ] && cp "$f" reports/; done
+          for f in test-summary.txt desk-helper-tests.log fake-helper.log thermo-gateway-tests.log fake-thermo-gateway.log; do [ -f "$f" ] && cp "$f" reports/; done
           ls -l reports
           total=$(find reports -type f -exec stat -f %z {} + | awk '{s+=$1} END {print s+0}')
           echo "reports total: $total bytes"

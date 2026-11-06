@@ -1,5 +1,6 @@
 #!/bin/bash
-# Mac-only build of the toolbox: the desk remote's PC helper unit tests, the album's icon and VLC
+# Mac-only build of the toolbox: the desk remote's PC helper and the thermometer gateway unit
+# tests, the album's icon and VLC
 # download, XcodeGen, every tool's unit tests plus the toolbox, album and desk remote UI tests on
 # an iOS simulator (the desk remote against its fake helper on the Mac's loopback), then an
 # unsigned Release IPA. Requires Xcode 15+, XcodeGen and python3; this script installs nothing.
@@ -8,7 +9,9 @@ cd "$(dirname "$0")/.."
 EXPECTED_ALBUM_TESTS="${EXPECTED_ALBUM_TESTS:-52}"
 EXPECTED_MINER_TESTS="${EXPECTED_MINER_TESTS:-126}"
 EXPECTED_DESK_TESTS="${EXPECTED_DESK_TESTS:-45}"
-EXPECTED_TOOLBOX_UI_TESTS="${EXPECTED_TOOLBOX_UI_TESTS:-5}"
+EXPECTED_THERMO_TESTS="${EXPECTED_THERMO_TESTS:-21}"
+EXPECTED_THERMO_GATEWAY_TESTS="${EXPECTED_THERMO_GATEWAY_TESTS:-30}"
+EXPECTED_TOOLBOX_UI_TESTS="${EXPECTED_TOOLBOX_UI_TESTS:-7}"
 EXPECTED_ALBUM_UI_TESTS="${EXPECTED_ALBUM_UI_TESTS:-6}"
 EXPECTED_DESK_UI_TESTS="${EXPECTED_DESK_UI_TESTS:-41}"
 # Includes 3 Windows-only tests, skipped (and counted) on macOS.
@@ -23,6 +26,11 @@ DESK_BUSY_PORT="${DESK_BUSY_PORT:-8791}"
 DESK_CLOSED_PORT="${DESK_CLOSED_PORT:-8792}"
 DESK_POPUP_PORT="${DESK_POPUP_PORT:-8793}"
 DESK_DEAD_PORT="${DESK_DEAD_PORT:-8799}"
+# The thermometer gateway in its fake mode (fixture readings and made-up history, no Bluetooth),
+# plus a port where nothing listens, for the "gateway unreachable" screen.
+THERMO_DIR=$(cd ../thermo-ios && pwd)
+THERMO_PORT="${THERMO_PORT:-8795}"
+THERMO_DEAD_PORT="${THERMO_DEAD_PORT:-8798}"
 mkdir -p build
 
 # In GitHub Actions, report the failing phase and its errors as annotations, which the public API
@@ -85,6 +93,18 @@ if [[ -z "$DESK_HELPER_RESULT" ]] || ! tail -n 3 "$CURRENT_LOG" | grep -qE '^OK(
 fi
 echo "Desk remote helper: $DESK_HELPER_RESULT OK"
 
+# 0b. The thermometer gateway's unit tests (pure Python; Bluetooth is never imported).
+PHASE=thermo-gateway-tests
+CURRENT_LOG=build/thermo-gateway-tests.log
+(cd "$THERMO_DIR/pc-gateway" && python3 -m unittest discover -s tests -v) > "$CURRENT_LOG" 2>&1 || { cat "$CURRENT_LOG"; exit 1; }
+THERMO_GATEWAY_RESULT=$(grep -E "^Ran ${EXPECTED_THERMO_GATEWAY_TESTS} tests? in" "$CURRENT_LOG" || true)
+if [[ -z "$THERMO_GATEWAY_RESULT" ]] || ! tail -n 3 "$CURRENT_LOG" | grep -qE '^OK$'; then
+  echo "Expected ${EXPECTED_THERMO_GATEWAY_TESTS} thermometer gateway tests to pass."
+  tail -n 20 "$CURRENT_LOG"
+  exit 1
+fi
+echo "Thermometer gateway: $THERMO_GATEWAY_RESULT OK"
+
 # 1. The album's generated icon and pinned VLC framework (both live in apps/album-ios).
 PHASE=album-assets
 CURRENT_LOG=build/album-assets.log
@@ -118,7 +138,10 @@ if [[ "${RUN_TESTS:-1}" == "1" ]]; then
   python3 -I "$DESK_DIR/pc-helper/desk_remote_helper.py" --fake "$DESK_FIXTURES" --fake-port "$DESK_POPUP_PORT" --fake-popup --fake-update \
     > build/fake-helper-popup.log 2>&1 &
   HELPER_PIDS="$HELPER_PIDS $!"
-  for port in "$DESK_HELPER_PORT" "$DESK_BUSY_PORT" "$DESK_CLOSED_PORT" "$DESK_POPUP_PORT"; do
+  python3 -I "$THERMO_DIR/pc-gateway/thermo_gateway.py" --fake "$THERMO_DIR/fixtures/fake-sensors.json" \
+    --bind 127.0.0.1 --port "$THERMO_PORT" > build/fake-thermo-gateway.log 2>&1 &
+  HELPER_PIDS="$HELPER_PIDS $!"
+  for port in "$DESK_HELPER_PORT" "$DESK_BUSY_PORT" "$DESK_CLOSED_PORT" "$DESK_POPUP_PORT" "$THERMO_PORT"; do
     for _ in $(seq 1 20); do
       curl -sf "http://127.0.0.1:${port}/health" >/dev/null && break
       sleep 0.5
@@ -133,6 +156,8 @@ if [[ "${RUN_TESTS:-1}" == "1" ]]; then
   TEST_RUNNER_DESK_ELEVATE_KEY="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["elevate_key"])' "$DESK_FIXTURES/fake-config.json")" \
   TEST_RUNNER_DESK_HELPER_TOKEN="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["token"])' "$DESK_FIXTURES/fake-config.json")" \
   TEST_RUNNER_DESK_DEAD_PORT="$DESK_DEAD_PORT" \
+  TEST_RUNNER_THERMO_GATEWAY_URL="http://127.0.0.1:${THERMO_PORT}" \
+  TEST_RUNNER_THERMO_DEAD_URL="http://127.0.0.1:${THERMO_DEAD_PORT}" \
   xcodebuild test -project Toolbox.xcodeproj -scheme Lightbox \
     -parallel-testing-enabled NO \
     -destination "platform=iOS Simulator,id=$SIMULATOR_ID" -derivedDataPath build/DerivedData \
@@ -144,11 +169,12 @@ if [[ "${RUN_TESTS:-1}" == "1" ]]; then
   ALBUM_RESULT=$(bundle_result LightboxTests "$EXPECTED_ALBUM_TESTS")
   MINER_RESULT=$(bundle_result MinerStatusCoreTests "$EXPECTED_MINER_TESTS")
   DESK_RESULT=$(bundle_result DeskRemoteCoreTests "$EXPECTED_DESK_TESTS")
+  THERMO_RESULT=$(bundle_result ThermoCoreTests "$EXPECTED_THERMO_TESTS")
   TOOLBOX_UI_RESULT=$(bundle_result ToolboxUITests "$EXPECTED_TOOLBOX_UI_TESTS")
   ALBUM_UI_RESULT=$(bundle_result LightboxUITests "$EXPECTED_ALBUM_UI_TESTS")
   DESK_UI_RESULT=$(bundle_result DeskRemoteUITests "$EXPECTED_DESK_UI_TESTS")
-  if [[ -z "$ALBUM_RESULT" || -z "$MINER_RESULT" || -z "$DESK_RESULT" || -z "$TOOLBOX_UI_RESULT" || -z "$ALBUM_UI_RESULT" || -z "$DESK_UI_RESULT" ]]; then
-    echo "Expected ${EXPECTED_ALBUM_TESTS} album, ${EXPECTED_MINER_TESTS} miner, ${EXPECTED_DESK_TESTS} desk remote, ${EXPECTED_TOOLBOX_UI_TESTS} toolbox UI, ${EXPECTED_ALBUM_UI_TESTS} album UI and ${EXPECTED_DESK_UI_TESTS} desk remote UI tests with 0 failures; see build/test-summary.txt."
+  if [[ -z "$ALBUM_RESULT" || -z "$MINER_RESULT" || -z "$DESK_RESULT" || -z "$THERMO_RESULT" || -z "$TOOLBOX_UI_RESULT" || -z "$ALBUM_UI_RESULT" || -z "$DESK_UI_RESULT" ]]; then
+    echo "Expected ${EXPECTED_ALBUM_TESTS} album, ${EXPECTED_MINER_TESTS} miner, ${EXPECTED_DESK_TESTS} desk remote, ${EXPECTED_THERMO_TESTS} thermometer, ${EXPECTED_TOOLBOX_UI_TESTS} toolbox UI, ${EXPECTED_ALBUM_UI_TESTS} album UI and ${EXPECTED_DESK_UI_TESTS} desk remote UI tests with 0 failures; see build/test-summary.txt."
     exit 1
   fi
   if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
@@ -156,6 +182,8 @@ if [[ "${RUN_TESTS:-1}" == "1" ]]; then
     echo "::notice title=XCTest album unit::${ALBUM_RESULT}"
     echo "::notice title=XCTest miner unit::${MINER_RESULT}"
     echo "::notice title=XCTest desk remote unit::${DESK_RESULT}"
+    echo "::notice title=Thermometer gateway unittest::${THERMO_GATEWAY_RESULT} OK"
+    echo "::notice title=XCTest thermometer unit::${THERMO_RESULT}"
     echo "::notice title=XCTest toolbox UI::${TOOLBOX_UI_RESULT}"
     echo "::notice title=XCTest album UI::${ALBUM_UI_RESULT}"
     echo "::notice title=XCTest desk remote UI::${DESK_UI_RESULT}"
@@ -182,6 +210,7 @@ test -s "$APP/Frameworks/AMSMB2.framework/AMSMB2"
 test -s "$APP/Frameworks/MobileVLCKit.framework/MobileVLCKit"
 test -s "$APP/Frameworks/MinerStatusCore.framework/MinerStatusCore"
 test -s "$APP/Frameworks/DeskRemoteCore.framework/DeskRemoteCore"
+test -s "$APP/Frameworks/ThermoCore.framework/ThermoCore"
 test -s "$APP/demo-running.json"
 test ! -e "$APP/decoder-fixture.avi"
 test ! -e "$APP/decoder-mjpeg-fixture.avi"
@@ -189,6 +218,7 @@ otool -L "$APP/Lightbox" | grep -F '@rpath/AMSMB2.framework/AMSMB2'
 otool -L "$APP/Lightbox" | grep -F '@rpath/MobileVLCKit.framework/MobileVLCKit'
 otool -L "$APP/Lightbox" | grep -F '@rpath/MinerStatusCore.framework/MinerStatusCore'
 otool -L "$APP/Lightbox" | grep -F '@rpath/DeskRemoteCore.framework/DeskRemoteCore'
+otool -L "$APP/Lightbox" | grep -F '@rpath/ThermoCore.framework/ThermoCore'
 test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$PLIST")" = org.personal.lightbox.album
 test "$(/usr/libexec/PlistBuddy -c 'Print :NSAppTransportSecurity:NSAllowsLocalNetworking' "$PLIST")" = true
 # The desk remote's permissions and its notification links (deskremote://) now belong to the toolbox.
@@ -197,7 +227,7 @@ for key in NSCameraUsageDescription NSMicrophoneUsageDescription NSSpeechRecogni
 done
 test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleURLTypes:0:CFBundleURLSchemes:0' "$PLIST")" = deskremote
 # No desk remote fixture or helper file may ship in the app.
-if find "$APP" -name '*.jsonl' -o -name 'fake-config.json' -o -name '*.py' -o -name '*.ps1' | grep -q .; then
+if find "$APP" -name '*.jsonl' -o -name 'fake-config.json' -o -name 'fake-sensors.json' -o -name '*.py' -o -name '*.ps1' -o -name '*.sqlite' | grep -q .; then
   echo 'fixtures or helper files ended up in the app bundle'
   exit 1
 fi

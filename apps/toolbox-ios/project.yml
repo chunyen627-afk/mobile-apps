@@ -2,8 +2,8 @@
 # the free Apple account's three app slots and one renewal on all of them.
 # Nothing is copied: each tool's sources come straight from its own app folder, minus that app's
 # @main entry file, and the standalone apps still build from the same files.
-# Tools: the album (apps/album-ios), the miner status (apps/miner-status-ios) and the desk remote
-# (apps/desk-remote-ios), each with its own tab.
+# Tools: the album (apps/album-ios), the miner status (apps/miner-status-ios), the desk remote
+# (apps/desk-remote-ios) and the thermometers (apps/thermo-ios), each with its own tab.
 # Generate on a Mac from this directory with `xcodegen generate`; see scripts/build.sh.
 name: Toolbox
 options:
@@ -25,8 +25,9 @@ settings:
     # album's diagnostics (four unexplained ends on 11/01). 0.5.2: the album no longer ends when a
     # folder is opened on a connection the NAS closed (SIGPIPE ignored, reconnect and retry once).
     # 0.5.3: a NAS not answering over ZeroTier is tried up to five times before the album gives up.
-    MARKETING_VERSION: "0.5.4"
-    CURRENT_PROJECT_VERSION: "14"
+    # 0.6: the thermometers joined as the fourth tab.
+    MARKETING_VERSION: "0.6.0"
+    CURRENT_PROJECT_VERSION: "15"
 targets:
   # Named Lightbox, as the album app it replaces: the same bundle identifier, executable and
   # Swift module, so the album's unit tests (`@testable import Lightbox`) run here unchanged.
@@ -44,9 +45,12 @@ targets:
         buildPhase: resources
       - path: ../desk-remote-ios/iOSApp
         excludes: [DeskRemoteApp.swift, Info.plist, zh-Hant.lproj]
+      - path: ../thermo-ios/iOSApp
     dependencies:
       - target: MinerStatusCore
       - target: DeskRemoteCore
+      - target: ThermoCore
+      - sdk: Charts.framework
       - package: AMSMB2
         embed: true
       - framework: ../album-ios/Vendor/MobileVLCKit.xcframework
@@ -82,6 +86,7 @@ targets:
         - LightboxTests
         - MinerStatusCoreTests
         - DeskRemoteCoreTests
+        - ThermoCoreTests
         - ToolboxUITests
         - LightboxUITests
         - DeskRemoteUITests
@@ -105,6 +110,27 @@ targets:
       base:
         GENERATE_INFOPLIST_FILE: YES
         PRODUCT_BUNDLE_IDENTIFIER: org.personal.lightbox.deskremotecore
+  # The thermometers' UI-free core (gateway JSON, history, names), the same way.
+  ThermoCore:
+    type: framework
+    platform: iOS
+    sources:
+      - ../thermo-ios/Sources/ThermoCore
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: org.personal.lightbox.thermocore
+  ThermoCoreTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - ../thermo-ios/Tests/ThermoCoreTests
+    dependencies:
+      - target: ThermoCore
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: org.personal.lightbox.thermotests
   # The album's, the miner's and the desk remote's own unit tests, unchanged.
   LightboxTests:
     type: bundle.unit-test

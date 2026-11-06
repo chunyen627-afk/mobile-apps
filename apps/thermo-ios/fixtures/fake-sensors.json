@@ -1,0 +1,12 @@
+{
+  "gateway_name": "示範閘道",
+  "sensors": [
+    {"mac": "A4:C1:38:00:00:01", "name": "客廳", "advertised_name": "ATC_000001", "format": "bthome",
+     "temperature": 26.13, "humidity": 64.5, "battery": 93, "voltage": 2.953, "rssi": -52, "age_seconds": 20},
+    {"mac": "A4:C1:38:00:00:02", "name": "臥室", "advertised_name": "ATC_000002", "format": "bthome",
+     "temperature": 24.71, "humidity": 58.02, "battery": 71, "voltage": 2.84, "rssi": -68, "age_seconds": 75},
+    {"mac": "A4:C1:38:00:00:03", "name": "機房", "advertised_name": "ATC_000003", "format": "pvvx",
+     "temperature": 31.4, "humidity": 41.2, "battery": 12, "voltage": 2.31, "rssi": -80, "age_seconds": 2400},
+    {"mac": "A4:C1:38:00:00:04", "name": "陽台", "format": "gatt", "error": "連線讀取失敗"}
+  ]
+}
