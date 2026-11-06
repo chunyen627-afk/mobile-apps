@@ -84,6 +84,18 @@ final class FeedTests: XCTestCase {
         }
     }
 
+    func testDecodesLabelRoomAndAlerts() throws {
+        let body = #"{"version": 1, "gateway": "g", "time": 1, "sensors": [{"id": "a", "name": "書房溫度計", "label": "書房溫度計", "room": "書房"}], "alerts": {"enabled": true, "temperature_high": 32, "temperature_low": null, "humidity_high": 80, "humidity_low": 25, "battery_low": 15, "offline_after_seconds": 7200}}"#
+        let feed = try ThermoFeed.decode(Data(body.utf8))
+        XCTAssertEqual(feed.sensors[0].label, "書房溫度計")
+        XCTAssertEqual(feed.sensors[0].room, "書房")
+        let alerts = try XCTUnwrap(feed.alerts)
+        XCTAssertTrue(alerts.enabled)
+        XCTAssertEqual(alerts.lines(fahrenheit: false).map(\.value), ["高於 32.0°", "高於 80%、低於 25%", "低於 15%", "超過 2 小時"])
+        XCTAssertEqual(alerts.lines(fahrenheit: true)[0].value, "高於 89.6°F")
+        XCTAssertNil(try ThermoFeed.decode(Data(sampleFeed.utf8)).alerts, "older gateways send no rules")
+    }
+
     func testDemoFeedUsesMadeUpAddresses() {
         let feed = ThermoFeed.demo(now: 1000)
         XCTAssertEqual(feed.sensors.count, 3)
@@ -91,15 +103,21 @@ final class FeedTests: XCTestCase {
     }
 }
 
+/// The requests a stub received. `@unchecked`: the tests read it only after the awaited call.
+private final class RequestLog: @unchecked Sendable {
+    var requests: [URLRequest] = []
+}
+
 private struct StubTransport: ThermoTransport {
     let status: Int
     let contentType: String
     let body: Data
     var failure: URLError?
+    var log: RequestLog?
 
     func send(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        log?.requests.append(request)
         if let failure { throw failure }
-        XCTAssertEqual(request.httpMethod, "GET")
         let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: ["Content-Type": contentType])!
         return (body, response)
     }
@@ -114,8 +132,30 @@ final class ClientTests: XCTestCase {
     }
 
     func testFetchesAFeed() async throws {
-        let feed = try await client().fetch(endpoint)
+        let log = RequestLog()
+        let stub = StubTransport(status: 200, contentType: "application/json", body: Data(sampleFeed.utf8), log: log)
+        let feed = try await ThermoClient(transport: stub).fetch(endpoint)
         XCTAssertEqual(feed.sensors.count, 2)
+        XCTAssertEqual(log.requests.first?.httpMethod, "GET")
+    }
+
+    func testSetLabelPostsTheNameAndRoom() async throws {
+        let log = RequestLog()
+        let stub = StubTransport(status: 200, contentType: "application/json", body: Data(#"{"ok": true}"#.utf8), log: log)
+        try await ThermoClient(transport: stub).setLabel(endpoint, id: "A4:C1:38:00:00:01", name: "書房溫度計", room: nil)
+        let request = try XCTUnwrap(log.requests.first)
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.url?.absoluteString, "http://192.0.2.10:18787/labels")
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(request.httpBody)) as? [String: Any])
+        XCTAssertEqual(body["id"] as? String, "A4:C1:38:00:00:01")
+        XCTAssertEqual(body["name"] as? String, "書房溫度計")
+        XCTAssertNil(body["room"] as? String)
+        do {
+            try await client(404, "application/json", #"{"error": "unknown thermometer"}"#).setLabel(endpoint, id: "x", name: nil, room: nil)
+            XCTFail("expected 404")
+        } catch {
+            XCTAssertEqual(error as? ThermoFetchError, .http(404))
+        }
     }
 
     func testFailures() async {
@@ -252,6 +292,16 @@ final class RoomTests: XCTestCase {
         XCTAssertEqual(prefs.allRooms, ["Bedroom", "臥室"])
         prefs.setRoom("A4:C1:38:00:00:01", "  ")
         XCTAssertNil(prefs.room("A4:C1:38:00:00:01"))
+    }
+
+    func testThePhonesRoomWinsOverTheGateways() {
+        var prefs = ThermoPreferences()
+        let fromGateway = ThermoSensor(id: "a", name: "A", room: "客廳")
+        XCTAssertEqual(prefs.room(for: fromGateway), "客廳")
+        XCTAssertEqual(prefs.byRoom([fromGateway]) { $0 }.map(\.room), ["客廳"])
+        prefs.setRoom("a", "書房")
+        XCTAssertEqual(prefs.room(for: fromGateway), "書房")
+        XCTAssertNil(prefs.room(for: ThermoSensor(id: "b", name: "B", room: "")))
     }
 
     func testOlderSettingsStillLoad() {

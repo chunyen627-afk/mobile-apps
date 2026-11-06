@@ -250,6 +250,12 @@ final class ToolboxUITests: XCTestCase {
             app.swipeUp()
         }
         XCTAssertTrue(gatewayRow.label.contains("示範閘道"), "gateway name missing: \(gatewayRow.label)")
+        // The gateway's push rules (the fake gateway has no ntfy topic).
+        let alerts = element("thermo-alerts-enabled")
+        for _ in 0..<3 where !alerts.exists {
+            app.swipeDown()
+        }
+        XCTAssertTrue(alerts.exists && alerts.label.contains("沒有設定推播"), "notification rules missing: \(alerts.label)")
         let hide = app.switches["thermo-hide"]
         for _ in 0..<6 where !hide.isHittable {
             app.swipeDown()
@@ -269,6 +275,22 @@ final class ToolboxUITests: XCTestCase {
         }
         XCTAssertTrue(gateways.exists, "gateway addresses missing from the settings")
         snapshot("18-thermo-settings-gateways")
+        app.buttons["取消"].tap()
+        // A name given here is kept by the gateway: after a relaunch with this phone's own
+        // settings wiped (THERMO_UI_GATEWAYS starts clean), the list still shows it.
+        let living = element("thermo-row-A4:C1:38:00:00:01")
+        XCTAssertTrue(living.waitForExistence(timeout: 10), "living room thermometer missing")
+        living.swipeLeft()
+        let swipe = app.buttons["thermo-swipe-rename"].exists ? app.buttons["thermo-swipe-rename"] : app.buttons["改名"]
+        XCTAssertTrue(swipe.waitForExistence(timeout: 5), "swipe action missing")
+        swipe.tap()
+        renameIn(alertWith: "客廳", to: "Living A", shot: nil)
+        XCTAssertTrue(poll(timeout: 10) { self.shows("Living A", in: living) }, "rename not shown: \(living.label)")
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(living.waitForExistence(timeout: 30), "list missing after relaunch")
+        XCTAssertTrue(poll(timeout: 15) { self.shows("Living A", in: living) }, "the gateway did not keep the name: \(living.label)")
+        snapshot("19-thermo-name-from-gateway")
     }
 
     private var thermoTab: XCUIElement { app.tabBars.buttons["溫濕度"] }

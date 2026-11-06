@@ -5,6 +5,12 @@
   "gateway_name": "辦公室",
   "discover": true,
   "gatt_poll_seconds": 300,
+  "notify": {"server": "https://ntfy.sh", "topic": "<your ntfy topic>"},
+  "alerts": {
+    "temperature_high": 32, "temperature_low": 10, "humidity_high": 80, "humidity_low": 25,
+    "battery_low": 15, "offline_after_seconds": 7200, "hold_seconds": 600,
+    "sensors": {"A4:C1:38:00:00:02": {"temperature_high": 35}}
+  },
   "sensors": [
     {"mac": "A4:C1:38:00:00:01", "name": "座位"},
     {"mac": "A4:C1:38:00:00:02", "name": "原廠韌體那顆", "gatt": true}

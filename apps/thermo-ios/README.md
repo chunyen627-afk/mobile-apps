@@ -24,16 +24,24 @@
    - `allowed_networks`：允許連入的網段（ZeroTier 網段）；網段外的連線一律 403
    - `sensors`：可選，預設名稱或要用連線讀取的原廠韌體（`"gatt": true`）；`discover: true`（預設）時，聽到的明文溫濕度計都會自動出現
    - `history_days`：紀錄保留天數，預設 90
+   - `notify`：推播用的 ntfy `server`／`topic`；或 `{"from_file": "<另一個服務的設定檔>"}` 沿用它 `notify` 段的主題（例如礦機狀態服務的 aggregator.json，同一個手機訂閱就收得到），主題不用複製第二份。沒有主題就不推
+   - `alerts`：推播條件，`temperature_high`／`temperature_low`（°C）、`humidity_high`／`humidity_low`（%）、`battery_low`（%）、`offline_after_seconds`、`hold_seconds`（超出範圍要持續多久才推，預設 600）；設成 `null` 就不推那一項；`sensors` 可對個別溫濕度計覆寫。預設 32／10°C、80／25%、15%、2 小時
 2. 執行 `python thermo_gateway.py --config thermo-gateway.json`；要開機自動啟動，可用 `pythonw` 搭配啟動資料夾裡的 `.vbs`。
-3. 同一資料夾會產生 `thermo-state.json`（最後讀數）、`thermo-history.sqlite`（每 5 分鐘一筆的紀錄）、`thermo-gateway.log`。
+3. 先跑 `python thermo_gateway.py --config thermo-gateway.json --test-notify` 確認手機收到測試通知。
+4. 同一資料夾會產生 `thermo-state.json`（最後讀數、手機給的名稱與房間）、`thermo-history.sqlite`（每 5 分鐘一筆的紀錄）、`thermo-gateway.log`。
 
-API（只有 GET，唯讀）：
+API（讀取都是 GET；寫入只有 `POST /labels`）：
 
 | 路徑 | 內容 |
 | --- | --- |
 | `/sensors` | `{"version":1,"gateway":名稱,"time":閘道時間,"sensors":[{"id":位址,"name","advertised_name","temperature","humidity","battery","voltage","rssi","updated","format","error"}]}` |
 | `/history?id=<位址>&range=day\|week\|month` | `{"version":1,"id","range","bucket","time","utc_offset","points":[{"t","temperature","humidity","battery","temperature_min","temperature_max","humidity_min","humidity_max"}]}`。`day`：最近 24 小時，每 30 分鐘一點；`week`／`month`：最近 7／30 個日曆日（閘道電腦的時區，今天也算），每天一點，含當天最低與最高 |
 | `/health` | `{"ok":true}` |
+| `POST /labels` | `{"id":位址,"name":名稱或 null,"room":房間或 null}`，1 KB 以內；手機改名、選房間時送出，閘道記住，`/sensors` 的 `name`／`label`／`room` 就是它，推播也用這個名稱。唯一的寫入 |
+
+`/sensors` 另有 `alerts`：`{"enabled":有沒有設主題,"temperature_high",…,"offline_after_seconds"}`，App 的「通知」區塊照著顯示。
+
+**推播**（照礦機狀態服務的做法，經 ntfy）：溫度或濕度超出範圍持續 `hold_seconds` 才推；電量低於門檻、超過 `offline_after_seconds` 收不到讀數則立刻推。同一狀況只推一次，數值回到範圍內（溫度多 0.5°C、濕度多 2%、電量多 5% 的緩衝）才會再推；恢復不推。超過 30 分鐘沒更新的讀數不判斷溫濕度（交給「收不到訊號」）。通知只有名稱、房間與數值，沒有位址。
 
 `--fake fixtures/fake-sensors.json --bind 127.0.0.1 --port 8795` 是不用藍牙的假閘道（固定讀數＋造出來的 30 天曲線），CI 的模擬器 UI 測試用它。
 
@@ -47,7 +55,8 @@ API（只有 GET，唯讀）：
 - **設定**（右上角齒輪）：溫度單位（°C／°F）、舒適度範圍（預設 20–26°C、40–60%，可調）、閘道網址一行一個，可同時看公司電腦和家裡的閘道，最多 8 個。可只填 `位址:埠`。全部留空就顯示示範資料。
 - 時間一律以閘道的時鐘計算，手機時鐘不準也不影響「幾分鐘前」。
 - 原始碼：`Sources/ThermoCore`（JSON、紀錄、名稱，無畫面，有單元測試）、`iOSApp`（SwiftUI 畫面，用 Swift Charts 畫曲線）。鍵名：UserDefaults `thermo.gateways`、`thermo.preferences`（名稱、房間、隱藏、單位、舒適範圍；舊版存的設定缺的欄位用預設值）。
-- 和米家不同：名稱、房間只存在這支手機（米家存雲端）；**超出範圍的推播通知還沒做**（要由閘道主動發通知）。
+- **名稱與房間**存在手機上，也同步到閘道（像米家存雲端）：別支手機打開也看得到、推播用同一個名稱；同步失敗時詳情頁會說明，手機上的仍然有效。隱藏、單位、舒適範圍只在這支手機。
+- **通知**：詳情頁「通知」區塊列出閘道的推播條件與是否開啟。條件目前在閘道電腦的設定檔改（米家是在 App 裡設自動化）。
 
 ## 驗證狀態
 

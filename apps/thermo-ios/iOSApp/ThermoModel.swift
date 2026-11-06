@@ -189,13 +189,56 @@ final class ThermoModel: ObservableObject {
         }
     }
 
-    /// Rooms to offer: Mi Home's usual rooms plus every room already in use.
+    /// Rooms to offer: Mi Home's usual rooms plus every room already in use (here or on the gateways).
     var roomChoices: [String] {
         var out = ["客廳", "臥室", "書房", "廚房", "浴室", "陽台", "辦公室"]
-        for room in preferences.allRooms where !out.contains(room) {
+        let inUse = preferences.allRooms + allRows.compactMap { $0.sensor.room }.filter { !$0.isEmpty }
+        for room in inUse where !out.contains(room) {
             out.append(room)
         }
         return out
+    }
+
+    /// Renames on this phone and on the gateways that hear it (empty: back to the gateway's own name).
+    func rename(_ sensor: ThermoSensor, to text: String) {
+        preferences.rename(sensor, to: text)
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = trimmed.isEmpty ? nil : String(trimmed.prefix(ThermoPreferences.maxNameLength))
+        pushLabel(sensor, name: name, room: preferences.room(for: sensor))
+    }
+
+    /// Sets the room on this phone and on the gateways that hear it (nil: no room).
+    func setRoom(_ sensor: ThermoSensor, _ room: String?) {
+        preferences.setRoom(sensor.id, room)
+        pushLabel(sensor, name: preferences.names[sensor.id] ?? sensor.label, room: preferences.room(sensor.id))
+    }
+
+    /// Set when the last name or room could not reach a gateway; the phone keeps it anyway.
+    @Published private(set) var syncError: String?
+
+    private func pushLabel(_ sensor: ThermoSensor, name: String?, room: String?) {
+        guard !isDemo else { return }
+        let targets = gateways.filter { $0.feed?.sensors.contains { $0.id == sensor.id } == true }.map(\.endpoint)
+        let client = self.client
+        Task {
+            var failure: ThermoFetchError?
+            for endpoint in targets {
+                do {
+                    try await client.setLabel(endpoint, id: sensor.id, name: name, room: room)
+                } catch let error as ThermoFetchError {
+                    failure = error
+                } catch {
+                    failure = .offline("連線失敗")
+                }
+            }
+            syncError = failure.map { "名稱與房間沒同步到閘道（\($0.displayText)），這支手機上已改好。" }
+            await refresh()
+        }
+    }
+
+    /// The notification rules of the gateway that hears this thermometer.
+    func alerts(_ ref: ThermoSensorRef) -> ThermoAlertRules? {
+        shown.first { $0.id == ref.gateway }?.feed?.alerts
     }
 }
 

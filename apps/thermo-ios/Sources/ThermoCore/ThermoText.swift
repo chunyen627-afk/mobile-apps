@@ -125,6 +125,13 @@ public struct ThermoPreferences: Codable, Equatable, Sendable {
         rooms[id]
     }
 
+    /// The room set on this phone, else the one the gateway keeps (set from any phone).
+    public func room(for sensor: ThermoSensor) -> String? {
+        if let room = rooms[sensor.id] { return room }
+        guard let room = sensor.room, !room.isEmpty else { return nil }
+        return room
+    }
+
     /// An empty room clears it.
     public mutating func setRoom(_ id: String, _ room: String?) {
         let trimmed = (room ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -153,7 +160,7 @@ public struct ThermoPreferences: Codable, Equatable, Sendable {
         }
         var groups: [String: [Item]] = [:]
         for item in sorted {
-            groups[rooms[sensor(item).id] ?? Self.noRoom, default: []].append(item)
+            groups[room(for: sensor(item)) ?? Self.noRoom, default: []].append(item)
         }
         let named = groups.keys.filter { $0 != Self.noRoom }.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
         return (named + (groups[Self.noRoom] == nil ? [] : [Self.noRoom])).map {

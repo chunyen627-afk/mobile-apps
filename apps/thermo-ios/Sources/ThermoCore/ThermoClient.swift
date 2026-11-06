@@ -1,7 +1,9 @@
 import Foundation
 
-// Reads the gateway the user typed in: GET only, no cookies, no cache, no credentials.
-// Only a 200 JSON response of at most `maxResponseBytes` that decodes as version 1 is accepted.
+// Reads the gateway the user typed in: no cookies, no cache, no credentials. Reading is GET;
+// the one write is a thermometer's name and room (POST /labels), sent when the user renames it
+// or picks its room. Only a 200 JSON response of at most `maxResponseBytes` that decodes as
+// version 1 is accepted.
 
 public enum ThermoEndpointError: Error, Equatable, Sendable {
     case empty
@@ -54,6 +56,13 @@ public struct ThermoEndpoint: Equatable, Sendable {
     }
 
     public var usesPlainHTTP: Bool { sensorsURL.scheme == "http" }
+
+    /// The same gateway's POST /labels.
+    public var labelsURL: URL? {
+        guard var components = URLComponents(url: sensorsURL, resolvingAgainstBaseURL: false) else { return nil }
+        components.path = String(components.path.dropLast("sensors".count)) + "labels"
+        return components.url
+    }
 }
 
 public enum ThermoFetchError: Error, Equatable, Sendable {
@@ -131,6 +140,29 @@ public struct ThermoClient: Sendable {
         guard contentType.contains("application/json") else { throw ThermoFetchError.notJSON }
         guard result.0.count <= Self.maxResponseBytes else { throw ThermoFetchError.tooLarge }
         return result.0
+    }
+
+    /// Gives the gateway a thermometer's name and room (nil clears them), so every phone and the
+    /// gateway's notifications use them. The only write the app makes.
+    public func setLabel(_ endpoint: ThermoEndpoint, id: String, name: String?, room: String?) async throws {
+        struct Body: Encodable {
+            let id: String
+            let name: String?
+            let room: String?
+        }
+        guard let url = endpoint.labelsURL else { throw ThermoFetchError.malformed }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(Body(id: id, name: name, room: room))
+        let result: (Data, URLResponse)
+        do {
+            result = try await transport.send(request)
+        } catch {
+            throw ThermoFetchError.offline(Self.describe(error))
+        }
+        guard let http = result.1 as? HTTPURLResponse else { throw ThermoFetchError.malformed }
+        guard http.statusCode == 200 else { throw ThermoFetchError.http(http.statusCode) }
     }
 
     static func describe(_ error: Error) -> String {

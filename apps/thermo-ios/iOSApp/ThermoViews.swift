@@ -258,9 +258,12 @@ struct ThermoDetailView: View {
                 NavigationLink {
                     ThermoRoomPicker(model: model, sensor: sensor)
                 } label: {
-                    LabeledContent("房間", value: model.preferences.room(sensor.id) ?? ThermoPreferences.noRoom)
+                    LabeledContent("房間", value: model.preferences.room(for: sensor) ?? ThermoPreferences.noRoom)
                 }
                 .accessibilityIdentifier("thermo-room")
+                if let syncError = model.syncError {
+                    Text(syncError).font(.footnote).foregroundStyle(.orange)
+                }
                 Toggle("在列表中隱藏", isOn: Binding(
                     get: { model.preferences.hidden.contains(sensor.id) },
                     set: { model.preferences.setHidden(sensor.id, $0) }
@@ -269,8 +272,9 @@ struct ThermoDetailView: View {
             } header: {
                 Text("裝置設定")
             } footer: {
-                Text("名稱、房間與隱藏只存在這支手機。在列表上長按或往左滑也能改名。")
+                Text("名稱和房間會存到閘道（推播通知用同一個名稱）；隱藏只在這支手機。在列表上長按或往左滑也能改名。")
             }
+            notificationSection(model.alerts(ref))
             Section("裝置資訊") {
                 LabeledContent("最後更新", value: ThermoText.age(updated: sensor.updated, now: now))
                 LabeledContent("電池", value: ThermoText.battery(sensor.battery))
@@ -295,6 +299,28 @@ struct ThermoDetailView: View {
         }
         .thermoRenameAlert(model: model, target: $renaming)
     }
+
+    /// The gateway's push rules, as Mi Home lists a device's alerts.
+    @ViewBuilder
+    private func notificationSection(_ alerts: ThermoAlertRules?) -> some View {
+        Section {
+            if model.isDemo {
+                Text("示範資料沒有通知。設定閘道後，這裡會列出閘道的推播條件。").foregroundStyle(.secondary)
+            } else if let alerts {
+                LabeledContent("推播", value: alerts.enabled ? "開啟（ntfy）" : "閘道沒有設定推播")
+                    .accessibilityIdentifier("thermo-alerts-enabled")
+                ForEach(alerts.lines(fahrenheit: model.preferences.fahrenheit)) { line in
+                    LabeledContent(line.title, value: line.value)
+                }
+            } else {
+                Text("這個閘道的版本不會推播通知。").foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("通知")
+        } footer: {
+            Text("超出範圍持續 10 分鐘才推，同一狀況只推一次、恢復不推；電量不足與收不到訊號立刻推。條件在閘道電腦的 thermo-gateway.json 設定。")
+        }
+    }
 }
 
 /// Choose the thermometer's room: no room, Mi Home's usual rooms and every room in use, or a new one.
@@ -305,15 +331,15 @@ struct ThermoRoomPicker: View {
     @State private var newRoom = ""
 
     var body: some View {
-        let current = model.preferences.room(sensor.id)
+        let current = model.preferences.room(for: sensor)
         List {
             Section {
                 choice(ThermoPreferences.noRoom, selected: current == nil) {
-                    model.preferences.setRoom(sensor.id, nil)
+                    model.setRoom(sensor, nil)
                 }
                 ForEach(model.roomChoices, id: \.self) { room in
                     choice(room, selected: current == room) {
-                        model.preferences.setRoom(sensor.id, room)
+                        model.setRoom(sensor, room)
                     }
                 }
             }
@@ -322,7 +348,7 @@ struct ThermoRoomPicker: View {
                     TextField("房間名稱", text: $newRoom)
                         .accessibilityIdentifier("thermo-new-room")
                     Button("加入") {
-                        model.preferences.setRoom(sensor.id, newRoom)
+                        model.setRoom(sensor, newRoom)
                         dismiss()
                     }
                     .disabled(newRoom.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -373,13 +399,13 @@ struct ThermoRenameAlert: ViewModifier {
                 Button("取消", role: .cancel) { target = nil }
                 Button("儲存") {
                     if let sensor = target {
-                        model.preferences.rename(sensor, to: text)
+                        model.rename(sensor, to: text)
                     }
                     target = nil
                 }
                 .accessibilityIdentifier("thermo-rename-save")
             } message: {
-                Text("留空會用閘道上的名稱「\(target?.name ?? "")」。")
+                Text("名稱會存到閘道，其他手機和推播通知也用這個名稱。留空恢復原本的名稱。")
             }
             .onChange(of: target?.id) { _, _ in
                 if let sensor = target {
