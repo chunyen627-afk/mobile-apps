@@ -12,7 +12,7 @@
 
 ## 快速上手
 
-1. **閘道**：在溫濕度計附近放一台長開的閘道，電腦跑 [pc-gateway](#閘道pc-gateway)，或 [ESP32 閘道](#esp32-閘道由家裡電腦的-ai-補寫)。閘道要在 ZeroTier 上；ESP32 沒有 ZeroTier，要靠同一區網的一台電腦[轉發](#轉發閘道不在-zerotier-上時)。
+1. **閘道**：在溫濕度計附近放一台長開的閘道，電腦跑 [pc-gateway](#閘道pc-gateway)，或 [ESP32 閘道](#esp32-閘道)。閘道要在 ZeroTier 上；ESP32 沒有 ZeroTier，要靠同一區網的一台電腦[轉發](#轉發閘道不在-zerotier-上時)。
 2. **App 閘道欄**：工具箱 →「溫濕度」→ 右上角齒輪 →「閘道」，**一行一個閘道**，最多 8 個，例如：
 
    ```
@@ -91,47 +91,51 @@ netsh advfirewall firewall add rule name="Thermo ESP32 forward (ZeroTier)" dir=i
 - 檢查：`netsh interface portproxy show all`；取消：`netsh interface portproxy delete v4tov4 listenaddress=0.0.0.0 listenport=18787`。
 - 手機 App 填轉發電腦的 ZeroTier 位址；電腦關機時就看不到 ESP32 那幾顆。
 
-## ESP32 閘道（由家裡電腦的 AI 補寫）
+## ESP32 閘道
 
-> 本節與 [`esp32/`](esp32) 目錄預留給家裡電腦的 AI 補寫；ESP32 韌體的原始碼也放在 `esp32/`。以下小標是要補的內容。
-
-ESP32 取代電腦當閘道：通電就跑、不用開電腦，對外提供**和 pc-gateway 一模一樣的 HTTP 介面**，App 不用改。
+原始碼與完整操作步驟在 [`esp32/`](esp32/README.md)。ESP32 通電收 BLE、存近期歷史，提供工具箱既有的 HTTP JSON。區網不需電腦；遠端 ZeroTier 仍需要轉發電腦長開。
 
 ### 硬體
 
-_待補：ESP32-2432S028（2.8 吋觸控螢幕板）的型號細節、螢幕／觸控晶片、供電（USB 5V 充電頭即可）。_
+ESP32-2432S028（CYD），ESP32-WROOM-32、4 MB flash、無 PSRAM、USB 5V 供電。實測板為 ST7789 2.8 吋 320×240，觸控 XPT2046；ILI9341 僅提供建置選項，未上板驗證。接腳與面板設定見 [硬體說明](esp32/README.md#硬體與原始碼)。
 
 ### 韌體來源與建置
 
-_待補：原始碼位置（`esp32/`）、開發環境（PlatformIO／Arduino）、使用的函式庫與版本。_
+本倉庫 `esp32/src/main.cpp` 與 `include/` 是閘道 1.4 來源，解碼與分桶對照 `pc-gateway/thermo_gateway.py`。PlatformIO／Arduino，pioarduino 55.03.312-1（Arduino 3.3.12／IDF 5.5.5）；NimBLE-Arduino 2.3.6、ArduinoJson 6.21.5、WiFiManager 2.0.17、LovyanGFX 1.2.7。在 esp32 目錄執行 `python -m platformio run -e cyd-st7789`。此版開機直接進閘道，不含賽車模式。
 
 ### 燒錄方式
 
-_待補：USB 燒錄步驟、序列埠訊息、第一次設定 Wi-Fi 的方法（帳密不寫進程式碼）。_
+首次先私下備份原板完整 flash，再用 USB 與 PlatformIO upload；序列埠 115200。首次 LittleFS 未掛載才用 `FORMAT`，升級不要清除已存資料。詳見[燒錄步驟](esp32/README.md#燒錄方式)。WiFiManager 熱點名稱、隨機密碼及設定頁位址顯示在螢幕，選 2.4 GHz Wi-Fi，帳密存 NVS、不進原始碼。私人筆記使用已忽略的 `network.local.txt`，範例在 `network.example.txt`。
 
 ### 固定 IP 建議
 
-_待補：在路由器做 DHCP 保留的方法；轉發依賴固定位址。_
+小米路由器 DHCP 靜態分配，以 ESP32 的 **Wi-Fi MAC** 保留 `<閘道IP>`；板上也可用序列埠 `STATIC <閘道IP> <路由器IP> <子網路遮罩> <DNS伺服器IP>` 後 `REBOOT`，存 NVS。兩邊須一致，板上固定 IP 不代表路由器已保留。重開後以螢幕、序列埠與 `/health` 核對；轉發目標也必須相同。
 
 ### 轉發到電腦
 
-_待補：實際採用的轉發方式；通用做法見上一節「轉發」。_
+實際採 Windows 內建 portproxy，規則見[上一節](#轉發閘道不在-zerotier-上時)。監聽 TCP 18787 轉到 `<閘道IP>:18787`，防火牆限 ZeroTier。已確認電腦 IP Helper 與 ZeroTier 服務為自動啟動、執行中，沒有額外 Python 轉發程式或登入啟動腳本。ESP32 通電自啟；手機填 `http://<轉發電腦ZeroTier位址>:18787`，電腦休眠或關機會中斷遠端。
 
 ### HTTP 介面
 
-_待補：與 pc-gateway 的差異（若有），例如 `alerts` 固定 `{"enabled": false}`（ESP32 不推播）、紀錄保留天數、`/labels` 存在哪裡。格式以上面 pc-gateway 的 API 表為準。_
+使用 `http://<閘道IP>:18787` 的 `/sensors`、`/history?id=<感測器位址>&range=day|week|month`、`/health`、`POST /labels`，欄位同上方 Python API。`/sensors` 每顆另明列 `label`、`room`；所有欄位與虛構 JSON 範例見[HTTP 完整說明](esp32/README.md#http-介面與差異)。
+
+- `time` 與 `updated` 使用同一 NTP Unix 秒時鐘，未同步回 503；`utc_offset=28800`。Wi-Fi 關閉省電，BLE 被動掃描 40/160 ms，避免 100% 佔用天線。
+- `alerts={"enabled":false}`，不推播；最多 4 顆，支援明文 BTHome／pvvx／atc1441，不支援原廠 GATT。被動掃描不一定收到廣播名稱，可從 App 改名。
+- `/labels` 將名稱與房間存 LittleFS，重開保留；缺值 null。每 5 分鐘記一筆，保留最近 30 天，day 用 1800 秒、week/month 用 86400 秒，依台灣本地時間分桶，含平均與 min/max。
+- LittleFS 640 KiB；4 顆 31 個日檔原始資料約 349 KiB，另留檔案系統與復原空間，尚未滿載 30 天實測。
+- 預留 `/samples` 游標匯出供日後手機永久保存；**目前 App 仍使用 /history，尚未完成永久同步整合**。HTTP 無驗證／TLS，僅供可信區網與受限制的 ZeroTier 轉發。
 
 ### 螢幕畫面
 
-_待補：螢幕顯示內容與觸控操作。_
+原生繁體中文字型顯示名稱、溫濕度、電量與更新時間，每頁 3 顆。點擊換頁，閒置 10 秒熄背光，點一下喚醒；喚醒那一下不換頁。熄屏後 BLE、Wi-Fi、HTTP 繼續運作。此前背光閃爍根因未定位，不宣稱硬體故障已排除。
 
 ### 驗證狀態
 
-_待補：每項附日期與實際結果。_
+2026-11-06：ST7789 實機可收 1 顆 pvvx BTHome，使用者確認溫濕度、中文、10 秒熄屏與喚醒正常；名稱保存跨重啟通過。Python 解碼 12 項、C++ 封包比對 2112 次與分桶測試通過。長時間 HTTP 曾出現逾時，不能宣稱全部連線驗收通過；手機 App 實機仍未確認。版本與證據摘要見 [esp32/VALIDATION.md](esp32/VALIDATION.md)。
 
 ## 驗證狀態
 
 - 電腦端（2026-11-06，Windows office 電腦，Intel 藍牙）：實際讀到一顆刷了 pvvx 5.9 的 LYWSD03MMC（BTHome v2 明文）；閘道在 ZeroTier 位址上回應 `/sensors`，從另一台 ZeroTier 電腦連得到。閘道單元測試 30 項通過（本機 Python 3.11）。
 - App：工具箱 [run 42174825284](https://github.com/chunyen627-afk/mobile-apps/actions/runs/42174825284) 編譯通過，溫濕度單元測試 32 項、閘道 38 項與工具箱 UI 測試（含溫濕度兩項）全過，模擬器截圖已檢視；工具箱 0.6.0 build 15 已發布（[run 42197523584](https://github.com/chunyen627-afk/mobile-apps/actions/runs/42197523584)），**尚未實機**。
 - 推播：office 閘道 11/06 已開，`--test-notify` 測試通知已送出（手機是否收到待使用者確認）。
-- ESP32 閘道（2026-11-06）：家裡電腦的 AI 在 ESP32-2432S028 上做出第一版（原始碼尚未進倉庫）。從公司電腦經 ZeroTier → 家裡電腦轉發讀到 `/health`、`/sensors`，格式與 pc-gateway 相同，讀數與螢幕一致；`time` 欄一開始是 0，已修正。`/history` 剛開機時是空的，資料點還沒確認；App 實機還沒接。細節由家裡 AI 補在上面的 ESP32 章節。
+- ESP32 閘道（2026-11-06）：原始碼已整理至 `esp32/`。先前公司電腦經 ZeroTier 轉發讀取 `/health`、`/sensors` 成功；家中已確認 NTP 時間與 `/history` 資料點。最新上板版本與未通過項目見上方 ESP32 章節及驗證紀錄，App 實機仍未確認。

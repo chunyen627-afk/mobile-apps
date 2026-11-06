@@ -1,0 +1,6 @@
+# 人工操作筆記，不是韌體自動讀取的設定檔。
+# 複製為 network.local.txt，替換佔位文字；真實設定不得提交。
+# Wi-Fi 帳密只在 WiFiManager 頁面輸入，不需要 secrets.h。
+# 先在路由器保留相同 IP，再由序列埠送出：
+STATIC <閘道IP> <路由器IP> <子網路遮罩> <DNS伺服器IP>
+REBOOT

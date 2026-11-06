@@ -18,7 +18,7 @@ apps/
   album-ios/               光盒相簿（SwiftUI 原生 App）
   miner-status-ios/        礦機狀態（SwiftUI、XcodeGen，沿用相簿架構）
   desk-remote-ios/         桌面遙控（SwiftUI；pc-helper/ 是電腦端小幫手）
-  thermo-ios/              溫濕度（只在工具箱裡；pc-gateway/ 是電腦藍牙閘道，esp32/ 預留給 ESP32 閘道）
+  thermo-ios/              溫濕度（只在工具箱裡；pc-gateway/ 是電腦藍牙閘道，esp32/ 是 CYD 藍牙／Wi-Fi 閘道原始碼）
   toolbox-ios/             工具箱（直接編譯上面四個工具的原始碼，不複製）
 .github/workflows/
   album-ios.yml            相簿的 macOS 編譯與測試

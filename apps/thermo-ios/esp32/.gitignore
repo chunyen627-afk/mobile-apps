@@ -1,0 +1,13 @@
+.pio/
+.venv/
+__pycache__/
+artifacts/
+backups/
+*.bin
+*.elf
+*.map
+*.log
+secrets.h
+include/secrets.h
+*.local.txt
+*.local.json
