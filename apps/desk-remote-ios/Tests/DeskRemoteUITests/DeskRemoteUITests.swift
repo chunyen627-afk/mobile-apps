@@ -1090,11 +1090,19 @@ final class DeskRemoteUITests: XCTestCase {
 
     /// Like waitFor, scrolling to the element while the list has not built it (the update note
     /// sits below the fold on the longer PC page of 0.6.3, CI 11/02).
+    /// Reading a label needs the row built, not tapped: `reveal` asked the note whether it was
+    /// hittable while its text was being replaced, and that fails the test outright ("activation
+    /// point invalid", toolbox release run 42187212800, 11/06; test38 had failed before as well).
     private func waitFor(revealing element: XCUIElement, labelContains text: String, timeout: TimeInterval) -> Bool {
         poll(timeout: timeout) {
-            if !element.exists { _ = self.reveal(element) }
+            if !element.exists { self.scrollUntilBuilt(element) }
             return element.exists && element.label.contains(text)
         }
+    }
+
+    private func scrollUntilBuilt(_ element: XCUIElement) {
+        for _ in 0 ..< 4 where !element.exists { app.swipeDown() }
+        for _ in 0 ..< 8 where !element.exists { app.swipeUp() }
     }
 
     private func reveal(_ element: XCUIElement) -> Bool {
