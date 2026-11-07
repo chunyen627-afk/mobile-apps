@@ -44,7 +44,8 @@
    - `history_days`：紀錄保留天數，預設 90
    - `notify`：推播用的 ntfy `server`／`topic`；或 `{"from_file": "<另一個服務的設定檔>"}` 沿用它 `notify` 段的主題（例如礦機狀態服務的 aggregator.json，同一個手機訂閱就收得到），主題不用複製第二份。沒有主題就不推
    - `alerts`：推播條件，`temperature_high`／`temperature_low`（°C）、`humidity_high`／`humidity_low`（%）、`battery_low`（%）、`offline_after_seconds`、`hold_seconds`（超出範圍要持續多久才推，預設 600）；設成 `null` 就不推那一項；`sensors` 可對個別溫濕度計覆寫。預設 32／10°C、80／25%、15%、2 小時
-2. 執行 `python thermo_gateway.py --config thermo-gateway.json`；要開機自動啟動，可用 `pythonw` 搭配啟動資料夾裡的 `.vbs`。
+2. 執行 `python thermo_gateway.py --config thermo-gateway.json`。要開機自動啟動、當掉自動重開，執行 `powershell -ExecutionPolicy Bypass -File register-task.ps1 -Python <pythonw.exe 完整路徑>` 建立排程工作 `ThermoGateway`（不用管理員）：登入時啟動，之後每分鐘檢查、沒在跑就重開（同時只有一份；實測強制結束後 43 秒恢復）。`Start-ScheduledTask ThermoGateway` 立即啟動。
+   - 不要從 AI 助手或終端機的工作階段直接長駐執行：那樣是它的子程式，工作階段結束或程式更新重開時會被一起關掉（2026-11-07 公司閘道因此停了將近一天）。
 3. 先跑 `python thermo_gateway.py --config thermo-gateway.json --test-notify` 確認手機收到測試通知。
 4. 同一資料夾會產生 `thermo-state.json`（最後讀數、手機給的名稱與房間）、`thermo-history.sqlite`（每 5 分鐘一筆的紀錄）、`thermo-gateway.log`。
 
