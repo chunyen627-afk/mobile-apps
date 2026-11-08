@@ -112,18 +112,21 @@ final class DeskClipboardModel: ObservableObject {
     /// Puts the item on this phone's clipboard (a long text and a picture are fetched first).
     func copyToPhone(_ item: ClipboardItem) async {
         let client = via.flatMap { store.client($0) }
+        // The simulator's pasteboard is synced with the Mac's; on a headless CI runner that sync
+        // never answers and the app hangs (both CI runs of 11/9 hit their time limit), so the UI
+        // tests check the row's check mark and leave the system pasteboard alone.
         if item.isImage {
             guard let client, let data = try? await client.clipboardImage(item.id), let image = UIImage(data: data) else {
                 note = "這張圖讀不到"
                 return
             }
-            UIPasteboard.general.image = image
+            if !store.uiTest { UIPasteboard.general.image = image }
         } else {
             var text = item.text ?? ""
             if item.truncated == true, let client, let whole = try? await client.clipboardText(item.id) {
                 text = whole
             }
-            UIPasteboard.general.string = text
+            if !store.uiTest { UIPasteboard.general.string = text }
         }
         copied = item.id
         try? await Task.sleep(nanoseconds: 2_000_000_000)
@@ -196,13 +199,16 @@ struct DeskClipboardView: View {
                     .accessibilityIdentifier("clipboard-send")
                 }
                 // The system's paste button: it reads the phone's clipboard without the paste
-                // prompt, and is greyed out while there is no text or picture to paste.
-                PasteButton(supportedContentTypes: [.image, .plainText]) { providers in
-                    Task { await model.paste(providers) }
+                // prompt, and is greyed out while there is no text or picture to paste. Not in
+                // the UI tests: it asks the pasteboard, which hangs on a headless CI simulator.
+                if !store.uiTest {
+                    PasteButton(supportedContentTypes: [.image, .plainText]) { providers in
+                        Task { await model.paste(providers) }
+                    }
+                    .labelStyle(.titleAndIcon)
+                    .disabled(model.sending)
+                    .accessibilityIdentifier("clipboard-paste")
                 }
-                .labelStyle(.titleAndIcon)
-                .disabled(model.sending)
-                .accessibilityIdentifier("clipboard-paste")
                 if let note = model.note {
                     Text(note)
                         .font(.footnote)

@@ -4394,10 +4394,28 @@ class ClipboardSync:
             return  # what this PC was just given
         if not self.store.available():
             return
+        newest = self.store.newest()
+        if newest is not None and self.row_digest(newest) == digest:
+            # The same content is the newest item already: Windows' own cloud clipboard carried
+            # the other PC's copy here before the cloud drive did (home PC 11/9), so one file.
+            self.applied = digest
+            self.seen_ms = max(self.seen_ms, newest[0])
+            return
         item_id = self.store.put_text(value, self.pc_name) if kind == 'text' else self.store.put_image(value, media, self.pc_name)
         self.applied = digest
         self.seen_ms = max(self.seen_ms, int(item_id[:13]))
         logging.info('clipboard %s published (%d bytes)', kind, len(value) if kind == 'image' else len(value.encode('utf-8')))
+
+    def row_digest(self, row):
+        """The digest of a stored item's content as it would be read from the clipboard."""
+        if row[3] == 'text':
+            text = self.store.text(row[1], row)
+            return None if text is None else self.digest('text', text)
+        picture = self.store.image(row[1], row)
+        if picture is None:
+            return None
+        data = picture[1] if picture[0] == 'image/png' else self._as_png(picture[1])
+        return None if data is None else self.digest('image', data)
 
     def apply_arrival(self):
         if not self.store.available():
