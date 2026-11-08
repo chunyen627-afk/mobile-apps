@@ -26,8 +26,8 @@ settings:
     # folder is opened on a connection the NAS closed (SIGPIPE ignored, reconnect and retry once).
     # 0.5.3: a NAS not answering over ZeroTier is tried up to five times before the album gives up.
     # 0.6: the thermometers joined as the fourth tab.
-    MARKETING_VERSION: "0.6.0"
-    CURRENT_PROJECT_VERSION: "15"
+    MARKETING_VERSION: "0.6.1"
+    CURRENT_PROJECT_VERSION: "16"
 targets:
   # Named Lightbox, as the album app it replaces: the same bundle identifier, executable and
   # Swift module, so the album's unit tests (`@testable import Lightbox`) run here unchanged.
