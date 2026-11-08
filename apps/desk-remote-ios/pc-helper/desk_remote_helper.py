@@ -4618,6 +4618,14 @@ def handler_for(hub, gate, networks, runner=None):
             super().setup()
             self.connection.settimeout(MAX_WAIT + 10)
 
+        def handle(self):
+            # A kept-alive connection the phone drops (the app goes to the background) ends with
+            # a reset while the next request line is awaited: not worth a traceback in the log.
+            try:
+                super().handle()
+            except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError, TimeoutError):
+                pass
+
         def log_message(self, *args):
             pass
 
