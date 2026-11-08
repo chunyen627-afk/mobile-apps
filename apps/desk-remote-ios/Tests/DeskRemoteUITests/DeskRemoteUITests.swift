@@ -1,3 +1,4 @@
+import UIKit
 import XCTest
 
 // Drives the real app on a simulator against the fake helper that scripts/build.sh runs on the
