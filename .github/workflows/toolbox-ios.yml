@@ -156,7 +156,8 @@ jobs:
       github.event.repository.private == false &&
       (contains(github.event.head_commit.message, '[release-ipa]') || contains(github.event.head_commit.message, '[ipad]'))
     runs-on: macos-26
-    timeout-minutes: 90
+    # Every test plus the layout shots on the slower arm64 iPad simulator ran past 90 minutes once.
+    timeout-minutes: 150
     env:
       HOMEBREW_NO_AUTO_UPDATE: "1"
       APP_DIR: apps/toolbox-ios
@@ -172,7 +173,26 @@ jobs:
         run: brew install xcodegen
       - name: Helper tests, build, unit and UI tests on an iPad mini
         working-directory: ${{ env.APP_DIR }}
+        timeout-minutes: 130
         run: bash scripts/build.sh
+      # Public runs show no logs without a token, so the test timings go into annotations: the last
+      # test started (if the step was stopped), the slowest ones and every failure.
+      - name: Report the iPad test timings
+        if: always()
+        working-directory: ${{ env.APP_DIR }}/build
+        run: |
+          [ -f xcodebuild-test.log ] || exit 0
+          last=$(grep -E "^Test Case '.*' started" xcodebuild-test.log | tail -n 1)
+          slow=$(grep -E "^Test Case '.*' (passed|failed) \(" xcodebuild-test.log \
+            | sed -E "s/^Test Case '-\[([^]]*)\]' (passed|failed) \(([0-9.]+) seconds\).*/\3s \2 \1/" \
+            | sort -rn | head -n 15 | paste -sd ';' -)
+          failed=$(grep -E "^Test Case '.*' failed" xcodebuild-test.log \
+            | sed -E "s/^Test Case '-\[([^]]*)\]'.*/\1/" | paste -sd ';' -)
+          errors=$(grep -E ": error: -\[" xcodebuild-test.log | sed -E 's/^.*: error: //' | cut -c1-200 | head -n 20 | paste -sd ';' -)
+          echo "::notice title=Last test started::${last:-none}"
+          echo "::notice title=Slowest tests::${slow:-none}"
+          echo "::notice title=Failed tests::${failed:-none}"
+          echo "::notice title=Test errors::${errors:-none}"
       - name: Report the iPad's screen
         if: always()
         working-directory: ${{ env.APP_DIR }}/build
