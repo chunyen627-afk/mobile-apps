@@ -35,12 +35,15 @@ struct DeskPopupList: View {
     let popups: [HelperState.Popup]
     @ObservedObject var presser: DeskPopupPresser
     var compact = false
+    /// While typing: each window shrinks to one line (its name and buttons), so the chat still
+    /// shows between it and the keyboard (iPad in landscape, 11/08).
+    var oneLine = false
     let press: (HelperState.Popup, String) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: oneLine ? 4 : 8) {
             ForEach(popups) { popup in
-                DeskPopupCard(popup: popup, busy: presser.busy == popup.id, compact: compact) { press(popup, $0) }
+                DeskPopupCard(popup: popup, busy: presser.busy == popup.id, compact: compact, oneLine: oneLine) { press(popup, $0) }
             }
             if let result = presser.result {
                 Text(result)
@@ -58,6 +61,7 @@ struct DeskPopupCard: View {
     let popup: HelperState.Popup
     let busy: Bool
     var compact = false
+    var oneLine = false
     let press: (String) -> Void
     @State private var asking: String?
     @State private var opened: Bool?
@@ -65,6 +69,38 @@ struct DeskPopupCard: View {
     private var open: Bool { opened ?? !compact }
 
     var body: some View {
+        Group {
+            if oneLine {
+                HStack(spacing: 8) {
+                    Label(popup.name, systemImage: "exclamationmark.triangle.fill")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.orange)
+                        .lineLimit(1)
+                        .layoutPriority(1)
+                    buttons
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+            } else {
+                fullCard.padding(12)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("popup-card")
+        .confirmationDialog("在電腦上按「\(asking ?? "")」？",
+                            isPresented: Binding(get: { asking != nil }, set: { if !$0 { asking = nil } }),
+                            titleVisibility: .visible, presenting: asking) { button in
+            Button("按「\(button)」") { press(button) }
+                .accessibilityIdentifier("popup-confirm")
+            Button("取消", role: .cancel) {}
+        } message: { _ in
+            Text(popup.name)
+        }
+    }
+
+    private var fullCard: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
                 Label("電腦跳出視窗：\(popup.name)", systemImage: "exclamationmark.triangle.fill")
@@ -95,20 +131,6 @@ struct DeskPopupCard: View {
                     .foregroundStyle(.secondary)
             }
             buttons
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("popup-card")
-        .confirmationDialog("在電腦上按「\(asking ?? "")」？",
-                            isPresented: Binding(get: { asking != nil }, set: { if !$0 { asking = nil } }),
-                            titleVisibility: .visible, presenting: asking) { button in
-            Button("按「\(button)」") { press(button) }
-                .accessibilityIdentifier("popup-confirm")
-            Button("取消", role: .cancel) {}
-        } message: { _ in
-            Text(popup.name)
         }
     }
 

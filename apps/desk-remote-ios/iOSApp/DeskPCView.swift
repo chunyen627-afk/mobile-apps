@@ -130,6 +130,7 @@ struct DeskPCView: View {
         .deskForegroundLoop(every: 5) {
             if state?.can("elevate") == true { await elevate.refresh(store, pcID) }
         }
+        .modifier(ReadableListWidth())
         .navigationTitle(store.pc(pcID)?.name ?? "電腦")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
@@ -227,5 +228,18 @@ struct DeskPCView: View {
             failure = text
             unreachable = DeskText.isConnectionFailure((error as? HelperFailure) ?? .unreachable)
         }
+    }
+}
+
+/// On a wide screen (an iPad in landscape) the list keeps a readable width in the middle instead
+/// of stretching edge to edge; on an iPhone, or an iPad mini in portrait, nothing changes. Safe-area
+/// padding, not content margins: a zero margin would also drop the list's own insets.
+fileprivate struct ReadableListWidth: ViewModifier {
+    @State private var width: CGFloat = 0
+
+    func body(content: Content) -> some View {
+        content
+            .safeAreaPadding(.horizontal, width > 820 ? (width - 720) / 2 : 0)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     }
 }

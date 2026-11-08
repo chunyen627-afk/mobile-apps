@@ -401,7 +401,15 @@ final class DeskRemoteUITests: XCTestCase {
         XCTAssertTrue(revealInSheet(element("model-busy")), "no switch progress shown")
         XCTAssertTrue(waitFor(element("model-busy"), labelContains: "已切換為 Sonnet 5.5", timeout: 20),
                       "switch did not finish: \(said(element("model-busy")))")
-        XCTAssertTrue(waitFor(element("meta-model"), labelContains: "Sonnet 5.5", timeout: 30), "sheet still shows the old model")
+        // Back to the top of the sheet by scrolling its own list: swiping the whole app down closes
+        // the sheet on an iPad (a form sheet in the middle of the screen).
+        let metaModel = element("meta-model")
+        let list = app.collectionViews.firstMatch.exists ? app.collectionViews.firstMatch : app.tables.firstMatch
+        for _ in 0 ..< 6 where !(metaModel.exists && metaModel.isHittable) {
+            list.swipeDown(velocity: .slow)
+        }
+        XCTAssertTrue(poll(timeout: 30) { metaModel.exists && metaModel.label.contains("Sonnet 5.5") },
+                      "sheet still shows the old model: \(said(metaModel))")
         snapshot("21-model-switched")
         element("meta-done").tap()
         XCTAssertTrue(waitFor(bar, labelContains: "Sonnet 5.5", timeout: 10), "meta bar says \(bar.label)")
@@ -601,7 +609,8 @@ final class DeskRemoteUITests: XCTestCase {
         snapshot("32c-popup-opened")
         element("popup-toggle").tap()
         allow.tap()
-        let confirm = app.buttons["按「允許」"]
+        // firstMatch: on an iPad the confirmation is a popover and XCUITest lists its button twice.
+        let confirm = app.buttons["按「允許」"].firstMatch
         XCTAssertTrue(confirm.waitForExistence(timeout: 5), "pressing was not confirmed first")
         snapshot("32b-popup-confirm")
         confirm.tap()
@@ -800,7 +809,7 @@ final class DeskRemoteUITests: XCTestCase {
         XCTAssertTrue(restart.exists && restart.label.contains("9.9.9"), "no restart for the newer helper: \(said(restart))")
         snapshot("38-memory-and-helper")
         restart.tap()
-        let restartConfirm = app.buttons["重啟小幫手"]
+        let restartConfirm = app.buttons["重啟小幫手"].firstMatch
         XCTAssertTrue(restartConfirm.waitForExistence(timeout: 5), "restarting the helper was not confirmed first")
         restartConfirm.tap()
         XCTAssertTrue(waitFor(element("helper-restart-note"), labelContains: "已換成", timeout: 40),
