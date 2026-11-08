@@ -114,7 +114,7 @@ final class AlbumUITests: XCTestCase {
         capture("diagnostics-export-ready")
     }
 
-    func testAVIPlaybackSeekPauseAndReopen() {
+    func testAVIPlaybackSeekPauseAndReopen() throws {
         app.terminate()
         app.launchEnvironment["LIGHTBOX_UI_AVI"] = "1"
         app.launch()
@@ -152,17 +152,22 @@ final class AlbumUITests: XCTestCase {
             XCTAssertEqual(XCTWaiter.wait(for: [reached], timeout: 10), .completed)
             capture("avi-paused-seek-\(pass)")
             assertPausedVideoCanHideControls(aspect: pass == 0 ? 16.0 / 9.0 : 4.0 / 3.0, name: "avi-paused-hidden-\(pass)")
+            let start = try XCTUnwrap(videoSeconds(), "no paused position; player: \(playerDebug)")
             app.buttons["繼續"].tap()
+            let resumedAt = Date()
             // Wait past the temporary seek display. This must be the decoder's
             // advancing clock, not merely the slider's requested position.
             Thread.sleep(forTimeInterval: 3.5)
             centerTap()
+            // Measured against the time that has really gone by since 繼續: a fixed window (17–24 s)
+            // failed on a busy iPad runner whose controls came back late, the video rightly at 29 s
+            // (run 42511452483). Ahead of where it was paused, and not ahead of the clock.
             let resumed = XCTNSPredicateExpectation(predicate: NSPredicate { [self] _, _ in
-                guard app.staticTexts["videoTime"].exists else { return false }
-                let parts = app.staticTexts["videoTime"].label.split(separator: ":").compactMap { Int($0) }
-                return parts.count == 2 && (17...24).contains(parts[0] * 60 + parts[1])
+                guard let now = videoSeconds() else { return false }
+                return now >= start + 2 && Double(now) <= Double(start) + Date().timeIntervalSince(resumedAt) + 2
             }, object: nil)
-            XCTAssertEqual(XCTWaiter.wait(for: [resumed], timeout: 3), .completed)
+            XCTAssertEqual(XCTWaiter.wait(for: [resumed], timeout: 3), .completed,
+                           "paused at \(start) s, \(Int(Date().timeIntervalSince(resumedAt))) s ago; player: \(playerDebug)")
             XCUIDevice.shared.orientation = .landscapeLeft
             centerTap()
             XCTAssertFalse(app.buttons["填滿螢幕（會裁切邊緣）"].exists)
@@ -327,6 +332,13 @@ final class AlbumUITests: XCTestCase {
             if done.waitForExistence(timeout: 5) { return }
         }
         XCTFail("tapping \(name) did not get to \(done); player: \(playerDebug)", file: file, line: line)
+    }
+    /// The player's position in seconds, read in one look: `exists` and then `label` would look
+    /// twice, and the auto-hiding overlay can go in between.
+    private func videoSeconds() -> Int? {
+        guard let label = (try? app.staticTexts["videoTime"].firstMatch.snapshot())?.label else { return nil }
+        let parts = label.split(separator: ":").compactMap { Int($0) }
+        return parts.count == 2 ? parts[0] * 60 + parts[1] : nil
     }
     private func tapCanvas() { app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
     private func waitUntilGone(_ element: XCUIElement, timeout: TimeInterval, file: StaticString = #filePath, line: UInt = #line) {
