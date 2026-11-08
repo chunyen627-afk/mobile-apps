@@ -97,6 +97,9 @@ if [[ -z "$SIMULATOR_ID" ]]; then
   echo 'No iPhone simulator available; refusing to continue.'
   exit 1
 fi
+# The simulator syncs its pasteboard with the Mac; on a headless runner that sync can hang
+# an app that touches the pasteboard (both runs of 11/9 hit their time limit), so it is off.
+defaults write com.apple.iphonesimulator PasteboardAutomaticSync -bool false 2>/dev/null || true
 PHASE=test
 CURRENT_LOG=build/xcodebuild-test.log
 rm -rf build/Tests.xcresult
