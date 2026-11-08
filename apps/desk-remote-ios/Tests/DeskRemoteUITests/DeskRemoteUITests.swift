@@ -1091,7 +1091,14 @@ final class DeskRemoteUITests: XCTestCase {
 
     /// An element's label for a failure message; reading a missing element's label fails the test.
     private func said(_ element: XCUIElement) -> String {
-        element.exists ? element.label : "（畫面上沒有）"
+        look(element)?.label ?? "（畫面上沒有）"
+    }
+
+    /// One look at an element, or nil when it is not there. Asking `exists` and then reading its
+    /// `label` or `frame` looks twice, and a row SwiftUI rebuilds in between fails the test outright
+    /// ("Failed to get matching snapshot", iPad run 42511452483, test38: the helper's restart note).
+    private func look(_ element: XCUIElement) -> XCUIElementSnapshot? {
+        try? element.snapshot()
     }
 
     private func openAddForm() {
@@ -1157,7 +1164,8 @@ final class DeskRemoteUITests: XCTestCase {
 
     private func waitFor(_ element: XCUIElement, labelContains text: String, timeout: TimeInterval) -> Bool {
         poll(timeout: timeout) {
-            element.exists && (element.label.contains(text) || ((element.value as? String)?.contains(text) ?? false))
+            guard let seen = self.look(element) else { return false }
+            return seen.label.contains(text) || ((seen.value as? String)?.contains(text) ?? false)
         }
     }
 
@@ -1169,7 +1177,7 @@ final class DeskRemoteUITests: XCTestCase {
     private func waitFor(revealing element: XCUIElement, labelContains text: String, timeout: TimeInterval) -> Bool {
         poll(timeout: timeout) {
             if !element.exists { self.scrollUntilBuilt(element) }
-            return element.exists && element.label.contains(text)
+            return self.look(element)?.label.contains(text) ?? false
         }
     }
 
@@ -1191,8 +1199,8 @@ final class DeskRemoteUITests: XCTestCase {
         var searched = 0
         for _ in 0 ..< 18 {
             let towardsEnd: Bool
-            if element.exists {
-                towardsEnd = element.frame.midY > app.windows.firstMatch.frame.midY
+            if let frame = look(element)?.frame {
+                towardsEnd = frame.midY > app.windows.firstMatch.frame.midY
             } else {
                 towardsEnd = searched >= 6
                 searched += 1
@@ -1217,18 +1225,17 @@ final class DeskRemoteUITests: XCTestCase {
     private func settled(_ element: XCUIElement, timeout: TimeInterval = 5) -> Bool {
         var last = CGRect.null
         return poll(timeout: timeout) {
-            guard element.exists else {
+            guard let now = self.look(element)?.frame else {
                 last = .null
                 return false
             }
-            let now = element.frame
             defer { last = now }
             return now == last && !now.isEmpty
         }
     }
 
     private func inside(_ element: XCUIElement, _ area: XCUIElement) -> Bool {
-        let frame = element.frame
+        guard let frame = look(element)?.frame else { return false }
         return area.frame.contains(CGPoint(x: frame.midX, y: frame.midY))
     }
 
@@ -1265,7 +1272,7 @@ final class DeskRemoteUITests: XCTestCase {
         if nav.exists, nav.frame.maxY < window.midY { top = max(top, nav.frame.maxY) }
         let tabs = app.tabBars.firstMatch
         if tabs.exists, tabs.frame.minY > window.midY { bottom = min(bottom, tabs.frame.minY) }
-        let frame = element.frame
+        guard let frame = look(element)?.frame else { return false }
         return frame.midY > top && frame.midY < bottom && frame.midX > window.minX && frame.midX < window.maxX
     }
 
