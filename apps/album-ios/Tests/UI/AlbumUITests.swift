@@ -190,6 +190,8 @@ final class AlbumUITests: XCTestCase {
         centerTap()
         app.buttons["暫停"].tap()
         let title = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "測試照片 ")).firstMatch.label
+        capture("photo-paused-before-pinch")
+        XCTAssertTrue(app.buttons["繼續"].exists, "the slideshow did not pause before the pinch")
         viewport.pinch(withScale: 2, velocity: 1)
         capture("photo-paused-pinch-first")
         assertPhotoZoom { $0 > 150 }
@@ -234,13 +236,14 @@ final class AlbumUITests: XCTestCase {
         capture("photo-zoom-rotation-refit")
     }
 
-    private func assertPhotoZoom(_ condition: @escaping (Int) -> Bool) {
+    private func assertPhotoZoom(file: StaticString = #filePath, line: UInt = #line, _ condition: @escaping (Int) -> Bool) {
         let expectation = XCTNSPredicateExpectation(predicate: NSPredicate { [self] _, _ in
             let text = (app.images["displayedPhoto"].value as? String) ?? ""
             guard let percent = Int(text.filter { $0.isNumber }) else { return false }
             return condition(percent)
         }, object: nil)
-        XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 4), .completed)
+        XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 4), .completed,
+                       "photo zoom: \(String(describing: app.images["displayedPhoto"].value))", file: file, line: line)
     }
 
     private func photoPixels() -> [UInt8] {
@@ -286,9 +289,10 @@ final class AlbumUITests: XCTestCase {
         }
     }
     private func tapCanvas() { app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
-    private func waitUntilGone(_ element: XCUIElement, timeout: TimeInterval) {
+    private func waitUntilGone(_ element: XCUIElement, timeout: TimeInterval, file: StaticString = #filePath, line: UInt = #line) {
         let expectation = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: element)
-        XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: timeout), .completed)
+        XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: timeout), .completed,
+                       "still shown after \(timeout) s", file: file, line: line)
     }
     private func capture(_ name: String) {
         // XCUITest can report idle before UIKit's rotation/AVPlayerLayer transition has settled.

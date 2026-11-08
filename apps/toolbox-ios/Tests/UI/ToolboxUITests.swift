@@ -41,7 +41,8 @@ final class ToolboxUITests: XCTestCase {
         return app.buttons.matching(NSPredicate(format: "label == %@", name)).firstMatch
     }
     private var albumStart: XCUIElement { app.buttons["開始播放"] }
-    private var minerBanner: XCUIElement { app.descendants(matching: .any)["mode-banner"] }
+    // firstMatch: the iPad shows the banner in both the sidebar and the detail column.
+    private var minerBanner: XCUIElement { app.descendants(matching: .any).matching(identifier: "mode-banner").firstMatch }
 
     private func snapshot(_ name: String) {
         let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
@@ -242,7 +243,7 @@ final class ToolboxUITests: XCTestCase {
         if let shot { snapshot(shot) }
         field.tap()
         field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: current.count + 4) + name)
-        alert.buttons["儲存"].tap()
+        alert.buttons["儲存"].firstMatch.tap()
         XCTAssertTrue(poll(timeout: 5) { !alert.exists }, "rename dialog did not close")
     }
 
