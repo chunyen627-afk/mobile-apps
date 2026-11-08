@@ -205,10 +205,12 @@ public struct HelperClient: Sendable {
                        ActionRequest(promptId: promptId, decision: allow ? "allow_once" : "deny", force: force ? true : nil))
     }
 
-    /// Starts a new conversation with `text` as its first message.
-    public func newSession(_ app: DeskApp, text: String, clientMsgId: String, force: Bool = false) async throws -> ActionStatus {
+    /// Starts a new conversation with `text` as its first message; `model` and `effort` (from
+    /// `HelperState.models(app)` / `efforts(app)`) are picked on its empty page first (helper 0.5.36).
+    public func newSession(_ app: DeskApp, text: String, clientMsgId: String, model: String? = nil, effort: String? = nil,
+                           force: Bool = false) async throws -> ActionStatus {
         try await post(["v1", app.rawValue, "sessions"],
-                       ActionRequest(text: text, clientMsgId: clientMsgId, force: force ? true : nil))
+                       ActionRequest(text: text, clientMsgId: clientMsgId, model: model, effort: effort, force: force ? true : nil))
     }
 
     /// Picks `model` (one of `HelperState.models(app)`) in the conversation's model menu on the PC.

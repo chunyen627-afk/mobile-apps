@@ -253,6 +253,12 @@ final class DeskRemoteUITests: XCTestCase {
         XCTAssertTrue(field.waitForExistence(timeout: 5), "new conversation sheet missing")
         field.tap()
         field.typeText("look at README")
+        // The sheet offers the model and effort for the new conversation (helper 0.5.36).
+        let effort = element("new-session-effort")
+        XCTAssertTrue(effort.waitForExistence(timeout: 10), "effort picker missing on the new-conversation sheet")
+        effort.tap()
+        let high = app.buttons["高"]
+        if high.waitForExistence(timeout: 5) { high.tap() }
         snapshot("15a-new-session")
         app.buttons["new-session-send"].tap()
         XCTAssertTrue(app.navigationBars["look at README"].waitForExistence(timeout: 25), "did not open the new conversation")

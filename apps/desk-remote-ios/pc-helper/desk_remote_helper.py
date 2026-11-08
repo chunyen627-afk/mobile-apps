@@ -38,7 +38,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.34'
+VERSION = '0.5.36'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -2147,14 +2147,19 @@ class WindowsDriver:
 
     def send(self, app, doc, text, images=None):
         """Pastes each of `images` (file paths) first, then `text`, then Enter."""
-        return self.ask(app, cmd='send', doc=doc, text=text, images=list(images or [])).get('replaced') or None
+        answer = self.ask(app, cmd='send', doc=doc, text=text, images=list(images or []))
+        # Codex at work kept the message in its queue (the card with 引導 follows): read by do_send.
+        self.queued = bool(answer.get('queued'))
+        return answer.get('replaced') or None
 
-    def new_send(self, app, button, text):
-        self.ask(app, cmd='new_send', name=button, text=text)
+    def new_send(self, app, button, text, model=None, effort=None):
+        """Opens a new conversation, picks `model` and `effort` on its empty page when given,
+        then sends `text`."""
+        self.ask(app, cmd='new_send', name=button, text=text, model=model or '', effort=effort or '')
 
     def popups(self):
         """Windows on the desktop waiting for an answer: [{hwnd, title, process, text, buttons}]."""
-        found = self.worker.request({'cmd': 'popups'}).get('popups') or []
+        found = self.worker.request({'cmd': 'popups', 'codex': self.strings.get('codex') or {}}).get('popups') or []
         return [found] if isinstance(found, dict) else found
 
     def extension_popups(self):
@@ -2237,7 +2242,8 @@ class WindowsDriver:
     def press_popup(self, popup, button):
         """Presses `button` in `popup` while it still has its title; True once it has closed."""
         return bool(self.worker.request({'cmd': 'press_popup', 'hwnd': popup['hwnd'], 'title': popup['title'],
-                                         'button': button, 'page': bool(popup.get('page'))}).get('gone'))
+                                         'button': button, 'page': bool(popup.get('page')), 'queue': bool(popup.get('queue')),
+                                         'codex': self.strings.get('codex') or {}}).get('gone'))
 
     def answer(self, app, doc, decision, expect):
         return self.ask(app, cmd='answer', doc=doc, decision=decision, expect=expect).get('how')
@@ -2254,8 +2260,8 @@ class WindowsDriver:
         return self.ask(app, cmd='model', doc=doc, model=label).get('how')
 
     def set_effort(self, app, doc, label):
-        if app != 'claude':
-            raise ActionError('not-supported', 'only Claude effort can be switched')
+        """Claude: the effort submenu of the model menu. Codex: the slider in its model menu,
+        clicked at the effort's tick (helper 0.5.36)."""
         return self.ask(app, cmd='effort', doc=doc, effort=label).get('how')
 
     def set_mode(self, app, doc, label):
@@ -2613,7 +2619,7 @@ class UiWatcher:
             listed.append({'id': hashlib.sha256(key.encode('utf-8')).hexdigest()[:12], 'hwnd': raw.get('hwnd'),
                            'title': str(raw.get('title') or ''), 'process': str(raw.get('process') or ''),
                            'text': text, 'buttons': [str(b) for b in raw['buttons']][:8], 'page': bool(raw.get('page')),
-                           'elevated': elevated})
+                           'elevated': elevated, 'queue': bool(raw.get('queue'))})
         with self.lock:
             known = {p['id'] for p in self.popups}
             self.popups = listed
@@ -3007,6 +3013,12 @@ class ActionRunner:
                 return 400, error('bad-request', f'訊息太長（上限 {self.MAX_TEXT} 字）')
         strings = self.strings.get(app) or {}
         choice_keys = {'model': ('models', '模型'), 'effort': ('efforts', '推理強度'), 'mode': ('modes', '權限模式')}
+        if kind == 'new':
+            # A new conversation may start with a model and effort (the phone's sheet, 11/8).
+            for choice in ('model', 'effort'):
+                key, what = choice_keys[choice]
+                if payload.get(choice) and payload[choice] not in (strings.get(key) or []):
+                    return 400, error('bad-request', f'沒有這個{what}')
         if kind in choice_keys:
             key, what = choice_keys[kind]
             if not strings.get(key):
@@ -3360,6 +3372,15 @@ class ActionRunner:
             # The phone's message always wins over unsent text in the box (the user's rule 10/31);
             # only its length is logged, never the text.
             logging.info('send %s replaced %d unsent characters in the box', app, len(replaced))
+        if getattr(self.driver, 'queued', False):
+            # Codex keeps a message typed while it works in a queue until the turn ends (home PC
+            # 11/6): the card with its 引導 button is listed at once, so the phone can hand it in now.
+            self.watcher.check_popups(notify=False)
+            message = f'已送出，但 Codex 正在工作，訊息先排在佇列裡：要馬上插話，按對話上方「{CODEX_QUEUE_TITLE}」卡片的「引導」'
+            if replaced:
+                message += f'（覆蓋了電腦輸入框裡原本沒送出的 {len(replaced)} 個字）'
+            self.update(action, state='done', verified=True, message=message)
+            return
         self.update(action, message='已送出，確認中')
         verified = self.verify(transcript, mark, text if text.strip() else '[圖片]')
         message = {True: '已送出', 'queued': '已送出，排在等待中的權限詢問之後'}.get(
@@ -3380,7 +3401,10 @@ class ActionRunner:
         self.presence.begin_own()  # a window without UI Automation buttons is clicked
         gone = self.driver.press_popup(popup, button)
         self.watcher.check_popups()
-        if self.presence.snapshot().get('locked'):
+        if popup.get('queue'):
+            what = '排隊的訊息已交給 Codex 目前的工作' if button == '引導' else '排隊的訊息已刪除'
+            message = f'已在電腦上按「{button}」，{what}' if gone else f'已按「{button}」，但排隊的訊息還在'
+        elif self.presence.snapshot().get('locked'):
             # A secure-desktop prompt (UAC) reads as locked; nothing on it can be pressed from here.
             message = f'已按「{button}」，接著跳出系統管理員確認（UAC），手機無法代按，請到電腦上按'
         elif gone:
@@ -3523,8 +3547,10 @@ class ActionRunner:
         how = self.driver.set_effort(app, info['doc'], label)
         self.presence.end_own()
         logging.info('effort %s %s by %s', app, label, how)
+        # Codex writes the effort to its rollout only with the next reply (as the model).
+        later = '（下一則回覆起使用）' if app == 'codex' else ''
         self.update(action, state='done', verified=True,
-                    message=f'本來就是 {label}' if how == 'already' else f'推理強度已切換為 {label}')
+                    message=f'本來就是 {label}' if how == 'already' else f'推理強度已切換為 {label}{later}')
 
     def do_mode(self, action):
         """The permission mode. Claude's mode button names the mode, so the worker checks it;
@@ -3623,6 +3649,7 @@ class ActionRunner:
 
     def do_new(self, action):
         app, text, project = action['app'], action['text'], action.get('project')
+        model, effort = action.get('model') or None, action.get('effort') or None
         source = self.hub.sources[app]
         before = {row['id'] for row in source.list_sessions(50)}
         strings = self.strings.get(app) or {}
@@ -3641,8 +3668,10 @@ class ActionRunner:
             self.driver.open(app, info)
             self.wait_doc(app, info)
             time.sleep(self.settle_seconds)
-        self.driver.new_send(app, button, text)
+        self.driver.new_send(app, button, text, model, effort)
         self.presence.end_own()
+        picked = '、'.join(part for part in ((f'模型 {model}' if model else ''), (f'推理強度 {effort}' if effort else '')) if part)
+        opened = f'已開新對話（{picked}）' if picked else '已開新對話'
         self.update(action, message='已送出，等待新對話出現')
         deadline = self.clock() + self.verify_seconds
         while True:
@@ -3650,7 +3679,7 @@ class ActionRunner:
             if fresh:
                 row = fresh[0]
                 self.update(action, state='done', verified=True, sessionId=row['id'], title=row['title'],
-                            message='已開新對話')
+                            message=opened)
                 return
             if self.clock() >= deadline:
                 self.update(action, state='done', verified=False,
@@ -3659,6 +3688,8 @@ class ActionRunner:
             time.sleep(0.5)
 
 
+# Codex's queued message, as the phone's card is titled (ui_strings codex.queue_title).
+CODEX_QUEUE_TITLE = 'Codex 排隊中的訊息'
 ELEVATED_HINT = '（系統管理員程式的視窗：手機按的按鈕會交給提權夥伴代按，在電腦上或手機核准）'
 
 
@@ -4241,6 +4272,7 @@ class FakeDriver:
         self.calls = []
         self.open_doc = {}
         self.codex_models = {}  # page title -> model picked on the phone
+        self.codex_efforts = {}   # Codex: the effort the slider was set to, per page
         self.running = set()    # page titles whose turn is running (a stop button shows)
         self.page_titles = {}   # id -> the title its page shows, where tests make it differ
         self.fake_popups = []   # windows that popped up on the desktop (--fake-popup)
@@ -4290,8 +4322,11 @@ class FakeDriver:
 
     def set_effort(self, app, doc, label):
         self.calls.append(('set_effort', app, label))
-        if app != 'claude':
-            raise ActionError('not-supported', '')
+        if app == 'codex':  # the slider's pick shows on the model button until the next reply
+            if self.codex_efforts.get(doc, '中') == label:
+                return 'already'
+            self.codex_efforts[doc] = label
+            return 'fake'
         path, data = self.session_file(app, doc)
         ids = {v: k for k, v in EFFORT_LABELS.items()}
         if EFFORT_LABELS.get(data.get('effort')) == label:
@@ -4481,10 +4516,14 @@ class FakeDriver:
         self.later(app, path, reply, delay, doc)
         return replaced
 
-    def new_send(self, app, button, text):
+    def new_send(self, app, button, text, model=None, effort=None):
         self.calls.append(('new_send', app, button))
         session_id, path = self.setup.create_session(app, text[:24])
         self.open_doc[app] = self.hub.sources[app].info(session_id)['doc']
+        if model:
+            self.set_model(app, self.open_doc[app], model)
+        if effort:
+            self.set_effort(app, self.open_doc[app], effort)
         self.write(app, path, 'user', text)
         self.later(app, path, f'（示範）新對話收到：{text[:30]}')
 
@@ -4633,6 +4672,9 @@ FAKE_TABLE = '''
 - 再看溫度'''
 
 # The window that blocked sending on 10/29, as fake mode shows it (a made-up program name).
+# Codex's queued message with its steer/delete buttons, as the worker lists it (home PC 11/6).
+FAKE_QUEUE = {'hwnd': 777, 'title': CODEX_QUEUE_TITLE, 'process': 'ChatGPT', 'text': '螢幕也有點閃',
+              'buttons': ['引導', '刪除'], 'page': True, 'queue': True}
 FAKE_POPUP = {'hwnd': 4242, 'title': 'Windows 安全性', 'process': 'SecurityHealthHost',
               'text': '是否要允許公開和私人網路存取此應用程式?\nWindows 防火牆已封鎖所有公用和私人網路上 示範程式 的部分功能。\n示範程式',
               'buttons': ['允許', '取消']}

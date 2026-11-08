@@ -379,8 +379,13 @@ function Menu-Item($w, $name) {
 function Click-Element($w, $e, $what) {
   $r = $e.Current.BoundingRectangle
   if ($r.IsEmpty -or $r.Width -lt 2) { Fail 'menu-failed' "$what has no position on screen" }
+  Click-Point $w ($r.X + $r.Width / 2) ($r.Y + $r.Height / 2) $what
+}
+
+# One left click at a screen point that must belong to $w (or another window of its process).
+function Click-Point($w, $x, $y, $what) {
   $pt = New-Object DeskWin+POINT
-  $pt.X = [int]($r.X + $r.Width / 2); $pt.Y = [int]($r.Y + $r.Height / 2)
+  $pt.X = [int]$x; $pt.Y = [int]$y
   $top = [DeskWin]::GetAncestor([DeskWin]::WindowFromPoint($pt), 2)  # GA_ROOT
   if ($top -ne [IntPtr]$w.Current.NativeWindowHandle) {
     $owner = [uint32]0
@@ -791,6 +796,94 @@ function Set-CodexModel($w, $page, $s, $label) {
   }
 }
 
+# Codex's reasoning effort is a slider in the model button's menu (the "performance" item: a
+# tick rail with one tick per effort and no element per tick; read live 11/8 on Codex 26.1027,
+# where the model button then names the effort after the model). The arrow keys were unreliable
+# (10/27), so the tick is clicked by position: the ticks sit evenly between half the rail's
+# height from each end. The menu's status line ("item 2 of 4", effort_status) confirms the pick.
+function Set-CodexEffort($w, $page, $s, $label) {
+  $button = Prefixed-Button $page $s.model_prefix
+  if (-not $button) { $button = Prefixed-Button $w $s.model_prefix }
+  if (-not $button) { Fail 'not-found' 'no model button on screen' }
+  if (Shows-Effort $button $label) { return 'already' }
+  $k = [array]::IndexOf(@($s.efforts), $label)
+  if ($k -lt 0) { Fail 'bad-request' 'unknown effort' }
+  $n = @($s.efforts).Count
+  $p = $null
+  if (-not $button.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$p)) { Fail 'not-invokable' 'the model button does not expand' }
+  $before = [DeskWin]::GetForegroundWindow()
+  $cursor = New-Object DeskWin+POINT
+  [DeskWin]::GetCursorPos([ref]$cursor) | Out-Null
+  try {
+    Bring-Front $w
+    $p.Expand()
+    $menu = Wait-Named $w $CT::Menu $s.effort_menu 12
+    if (-not $menu) { Fail 'model-failed' 'the model menu did not open' }
+    # The slider item is in the control view; its tick rail only in the raw view (11/8).
+    $item = $null
+    for ($i = 0; $i -lt 12 -and -not $item; $i++) {
+      $item = Find-ByName $menu $CT::MenuItem $s.effort_slider
+      if (-not $item) { Start-Sleep -Milliseconds 250 }
+    }
+    if (-not $item) { Fail 'model-failed' 'the effort slider is not in the menu' }
+    $rail = Find-RawClass $item $s.effort_rail 6
+    if (-not $rail) { $rail = $item }
+    $r = $rail.Current.BoundingRectangle
+    if ($r.IsEmpty -or $r.Width -lt 2) { Fail 'model-failed' 'the effort slider has no position on screen' }
+    $pad = $r.Height / 2
+    $x = $r.X + $pad + $k * ($r.Width - 2 * $pad) / ($n - 1)
+    Click-Point $w $x ($r.Y + $r.Height / 2) 'the effort slider'
+    # The status line names the tick (effort_status); the button names the effort once closed.
+    $want = [string]::Format($s.effort_status, $k + 1)
+    $seen = ''
+    for ($i = 0; $i -lt 12; $i++) {
+      Start-Sleep -Milliseconds 250
+      $seen = ''
+      foreach ($t in $menu.FindAll($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Text)))) {
+        $name = "$($t.Current.Name)"
+        if ($name.Contains($s.effort_status_mark)) { $seen = $name; break }
+      }
+      if ($seen.Contains($want)) { break }
+    }
+    if (-not $seen.Contains($want)) { Fail 'model-failed' ("the slider did not land on the effort; status: " + $seen) }
+    # The pick is made; the button names it once the menu has closed (the collapse alone left
+    # the menu open on 11/8, so Esc follows it). A slow button is not a failed pick.
+    Collapse-Named $w $s.effort_menu
+    Close-Claude-Menus $w
+    for ($i = 0; $i -lt 20; $i++) {
+      Start-Sleep -Milliseconds 250
+      $now = Prefixed-Button $w $s.model_prefix
+      if ($now -and (Shows-Effort $now $label)) { return 'click' }
+    }
+    return 'status'
+  } finally {
+    Start-Sleep -Milliseconds 300
+    Collapse-Named $w $s.effort_menu
+    $again = Prefixed-Button $w $s.model_prefix
+    if ($again) { $q = $null; if ($again.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$q) -and ("" + $q.Current.ExpandCollapseState) -eq 'Expanded') { try { $q.Collapse() } catch { } } }
+    # The menu stayed open after the collapse once (11/8): Esc while Codex is still in front.
+    Close-Claude-Menus $w
+    [DeskWin]::SetCursorPos($cursor.X, $cursor.Y) | Out-Null
+    if ($before -ne [IntPtr]::Zero) { [DeskWin]::SetForegroundWindow($before) | Out-Null }
+  }
+}
+
+# The first element under $root (raw view, so parts the control view hides) whose class name
+# contains $part, at most $depth levels down.
+function Find-RawClass($root, $part, $depth) {
+  $raw = [System.Windows.Automation.TreeWalker]::RawViewWalker
+  $child = $raw.GetFirstChild($root)
+  while ($child) {
+    if ("$($child.Current.ClassName)" -like "*$part*") { return $child }
+    if ($depth -gt 0) {
+      $hit = Find-RawClass $child $part ($depth - 1)
+      if ($hit) { return $hit }
+    }
+    $child = $raw.GetNextSibling($child)
+  }
+  return $null
+}
+
 # The app's own update button: Claude's starts with update_prefix and names the version
 # ("restart to update v4.29.0"); Codex's is exactly update_prefix (update_exact), or since its
 # sidebar layout one of update_notify ("update available", bottom left, home PC 11/01).
@@ -1171,7 +1264,7 @@ function Dialog-Buttons($hwnd) {
   return @([DeskWin]::Children($hwnd, 'Button') | Where-Object { [DeskWin]::IsWindowEnabled($_) -and [DeskWin]::Text($_) })
 }
 
-function Find-Popups {
+function Find-Popups($c) {
   $found = @()
   $windows = @($AE::RootElement.FindAll($Tree::Children, [System.Windows.Automation.Condition]::TrueCondition))
   $listed = @{}
@@ -1236,7 +1329,60 @@ function Find-Popups {
     } catch { continue }
   }
   $found += @(Find-ExtensionCards $windows)
+  $found += @(Find-CodexQueue $c.codex)
   return $found
+}
+
+# A message typed while Codex works waits in a queue above its box, named "<prefix> 1 <...>:
+# <the message>", with a steer button (handed to the running turn now) and a delete button
+# (home PC 11/6). Listed as a card so the phone can press either; the words come from
+# ui_strings' codex entry, passed as $s.
+function Codex-QueueGroup($w, $s) {
+  $groups = $w.FindAll($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Group)))
+  foreach ($g in $groups) {
+    if ("$($g.Current.Name)".StartsWith($s.queue_prefix)) { return $g }
+  }
+  return $null
+}
+
+function Find-CodexQueue($s) {
+  if (-not $s -or -not $s.queue_prefix) { return @() }
+  $w = Find-Window 'codex'
+  if (-not $w) { return @() }
+  try {
+    $g = Codex-QueueGroup $w $s
+    if (-not $g) { return @() }
+    $text = "$($g.Current.Name)"
+    $sep = $text.IndexOf([string]$s.queue_sep)
+    if ($sep -ge 0) { $text = $text.Substring($sep + $s.queue_sep.Length).Trim() }
+    if ($text.Length -gt 600) { $text = $text.Substring(0, 600) }
+    return @(@{ hwnd = [int64]$w.Current.NativeWindowHandle; title = $s.queue_title; process = 'ChatGPT'; text = $text
+                buttons = @($s.steer, $s.queue_delete_short); page = $true; queue = $true })
+  } catch { return @() }
+}
+
+# Presses the steer or delete button beside Codex's queued message. True once the queue is gone.
+function Press-CodexQueue($c) {
+  $s = $c.codex
+  $w = Find-Window 'codex'
+  if (-not $w) { Fail 'popup-gone' 'Codex is not open' }
+  $g = Codex-QueueGroup $w $s
+  if (-not $g) { Fail 'popup-gone' 'the queued message is gone' }
+  $wanted = if ($c.button -eq $s.queue_delete_short) { $s.queue_delete } else { $s.steer }
+  $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+  $parent = $walker.GetParent($g)
+  if (-not $parent) { Fail 'not-found' 'the queued message has no parent' }
+  $button = @(Any-Buttons $parent | Where-Object { $_.Current.Name.Trim() -eq $wanted }) | Select-Object -First 1
+  if (-not $button) { Fail 'not-found' 'no such button beside the queued message' }
+  if (-not (Invoke-Element $button)) {
+    Bring-Front $w
+    Click-Element $w $button 'the queue button'
+  }
+  for ($i = 0; $i -lt 12; $i++) {
+    Start-Sleep -Milliseconds 250
+    if (-not (Codex-QueueGroup $w $s)) { return $true }
+  }
+  return $false
 }
 
 # Claude for Chrome's permission card, in its own window: looked for on its own every second or
@@ -1294,6 +1440,7 @@ function Page-Dialog($c) {
 # Presses the button named $c.button in the pop-up $c.hwnd, only while that window still has
 # the title it was listed with. True when the window has closed within 3 s.
 function Press-Popup($c) {
+  if ($c.queue) { return Press-CodexQueue $c }
   if ($c.page) {
     $d = Page-Dialog $c
     if (-not $d) { Fail 'popup-gone' 'the dialog is gone' }
@@ -1389,6 +1536,7 @@ function Run-Command($c) {
     'effort' {
       $w = Need-Window $c.app
       $page = Need-Doc $w $c.doc
+      if ($c.app -eq 'codex') { return @{ ok = $true; how = (Set-CodexEffort $w $page $s $c.effort) } }
       return @{ ok = $true; how = (Set-Effort $w $page $s $c.effort) }
     }
     'mode' {
@@ -1468,9 +1616,15 @@ function Run-Command($c) {
       $w = Need-Window $c.app
       $page = Need-Doc $w $c.doc
       $replaced = Paste-Send $w $page $s.edit $c.text @($c.images)
-      return @{ ok = $true; replaced = "$replaced" }
+      # Codex at work keeps the message in its queue (a card with a steer button follows).
+      $queued = $false
+      if ($c.app -eq 'codex' -and $s.queue_prefix) {
+        Start-Sleep -Milliseconds 500
+        try { $queued = [bool](Codex-QueueGroup $w $s) } catch { }
+      }
+      return @{ ok = $true; replaced = "$replaced"; queued = $queued }
     }
-    'popups' { return @{ ok = $true; popups = @(Find-Popups) } }
+    'popups' { return @{ ok = $true; popups = @(Find-Popups $c) } }
     'extension' {
       $windows = @($AE::RootElement.FindAll($Tree::Children, [System.Windows.Automation.Condition]::TrueCondition))
       return @{ ok = $true; popups = @(Find-ExtensionCards $windows) }
@@ -1494,11 +1648,20 @@ function Run-Command($c) {
         if (-not $changed) { Fail 'title-mismatch' 'the new conversation did not open' }
       }
       Start-Sleep -Milliseconds 1500
+      # The model and effort for the new conversation are picked on its empty page, before the
+      # first message (the phone's new-conversation sheet, 11/8); each returns 'already' or how.
+      $picked = @{}
+      if ($c.model) {
+        $picked.model = if ($c.app -eq 'codex') { Set-CodexModel $w $w $s $c.model } else { Set-Model $w $w $s $c.model }
+      }
+      if ($c.effort) {
+        $picked.effort = if ($c.app -eq 'codex') { Set-CodexEffort $w $w $s $c.effort } else { Set-Effort $w $w $s $c.effort }
+      }
       # Codex names its new-conversation box differently from a conversation's (read live 10/27).
       $editName = $s.edit
       if ($s.new_edit -and (Find-ByName $w $CT::Edit $s.new_edit)) { $editName = $s.new_edit }
       Paste-Send $w $w $editName $c.text
-      return @{ ok = $true; docs = @(Get-Docs $w) }
+      return @{ ok = $true; docs = @(Get-Docs $w); picked = $picked }
     }
     'answer' {
       $w = Need-Window $c.app

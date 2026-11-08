@@ -719,6 +719,38 @@ class DrivingTests(FakeEnvironment):
         run_all(runner)
         self.assertEqual(driver.calls[-1], ('new_send', 'codex', '在 demo-app 中開始新對話'))
 
+    def test_a_new_conversation_starts_with_the_chosen_model_and_effort(self):
+        """The phone's new-conversation sheet picks a model and effort first (11/8): both are set
+        on the empty page before the first message, and the result names them."""
+        _, driver, _, runner = drive(self.fake)
+        self.assertEqual(runner.submit('new', 'claude', None, {'text': 'x', 'model': 'GPT-6 Sol'})[0], 400)
+        self.assertEqual(runner.submit('new', 'codex', None, {'text': 'x', 'effort': '極限'})[0], 400)
+        body = runner.submit('new', 'claude', None, {'text': '看一下 README', 'model': 'Sonnet 5.5', 'effort': '高'})[1]
+        run_all(runner)
+        status = runner.status(body['id'])
+        self.assertEqual((status['state'], status['verified']), ('done', True), status)
+        self.assertEqual(status['message'], '已開新對話（模型 Sonnet 5.5、推理強度 高）')
+        self.assertEqual(driver.calls[-3:], [('new_send', 'claude', '新增'), ('set_model', 'claude', 'Sonnet 5.5'),
+                                             ('set_effort', 'claude', '高')])
+        body = runner.submit('new', 'codex', None, {'text': 'x', 'effort': '超高'})[1]
+        run_all(runner)
+        self.assertEqual(runner.status(body['id'])['message'], '已開新對話（推理強度 超高）')
+        self.assertEqual(driver.calls[-1], ('set_effort', 'codex', '超高'))
+
+    def test_codexs_effort_is_switched_from_the_phone(self):
+        """Codex's effort is a slider in its model menu (11/8): clicked at the effort's tick, and
+        reported as taking effect from the next reply, like its model."""
+        _, driver, _, runner = drive(self.fake)
+        body = runner.submit('effort', 'codex', X, {'effort': '高'})[1]
+        run_all(runner)
+        status = runner.status(body['id'])
+        self.assertEqual((status['state'], status['verified']), ('done', True), status)
+        self.assertEqual(status['message'], '推理強度已切換為 高（下一則回覆起使用）')
+        self.assertIn(('set_effort', 'codex', '高'), driver.calls)
+        body = runner.submit('effort', 'codex', X, {'effort': '高'})[1]
+        run_all(runner)
+        self.assertEqual(runner.status(body['id'])['message'], '本來就是 高')
+
     def test_questions_are_notified_but_not_what_the_phone_did(self):
         sent = []
         _, _, watcher, runner = drive(self.fake, notify=lambda *a: sent.append(a))
@@ -1583,6 +1615,43 @@ class VersionTests(FakeEnvironment):
         driver.fake_popups = [dict(h.FAKE_QUIT_GUARD, elevated=True)]
         self.assertFalse(watcher.check_popups()[0]['elevated'])
 
+    def test_codexs_queued_message_is_a_card_the_phone_steers_in(self):
+        """Codex keeps a message typed while it works in a queue with a 引導 button (home PC 11/6):
+        listed as a card without a notification; pressing 引導 hands it in."""
+        sent = []
+        hub, driver, watcher, runner = drive(self.fake, notify=lambda *a: sent.append(a))
+        driver.fake_popups = [dict(h.FAKE_QUEUE)]
+        sent.clear()
+        watcher.tick()
+        self.assertEqual(sent, [], 'a queued message is not a permission question')
+        popups = hub.state()['popups']
+        self.assertEqual([(p['title'], p['text'], p['buttons']) for p in popups],
+                         [(h.CODEX_QUEUE_TITLE, '螢幕也有點閃', ['引導', '刪除'])])
+        code, body = runner.submit('popup', None, popups[0]['id'], {'button': '引導'})
+        self.assertEqual(code, 202, body)
+        run_all(runner)
+        status = runner.status(body['id'])
+        self.assertEqual((status['state'], status['verified']), ('done', True), status)
+        self.assertIn('已交給 Codex', status['message'])
+        self.assertIn(('press_popup', h.CODEX_QUEUE_TITLE, '引導'), driver.calls)
+        self.assertEqual(hub.state()['popups'], [])
+
+    def test_a_message_codex_queues_is_reported_with_the_steer_hint(self):
+        class BusyDriver(h.FakeDriver):
+            def send(self, app, doc, text, images=None):
+                self.calls.append(('send', app, doc))
+                self.queued = True
+                self.fake_popups = [dict(h.FAKE_QUEUE, text=text)]
+                return None
+        hub, driver, _, runner = drive(self.fake, driver_class=BusyDriver)
+        body = runner.submit('send', 'codex', Y, {'text': '螢幕也有點閃'})[1]
+        run_all(runner)
+        status = runner.status(body['id'])
+        self.assertEqual((status['state'], status['verified']), ('done', True), status)
+        self.assertIn('按對話上方', status['message'])
+        self.assertIn('引導', status['message'])
+        self.assertEqual([p['text'] for p in hub.state()['popups']], ['螢幕也有點閃'], 'the card is listed at once')
+
     def test_the_press_script_quotes_the_windows_words(self):
         script = h.elevated_press_script(99, "It's here", "Don't")
         self.assertIn("'It''s here'", script)
@@ -1763,7 +1832,7 @@ class PopupTests(FakeEnvironment):
 
     def test_effort_and_mode_switch_and_show_in_meta(self):
         hub, driver, watcher, runner = drive(self.fake)
-        self.assertEqual(runner.submit('effort', 'codex', X, {'effort': '高'})[1]['error'], 'not-supported')
+        self.assertEqual(runner.submit('effort', 'codex', X, {'effort': '極限'})[0], 400)
         self.assertEqual(runner.submit('effort', 'claude', A, {'effort': '極限'})[0], 400)
         body = runner.submit('effort', 'claude', A, {'effort': '超高'})[1]
         run_all(runner)
@@ -2000,7 +2069,8 @@ class PopupTests(FakeEnvironment):
         hub, _, _, _ = drive(self.fake)
         hub.capabilities = hub.capabilities + ['effort', 'mode', 'stop']
         state = hub.state()
-        self.assertEqual(state['efforts'], {'claude': ['低', '中', '高', '超高', '最高', 'Ultracode']})
+        self.assertEqual(state['efforts'], {'claude': ['低', '中', '高', '超高', '最高', 'Ultracode'],
+                                            'codex': ['低', '中', '高', '超高']})
         self.assertEqual(state['modes']['codex'], ['要求核准', '代我核准'])
         self.assertEqual(state['stop'], ['claude', 'codex'])
 
