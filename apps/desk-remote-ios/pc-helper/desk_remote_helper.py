@@ -38,7 +38,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.36'
+VERSION = '0.5.37'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -305,7 +305,31 @@ def images_of(content):
             match = re.match(r'data:(image/[a-z0-9.+-]+);base64,(.+)$', block['image_url'], re.S)
             if match:
                 found.append({'media': match.group(1), 'data': match.group(2)})
+        elif block.get('type') == 'local_image' and isinstance(block.get('path'), str):
+            # Codex 26.10 keeps a pasted picture as a file in Temp and writes only its path
+            # (home PC 11/6): the bytes are read while the file is still there.
+            picture = local_image(block['path'])
+            if picture:
+                found.append(picture)
     return found
+
+
+LOCAL_IMAGE_BYTES = 12 * 1024 * 1024
+LOCAL_IMAGE_TYPES = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
+                     '.webp': 'image/webp'}
+
+
+def local_image(path):
+    """The picture file a Codex transcript points at, as {'media', 'data'}; None when it is gone,
+    too big or not a picture."""
+    try:
+        file = Path(path)
+        media = LOCAL_IMAGE_TYPES.get(file.suffix.lower())
+        if media is None or not file.is_file() or file.stat().st_size > LOCAL_IMAGE_BYTES:
+            return None
+        return {'media': media, 'data': base64.b64encode(file.read_bytes()).decode('ascii')}
+    except OSError:
+        return None
 
 
 def flatten(content):
@@ -320,7 +344,7 @@ def flatten(content):
             if isinstance(block, str):
                 parts.append(block)
             elif isinstance(block, dict):
-                if block.get('type') in ('image', 'input_image'):
+                if block.get('type') in ('image', 'input_image', 'local_image'):
                     parts.append('[圖片]')
                 elif isinstance(block.get('text'), str):
                     parts.append(block['text'])
@@ -387,6 +411,43 @@ def codex_question_from(call_id, data):
             if isinstance(item.get('options'), list) else []
         questions.append({'question': str(item['title']), 'header': None, 'multiSelect': False, 'options': options})
     return {'questionId': str(call_id), 'questions': questions} if questions else None
+
+
+CODEX_FILES_HEAD = '# Files mentioned by the user:'
+CODEX_REQUEST_HEAD = '## My request:'
+
+
+def codex_request(text):
+    """What the person typed, out of the wrapper Codex 26.10 puts around a message with a pasted
+    picture ("# Files mentioned by the user: … Image attachment: true … ## My request:\\n<text>";
+    phone 11/8: the whole wrapper showed as the person's message). Other text is returned as is."""
+    if not isinstance(text, str) or CODEX_FILES_HEAD not in text:
+        return text
+    head, sep, request = text.partition(CODEX_REQUEST_HEAD)
+    if not sep or head.lstrip().split('\n', 1)[0].strip() != CODEX_FILES_HEAD:
+        return text
+    return request.strip()
+
+
+def codex_user_text(content):
+    """A Codex user message's words for the phone: the pictures first ("[圖片]" each, as the phone
+    sent them), then what was typed, without the wrapper of a pasted picture."""
+    if isinstance(content, str):
+        return codex_request(content)
+    if not isinstance(content, list):
+        return flatten(content)
+    pictures, texts = [], []
+    for block in content:
+        if isinstance(block, str):
+            texts.append(block)
+        elif isinstance(block, dict):
+            if block.get('type') in ('image', 'input_image', 'local_image'):
+                pictures.append('[圖片]')
+            elif isinstance(block.get('text'), str):
+                text = codex_request(block['text'])
+                if text.strip():
+                    texts.append(text)
+    return '\n'.join(pictures + texts)
 
 
 def codex_reply(text):
@@ -635,6 +696,8 @@ class CodexParser:
                 return self.item(payload.get('item') or {}, ts)
             if not self.modern and ptype in ('user_message', 'agent_message'):
                 text = payload.get('message') or ''
+                if ptype == 'user_message':
+                    text = codex_request(text)
                 if ptype == 'user_message' and codex_reply(text) is not None:
                     return self.answered(codex_reply(text), ts)
                 if text.strip() and not is_noise(text):
@@ -681,6 +744,7 @@ class CodexParser:
             text = flatten(item.get('content'))
             if codex_reply(text) is not None:
                 return self.answered(codex_reply(text), ts)
+            text = codex_user_text(item.get('content'))
             images = images_of(item.get('content'))
             if not (text.strip() and not is_noise(text)):
                 return []
