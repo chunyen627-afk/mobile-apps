@@ -64,8 +64,10 @@ def main():
         while target.exists():
             target = output / f"{name}-{counter}.jpg"
             counter += 1
+        # The iPad layout shots ("ipad-...", toolbox iPad job) are kept wider.
+        width = "1000" if name.startswith("ipad-") else "600"
         subprocess.run(["sips", "-s", "format", "jpeg", "-s", "formatOptions", "60",
-                        "--resampleWidth", "600", str(image), "--out", str(target)],
+                        "--resampleWidth", width, str(image), "--out", str(target)],
                        check=True, stdout=subprocess.DEVNULL)
         failed = " (failure)" if attachment.get("isAssociatedWithFailure") else ""
         index.append(f"{target.name}\t{test}{failed}")
