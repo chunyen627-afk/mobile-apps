@@ -38,7 +38,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.37'
+VERSION = '0.5.38'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -301,7 +301,12 @@ def images_of(content):
             source = block['source']
             if source.get('type') == 'base64' and isinstance(source.get('data'), str) and source['data']:
                 found.append({'media': str(source.get('media_type') or 'image/jpeg'), 'data': source['data']})
-        elif block.get('type') == 'input_image' and isinstance(block.get('image_url'), str):
+        elif block.get('type') == 'image' and isinstance(block.get('data'), str) and block['data']:
+            # An MCP tool's picture (Codex's browser screenshots): {'type': 'image', 'data', 'mimeType'}.
+            found.append({'media': str(block.get('mimeType') or 'image/jpeg'), 'data': block['data']})
+        elif block.get('type') in ('input_image', 'image') and isinstance(block.get('image_url'), str):
+            # Codex 26.10 writes a picture pasted at the PC as {'type': 'image', 'image_url': data URL}
+            # (home PC 11/8); older files and tool outputs as 'input_image'.
             match = re.match(r'data:(image/[a-z0-9.+-]+);base64,(.+)$', block['image_url'], re.S)
             if match:
                 found.append({'media': match.group(1), 'data': match.group(2)})
@@ -319,16 +324,36 @@ LOCAL_IMAGE_TYPES = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/
                      '.webp': 'image/webp'}
 
 
+LOCAL_IMAGE_MAGIC = ((b'\x89PNG', 'image/png'), (b'\xff\xd8\xff', 'image/jpeg'), (b'GIF8', 'image/gif'),
+                     (b'RIFF', 'image/webp'))
+
+
+def local_image_path(path):
+    """A transcript's picture path as a Path: plain, or a file:/// URL (Codex's ImageView items)."""
+    if path.startswith('file:'):
+        parsed = urllib.parse.urlparse(path)
+        path = urllib.parse.unquote(parsed.path)
+        if re.match(r'^/[A-Za-z]:', path):
+            path = path[1:]  # file:///C:/x -> C:/x
+        elif parsed.netloc:
+            path = f'//{parsed.netloc}{path}'
+    return Path(path)
+
+
 def local_image(path):
     """The picture file a Codex transcript points at, as {'media', 'data'}; None when it is gone,
-    too big or not a picture."""
+    too big or not a picture (the type comes from the extension, else the first bytes)."""
     try:
-        file = Path(path)
-        media = LOCAL_IMAGE_TYPES.get(file.suffix.lower())
-        if media is None or not file.is_file() or file.stat().st_size > LOCAL_IMAGE_BYTES:
+        file = local_image_path(path)
+        if not file.is_file() or file.stat().st_size > LOCAL_IMAGE_BYTES:
             return None
-        return {'media': media, 'data': base64.b64encode(file.read_bytes()).decode('ascii')}
-    except OSError:
+        raw = file.read_bytes()
+        media = LOCAL_IMAGE_TYPES.get(file.suffix.lower()) or \
+            next((kind for magic, kind in LOCAL_IMAGE_MAGIC if raw.startswith(magic)), None)
+        if media is None:
+            return None
+        return {'media': media, 'data': base64.b64encode(raw).decode('ascii')}
+    except (OSError, ValueError):
         return None
 
 
@@ -413,6 +438,7 @@ def codex_question_from(call_id, data):
     return {'questionId': str(call_id), 'questions': questions} if questions else None
 
 
+CODEX_IMAGE_VIEW = '看圖'  # the tool name shown for Codex's ImageView items
 CODEX_FILES_HEAD = '# Files mentioned by the user:'
 CODEX_REQUEST_HEAD = '## My request:'
 
@@ -728,7 +754,7 @@ class CodexParser:
                 if isinstance(output, dict):
                     output = output.get('content', output)
                 return [{'kind': 'tool_result', 'tool': self.calls.get(payload.get('call_id'), ''),
-                         'text': flatten(output), 'ts': ts}]
+                         'text': flatten(output), 'ts': ts, 'images': images_of(output)}]
         return []
 
     def answered(self, answers, ts):
@@ -783,10 +809,17 @@ class CodexParser:
         if itype == 'McpToolCall':
             name = f"{item.get('server', '')}.{item.get('tool', '')}"
             result = item.get('result')
-            text = flatten(result.get('content')) if isinstance(result, dict) else flatten(result)
+            content = result.get('content') if isinstance(result, dict) else result
             return [{'kind': 'tool_call', 'tool': name, 'text': summarize_input(name, item.get('arguments')), 'ts': ts},
-                    {'kind': 'tool_result', 'tool': name, 'text': text, 'ts': ts,
-                     'isError': item.get('status') == 'failed'}]
+                    {'kind': 'tool_result', 'tool': name, 'text': flatten(content), 'ts': ts,
+                     'isError': item.get('status') == 'failed', 'images': images_of(content)}]  # e.g. a browser screenshot
+        if itype == 'ImageView' and isinstance(item.get('path'), str):
+            # Codex looked at a picture file (its view_image tool; the path is a file:/// URL): the
+            # phone gets the picture while the file is there, else its name (home PC 11/8).
+            picture = local_image(item['path'])
+            name = local_image_path(item['path']).name
+            return [{'kind': 'tool_result', 'tool': CODEX_IMAGE_VIEW, 'text': f'[圖片] {name}', 'ts': ts,
+                     'images': [picture] if picture else []}]
         return []
 
 
