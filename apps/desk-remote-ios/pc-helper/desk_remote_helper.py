@@ -38,7 +38,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.38'
+VERSION = '0.5.39'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -317,6 +317,51 @@ def images_of(content):
             if picture:
                 found.append(picture)
     return found
+
+
+try:
+    from PIL import Image as PIL_IMAGE  # Pillow: pictures are shrunk for the phone when it is installed
+except ImportError:
+    PIL_IMAGE = None
+
+PICTURE_MAX_SIDE = 1600          # pixels on the long side of a picture sent to the phone
+PICTURE_QUALITY = 82             # JPEG quality of a shrunk picture
+PICTURE_SHRINK_FROM = 400 * 1024  # bytes; smaller pictures go as they are
+
+
+def shrink_picture(media, data):
+    """A picture for the phone: a 4K screenshot pasted at the PC is 2-5 MB and the phone decodes
+    it to 33 MB, so with AirPlay on the same Wi-Fi the conversation stalled (the user 11/8). When
+    Pillow is installed and the picture is large, it is scaled to PICTURE_MAX_SIDE on its long
+    side and re-encoded (JPEG; PNG when it has transparency). Otherwise it goes as it is.
+    Returns (media type, base64)."""
+    if PIL_IMAGE is None or media == 'image/gif' or len(data) < PICTURE_SHRINK_FROM * 4 // 3:
+        return media, data
+    try:
+        import io
+        raw = base64.b64decode(data, validate=False)
+        with PIL_IMAGE.open(io.BytesIO(raw)) as opened:
+            opened.load()
+            image = opened
+            width, height = image.size
+            scale = PICTURE_MAX_SIDE / max(width, height, 1)
+            if scale < 1:
+                image = image.resize((max(1, round(width * scale)), max(1, round(height * scale))), PIL_IMAGE.LANCZOS)
+            transparent = image.mode in ('RGBA', 'LA') and image.getextrema()[-1][0] < 255 or \
+                (image.mode == 'P' and 'transparency' in image.info)
+            out = io.BytesIO()
+            if transparent:
+                image.save(out, 'PNG', optimize=True)
+                kind = 'image/png'
+            else:
+                image.convert('RGB').save(out, 'JPEG', quality=PICTURE_QUALITY, optimize=True)
+                kind = 'image/jpeg'
+        if out.tell() >= len(raw):
+            return media, data
+        return kind, base64.b64encode(out.getvalue()).decode('ascii')
+    except (OSError, ValueError, TypeError) as exc:
+        logging.info('picture left at full size: %s', exc)
+        return media, data
 
 
 LOCAL_IMAGE_BYTES = 12 * 1024 * 1024
@@ -911,8 +956,9 @@ class Transcript:
             event['images'] = []
             for n, picture in enumerate(pictures[:8]):
                 image_id = f'g{self.seq}-{n}'
-                self.images[image_id] = (picture['media'], picture['data'])
-                self.image_bytes += len(picture['data'])
+                media, data = shrink_picture(picture['media'], picture['data'])
+                self.images[image_id] = (media, data)
+                self.image_bytes += len(data)
                 event['images'].append(image_id)
             while self.image_bytes > IMAGE_BYTES and self.images:
                 oldest = next(iter(self.images))
@@ -4009,7 +4055,11 @@ def handler_for(hub, gate, networks, runner=None):
     class Handler(BaseHTTPRequestHandler):
         server_version = 'DeskRemoteHelper'
         sys_version = ''
-        protocol_version = 'HTTP/1.0'
+        # HTTP/1.1: the phone keeps one connection and reuses it for the next long-poll. Under 1.0
+        # every request opened a new TCP connection through ZeroTier, and with the phone's Wi-Fi
+        # saturated (AirPlay, 11/8) each lost handshake cost seconds before any words arrived.
+        # Every response carries a Content-Length (send_json, send_bytes, send_error).
+        protocol_version = 'HTTP/1.1'
 
         def setup(self):
             super().setup()

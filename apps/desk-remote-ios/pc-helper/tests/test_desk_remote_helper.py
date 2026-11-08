@@ -12,6 +12,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
@@ -867,6 +868,31 @@ class HttpTests(FakeEnvironment):
         self.assertEqual(body['pc']['name'], '示範電腦')
         self.assertEqual(body['capabilities'], ['read', 'send', 'permission', 'new', 'open'])
         self.assertEqual(body['apps']['claude'], {'running': True, 'available': True})
+
+    def test_one_connection_serves_several_requests(self):
+        """HTTP/1.1 keep-alive (helper 0.5.39): the phone reuses its connection for the next
+        long-poll instead of a new TCP handshake per request, which stalled for seconds whenever
+        the phone's Wi-Fi was busy (AirPlay, 11/8). Pictures and errors ride the same connection."""
+        import http.client
+        connection = http.client.HTTPConnection('127.0.0.1', self.server.server_address[1], timeout=20)
+        self.addCleanup(connection.close)
+        for n, (path, token, expected) in enumerate([('/v1/state', TOKEN, 200), ('/v1/state', 'wrong', 401),
+                                                     (f'/v1/claude/sessions/{A}/events?after=0', TOKEN, 200),
+                                                     ('/v1/claude/sessions', TOKEN, 200), ('/health', None, 200)]):
+            connection.request('GET', path, headers={'Authorization': f'Bearer {token}'} if token else {})
+            response = connection.getresponse()
+            body = response.read()
+            self.assertEqual((n, response.status), (n, expected))
+            self.assertEqual(response.version, 11)
+            self.assertEqual(int(response.getheader('Content-Length')), len(body))
+            self.assertNotEqual((response.getheader('Connection') or '').lower(), 'close', f'request {n} closed the connection')
+        self.assertIsNotNone(connection.sock, 'the client kept the one connection')
+        # A POST on the same connection too (its body is read before the answer).
+        connection.request('POST', f'/v1/claude/sessions/{A}/messages', body=json.dumps({'text': 'keep-alive 測試'}).encode(),
+                           headers={'Authorization': f'Bearer {TOKEN}', 'Content-Type': 'application/json'})
+        response = connection.getresponse()
+        response.read()
+        self.assertEqual(response.status, 202)
 
     def test_lists_events_long_poll_and_items(self):
         code, body = self.get('/v1/claude/sessions?limit=2')
@@ -2064,6 +2090,40 @@ class PopupTests(FakeEnvironment):
             {'type': 'input_image', 'image_url': 'data:image/jpeg;base64,' + png, 'detail': 'original'}]}})
         self.assertEqual(out[0]['images'], [{'media': 'image/jpeg', 'data': png}])
         self.assertEqual(h.local_image_path('file:///C:/Users/u/a%20b.png'), Path('C:/Users/u/a b.png'))
+
+    def test_large_pictures_are_shrunk_for_the_phone(self):
+        """A 4K picture pasted at the PC is 2-5 MB and the phone decodes it to 33 MB (home PC 11/8:
+        with AirPlay on the same Wi-Fi the remote stalled): sent at most 1600 px on the long side
+        as JPEG, PNG when transparent; small pictures and GIFs as they are; without Pillow all."""
+        if h.PIL_IMAGE is None:
+            self.skipTest('Pillow is not installed here')
+        import io
+
+        def encoded(mode, size):
+            buffer = io.BytesIO()
+            h.PIL_IMAGE.frombytes(mode, size, os.urandom(size[0] * size[1] * len(mode))).save(buffer, 'PNG')
+            return base64.b64encode(buffer.getvalue()).decode('ascii')
+
+        def size_of(data):
+            with h.PIL_IMAGE.open(io.BytesIO(base64.b64decode(data))) as image:
+                return image.size
+
+        big = encoded('RGB', (1800, 1200))
+        media, out = h.shrink_picture('image/png', big)
+        self.assertEqual((media, size_of(out)), ('image/jpeg', (1600, 1067)))
+        self.assertLess(len(out), len(big) // 4)
+        clear = encoded('RGBA', (1800, 1200))
+        media, out = h.shrink_picture('image/png', clear)
+        self.assertEqual((media, size_of(out)), ('image/png', (1600, 1067)), 'transparency is kept')
+        self.assertEqual(h.shrink_picture('image/png', h.FAKE_PNG), ('image/png', h.FAKE_PNG), 'small ones go as they are')
+        self.assertEqual(h.shrink_picture('image/gif', big), ('image/gif', big))
+        self.assertEqual(h.shrink_picture('image/png', 'not-a-picture' * 50000), ('image/png', 'not-a-picture' * 50000))
+        transcript = h.Transcript(self.fake.root / 'nowhere.jsonl', h.ClaudeParser)
+        transcript.add({'kind': 'user', 'text': '[圖片]', 'images': [{'media': 'image/png', 'data': big}]})
+        self.assertEqual(transcript.image('g1-0')[0], 'image/jpeg')
+        self.assertLess(transcript.image_bytes, len(big) // 4)
+        with mock.patch.object(h, 'PIL_IMAGE', None):
+            self.assertEqual(h.shrink_picture('image/png', big), ('image/png', big))
 
     def test_an_interrupted_turn_ends_as_a_status_not_a_message(self):
         parser = h.ClaudeParser()
