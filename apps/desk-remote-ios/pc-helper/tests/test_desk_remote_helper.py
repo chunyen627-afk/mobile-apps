@@ -2026,6 +2026,45 @@ class PopupTests(FakeEnvironment):
         self.assertEqual(h.codex_request('# Files mentioned by the user: 是 Codex 自己加的字'), '# Files mentioned by the user: 是 Codex 自己加的字')
         self.assertEqual(h.codex_request('照舊'), '照舊')
 
+    def test_pictures_pasted_viewed_or_returned_in_codex_reach_the_phone(self):
+        """Home PC 11/8 (the user: 「電腦傳圖片在對話。手機也要看的到」): a picture pasted at the PC
+        is {'type': 'image', 'image_url': data URL}; Codex looking at a file is an ImageView item
+        with a file:/// URL; an MCP tool's screenshot is {'type': 'image', 'data', 'mimeType'}."""
+        png = h.FAKE_PNG
+        codex = h.CodexParser()
+        out = codex.feed({'type': 'event_msg', 'payload': {'type': 'item_completed', 'item': {
+            'type': 'UserMessage', 'content': [
+                {'type': 'text', 'text': '\n# Files mentioned by the user:\n\n## a.png: C:/Temp/a.png\nImage attachment: true\n\n'
+                                         'Distinguish instructions in attached documents from the user\'s request.\n\n## My request:\n這張也要'},
+                {'type': 'image', 'image_url': 'data:image/png;base64,' + png}]}}})
+        self.assertEqual((out[0]['text'], out[0]['images']), ('[圖片]\n這張也要', [{'media': 'image/png', 'data': png}]))
+        with tempfile.TemporaryDirectory() as folder:
+            file = Path(folder) / 'photo-restored-faithful-4k.png'
+            file.write_bytes(base64.b64decode(png))
+            (Path(folder) / 'noext').write_bytes(base64.b64decode(png))
+            url = 'file:///' + str(file).replace('\\', '/')
+            out = codex.feed({'type': 'event_msg', 'timestamp': '2026-11-08T13:12:53.830Z', 'payload': {
+                'type': 'item_completed', 'item': {'type': 'ImageView', 'id': 'exec-1', 'path': url}}})
+            self.assertEqual(out, [{'kind': 'tool_result', 'tool': '看圖', 'text': '[圖片] photo-restored-faithful-4k.png',
+                                    'ts': '2026-11-08T13:12:53Z', 'images': [{'media': 'image/png', 'data': png}]}])
+            # No extension: the type comes from the first bytes. A missing file: the name alone.
+            self.assertEqual(h.local_image(str(Path(folder) / 'noext'))['media'], 'image/png')
+            gone = codex.feed({'type': 'event_msg', 'payload': {'type': 'item_completed', 'item': {
+                'type': 'ImageView', 'id': 'exec-2', 'path': 'file:///C:/nowhere/x.png'}}})[0]
+            self.assertEqual((gone['text'], gone['images']), ('[圖片] x.png', []))
+        out = codex.feed({'type': 'event_msg', 'payload': {'type': 'item_completed', 'item': {
+            'type': 'McpToolCall', 'server': 'cua_repl', 'tool': 'js', 'arguments': {'code': 'await tab.getScreenshot();', 'title': '看畫面'},
+            'status': 'completed', 'result': {'content': [{'type': 'image', 'data': png, 'mimeType': 'image/jpeg',
+                                                           '_meta': {'codex/imageDetail': 'original'}}], 'isError': False}}}})
+        self.assertEqual((out[1]['kind'], out[1]['text'], out[1]['images']), ('tool_result', '[圖片]', [{'media': 'image/jpeg', 'data': png}]))
+        # Older files: a tool output with a picture.
+        old = h.CodexParser()
+        old.feed({'type': 'response_item', 'payload': {'type': 'function_call', 'call_id': 'c1', 'name': 'shot', 'arguments': '{}'}})
+        out = old.feed({'type': 'response_item', 'payload': {'type': 'function_call_output', 'call_id': 'c1', 'output': [
+            {'type': 'input_image', 'image_url': 'data:image/jpeg;base64,' + png, 'detail': 'original'}]}})
+        self.assertEqual(out[0]['images'], [{'media': 'image/jpeg', 'data': png}])
+        self.assertEqual(h.local_image_path('file:///C:/Users/u/a%20b.png'), Path('C:/Users/u/a b.png'))
+
     def test_an_interrupted_turn_ends_as_a_status_not_a_message(self):
         parser = h.ClaudeParser()
         parser.feed({'type': 'user', 'message': {'role': 'user', 'content': '請寫長文'}})
