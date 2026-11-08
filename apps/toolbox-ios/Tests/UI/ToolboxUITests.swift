@@ -19,6 +19,16 @@ final class ToolboxUITests: XCTestCase {
         app.launchArguments = ["-AppleLanguages", "(zh-Hant)", "-AppleLocale", "zh_TW", "-resumeLive", "NO"]
     }
 
+    /// Every failure keeps the screen it happened on ("fail-L<line>" in the screenshots).
+    override func record(_ issue: XCTIssue) {
+        var issue = issue
+        let shot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        shot.name = "fail-L\(issue.sourceCodeContext.location?.lineNumber ?? 0)"
+        shot.lifetime = .keepAlways
+        issue.add(shot)
+        super.record(issue)
+    }
+
     override func tearDownWithError() throws {
         // A crash during the test shows up here as "not running", reported as such rather than
         // as XCUITest's opaque "Failed to terminate" (run 40330467762, test01).
@@ -285,8 +295,10 @@ final class ToolboxUITests: XCTestCase {
         for _ in 0..<6 where !hide.isHittable {
             app.swipeDown()
         }
-        // A tap while the list still settles from the swipes can be lost (iPad run 42459465153):
-        // tap again only after 3 s without the switch turning on, so it never toggles twice.
+        // A swiped list coasts on, and a tap while it moves only stops it (iPad run 42459465153:
+        // the switch stayed off): tap once the switch has stopped moving. Should a tap still do
+        // nothing, it is tapped again only after 3 s without the switch turning on, never twice.
+        XCTAssertTrue(settled(hide), "the list keeps moving")
         for _ in 0..<2 where (hide.value as? String) != "1" {
             hide.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
             _ = poll(timeout: 3) { (hide.value as? String) == "1" }
@@ -332,6 +344,20 @@ final class ToolboxUITests: XCTestCase {
 
     private func element(_ identifier: String) -> XCUIElement {
         app.descendants(matching: .any).matching(identifier: identifier).firstMatch
+    }
+
+    /// True once the element's frame stays put for a moment (a swiped list has stopped coasting).
+    private func settled(_ element: XCUIElement, timeout: TimeInterval = 5) -> Bool {
+        var last = CGRect.null
+        return poll(timeout: timeout) {
+            guard element.exists else {
+                last = .null
+                return false
+            }
+            let now = element.frame
+            defer { last = now }
+            return now == last && !now.isEmpty
+        }
     }
 
     private func poll(timeout: TimeInterval, _ condition: () -> Bool) -> Bool {

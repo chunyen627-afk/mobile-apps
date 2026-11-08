@@ -15,6 +15,16 @@ final class AlbumUITests: XCTestCase {
         XCTAssertTrue(app.buttons["開始播放"].waitForExistence(timeout: 60))
     }
 
+    /// Every failure keeps the screen it happened on ("fail-L<line>" in the screenshots).
+    override func record(_ issue: XCTIssue) {
+        var issue = issue
+        let shot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        shot.name = "fail-L\(issue.sourceCodeContext.location?.lineNumber ?? 0)"
+        shot.lifetime = .keepAlways
+        issue.add(shot)
+        super.record(issue)
+    }
+
     override func tearDownWithError() throws {
         app.terminate()
         XCUIDevice.shared.orientation = .portrait
@@ -56,9 +66,7 @@ final class AlbumUITests: XCTestCase {
         XCTAssertTrue(app.images["displayedPhoto"].exists)
         XCTAssertFalse(app.staticTexts["讀取中…"].exists)
         capture("photo-controls-hidden-after-fast-slides")
-        centerTap()
-        XCTAssertTrue(app.buttons["leavePlayer"].waitForExistence(timeout: 2))
-        app.buttons["暫停"].tap()
+        tapOverlay("暫停", until: app.buttons["繼續"])
         app.buttons["下一個"].tap()
         XCTAssertTrue(app.images["displayedPhoto"].exists)
         XCTAssertFalse(app.staticTexts["讀取中…"].exists)
@@ -80,9 +88,8 @@ final class AlbumUITests: XCTestCase {
         centerTap()
         XCTAssertFalse(app.buttons["填滿螢幕（會裁切邊緣）"].exists)
         XCUIDevice.shared.orientation = .landscapeLeft
-        centerTap()
+        tapOverlay("暫停", until: app.buttons["繼續"])
         XCTAssertTrue(app.sliders["影片進度"].waitForExistence(timeout: 3))
-        app.buttons["暫停"].tap()
         app.sliders["影片進度"].adjust(toNormalizedSliderPosition: 0.3)
         let seekReached = XCTNSPredicateExpectation(predicate: NSPredicate { [self] _, _ in
             let parts = app.staticTexts["videoTime"].label.split(separator: ":").compactMap { Int($0) }
@@ -130,15 +137,13 @@ final class AlbumUITests: XCTestCase {
             XCTAssertTrue(app.otherElements["vlcVideoSurface"].waitForExistence(timeout: 10))
             // A slow accessibility snapshot can outlast the controls' hide timer.
             // Reveal and pause like a user before inspecting the seek controls.
-            centerTap()
-            app.buttons["暫停"].tap()
+            tapOverlay("暫停", until: app.buttons["繼續"])
             XCTAssertTrue(app.sliders["影片進度"].waitForExistence(timeout: 15))
             app.buttons["繼續"].tap()
             waitUntilGone(app.buttons["leavePlayer"], timeout: 12)  // 4 s hide timer; 8 s was once short on the iPhone runner (11/08)
             assertVideoFits(aspect: pass == 0 ? 16.0 / 9.0 : 4.0 / 3.0)
             capture("avi-fit-playing-\(pass)")
-            centerTap()
-            app.buttons["暫停"].tap()
+            tapOverlay("暫停", until: app.buttons["繼續"])
             app.sliders["影片進度"].adjust(toNormalizedSliderPosition: 0.5)
             let reached = XCTNSPredicateExpectation(predicate: NSPredicate { [self] _, _ in
                 let parts = app.staticTexts["videoTime"].label.split(separator: ":").compactMap { Int($0) }
@@ -164,13 +169,8 @@ final class AlbumUITests: XCTestCase {
             waitUntilGone(app.buttons["leavePlayer"], timeout: 8)
             assertVideoFits(aspect: pass == 0 ? 16.0 / 9.0 : 4.0 / 3.0)
             capture("avi-landscape-fit-\(pass)")
-            centerTap()
-            // The single tap waits out the double-tap check; once (toolbox CI 11/02) the controls
-            // had not come back when the button was looked for, so allow one more tap.
-            if !app.buttons["leavePlayer"].waitForExistence(timeout: 3) { centerTap() }
-            app.buttons["leavePlayer"].tap()
-            XCTAssertTrue(app.buttons["開始播放"].waitForExistence(timeout: 5))
             XCUIDevice.shared.orientation = .portrait
+            tapOverlay("leavePlayer", until: app.buttons["開始播放"])
         }
     }
 
@@ -187,8 +187,7 @@ final class AlbumUITests: XCTestCase {
         let image = app.images["displayedPhoto"]
         let viewport = app.scrollViews["photoViewport"]
         XCTAssertTrue(image.waitForExistence(timeout: 5))
-        centerTap()
-        app.buttons["暫停"].tap()
+        tapOverlay("暫停", until: app.buttons["繼續"])
         let title = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "測試照片 ")).firstMatch.label
         capture("photo-paused-before-pinch")
         XCTAssertTrue(app.buttons["繼續"].exists, "the slideshow did not pause before the pinch")
@@ -209,8 +208,7 @@ final class AlbumUITests: XCTestCase {
         assertPhotoZoom { $0 == 100 }
         viewport.pinch(withScale: 2, velocity: 1)
         assertPhotoZoom { $0 == 100 }
-        centerTap()
-        app.buttons["暫停"].tap()
+        tapOverlay("暫停", until: app.buttons["繼續"])
         pinchToZoom(viewport)
         assertPhotoZoom { $0 > 150 }
         centerTap()
@@ -312,6 +310,23 @@ final class AlbumUITests: XCTestCase {
             tapCanvas()
             XCTAssertTrue(leave.waitForExistence(timeout: 5), "the controls did not come back after two taps")
         }
+    }
+    /// Taps a button of the playing overlay, which hides itself 4 s after it shows. XCUITest's
+    /// tap looks the button up again first, and on a busy runner that outlasted the 4 s, so the
+    /// tap found nothing and failed the test (iPhone run 42459465153: "leavePlayer", no matches).
+    /// Here the button's place is read while it is shown and the tap goes there; if the overlay
+    /// had gone by then, the tap lands on the picture, which only shows it again, and the button
+    /// is tapped once more. Done once `until` shows (a paused overlay has no timer).
+    private func tapOverlay(_ name: String, until done: XCUIElement, file: StaticString = #filePath, line: UInt = #line) {
+        for _ in 0..<3 {
+            centerTap()
+            let button = app.buttons[name]
+            guard button.exists else { continue }
+            let frame = button.frame
+            app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: frame.midX, dy: frame.midY)).tap()
+            if done.waitForExistence(timeout: 5) { return }
+        }
+        XCTFail("tapping \(name) did not get to \(done); player: \(playerDebug)", file: file, line: line)
     }
     private func tapCanvas() { app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
     private func waitUntilGone(_ element: XCUIElement, timeout: TimeInterval, file: StaticString = #filePath, line: UInt = #line) {
