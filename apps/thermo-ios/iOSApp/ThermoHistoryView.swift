@@ -13,23 +13,24 @@ struct ThermoHistorySection: View {
     @State private var history: ThermoHistory?
     @State private var error: ThermoFetchError?
     @State private var loading = false
+    /// Wide and short (an iPad in landscape, set by the page): pickers side by side, a lower chart.
+    var wideAndShort = false
 
     private var fahrenheit: Bool { model.preferences.fahrenheit }
 
     var body: some View {
         Section {
-            Picker("期間", selection: $range) {
-                ForEach(ThermoRange.allCases) { Text($0.title).tag($0) }
+            if wideAndShort {
+                HStack(spacing: 16) {
+                    rangePicker
+                    metricPicker
+                }
+            } else {
+                rangePicker
+                metricPicker
             }
-            .pickerStyle(.segmented)
-            .accessibilityIdentifier("thermo-range")
-            Picker("項目", selection: $metric) {
-                ForEach(ThermoMetric.allCases) { Text($0.title).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .accessibilityIdentifier("thermo-metric")
             chart
-                .frame(height: 220)
+                .frame(height: wideAndShort ? 150 : 220)
                 .accessibilityIdentifier("thermo-chart")
             if let history, let summary = history.summary(metric) {
                 HStack {
@@ -49,6 +50,22 @@ struct ThermoHistorySection: View {
                                : "每 30 分鐘一點的平均。閘道沒收到的時段留白。")
         }
         .task(id: range) { await load() }
+    }
+
+    private var rangePicker: some View {
+        Picker("期間", selection: $range) {
+            ForEach(ThermoRange.allCases) { Text($0.title).tag($0) }
+        }
+        .pickerStyle(.segmented)
+        .accessibilityIdentifier("thermo-range")
+    }
+
+    private var metricPicker: some View {
+        Picker("項目", selection: $metric) {
+            ForEach(ThermoMetric.allCases) { Text($0.title).tag($0) }
+        }
+        .pickerStyle(.segmented)
+        .accessibilityIdentifier("thermo-metric")
     }
 
     private var bars: Bool { range.isDaily && metric != .battery }

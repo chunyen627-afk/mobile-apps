@@ -11,11 +11,13 @@ EXPECTED_MINER_TESTS="${EXPECTED_MINER_TESTS:-126}"
 EXPECTED_DESK_TESTS="${EXPECTED_DESK_TESTS:-45}"
 EXPECTED_THERMO_TESTS="${EXPECTED_THERMO_TESTS:-32}"
 EXPECTED_THERMO_GATEWAY_TESTS="${EXPECTED_THERMO_GATEWAY_TESTS:-38}"
+# Plus the 5 iPad layout shots on an iPad (SIM_MATCH).
+if [[ -n "${SIM_MATCH:-}" ]]; then EXPECTED_TOOLBOX_UI_TESTS="${EXPECTED_TOOLBOX_UI_TESTS:-12}"; fi
 EXPECTED_TOOLBOX_UI_TESTS="${EXPECTED_TOOLBOX_UI_TESTS:-7}"
 EXPECTED_ALBUM_UI_TESTS="${EXPECTED_ALBUM_UI_TESTS:-6}"
 EXPECTED_DESK_UI_TESTS="${EXPECTED_DESK_UI_TESTS:-41}"
 # Includes 3 Windows-only tests, skipped (and counted) on macOS.
-EXPECTED_DESK_HELPER_TESTS="${EXPECTED_DESK_HELPER_TESTS:-169}"
+EXPECTED_DESK_HELPER_TESTS="${EXPECTED_DESK_HELPER_TESTS:-165}"
 # The desk remote's fake helpers, as its own scripts/build.sh runs them: the first on the port in
 # its fake-config.json, then one with someone at the keyboard, one with Codex closed to the tray
 # and newer Codex limits, one with a window popped up and an update pending.
@@ -115,12 +117,39 @@ PHASE=xcodegen
 CURRENT_LOG=build/xcodegen.log
 xcodegen generate 2>&1 | tee "$CURRENT_LOG"
 
-# 3. Unit and UI tests on an available iPhone simulator. Each bundle must run exactly the expected
-#    number with 0 failures, so missing or skipped tests never count as a pass.
+# 3. Unit and UI tests on an available iPhone simulator (SIM_MATCH, for example "iPad mini", picks
+#    an iPad instead: the workflow's iPad job). Each bundle must run exactly the expected number
+#    with 0 failures, so missing or skipped tests never count as a pass.
+if [[ -z "${SIM_MATCH:-}" ]]; then
 SIMULATOR_ID=$(xcrun simctl list devices available --json | python3 -c 'import json,sys; d=json.load(sys.stdin); m=[x["udid"] for k,v in d["devices"].items() if "iOS" in k for x in v if x.get("isAvailable") and "iPhone" in x["name"]]; print(m[0] if m else "")')
+else
+  # The newest simulator whose name contains SIM_MATCH on the newest iOS runtime; created from the
+  # newest matching device type if there is none.
+  SIMULATOR_ID=$(xcrun simctl list devices available --json | python3 -c '
+import json, os, re, sys
+match = os.environ["SIM_MATCH"]
+devices = json.load(sys.stdin)["devices"]
+def version(key): return [int(n) for n in re.findall(r"\d+", key.rsplit("iOS", 1)[-1])]
+found = [(version(k), x["name"], x["udid"], k) for k, v in devices.items() if "iOS" in k for x in v if x.get("isAvailable") and match in x["name"]]
+best = max(found) if found else None
+print(best[2] if best else "")
+if best: print(f"chose {best[1]} on {best[3]}", file=sys.stderr)')
+  if [[ -z "$SIMULATOR_ID" ]]; then
+    TYPE=$(xcrun simctl list devicetypes --json | python3 -c 'import json,os,sys; t=[x["identifier"] for x in json.load(sys.stdin)["devicetypes"] if os.environ["SIM_MATCH"] in x["name"]]; print(t[-1] if t else "")')
+    RUNTIME=$(xcrun simctl list runtimes available --json | python3 -c 'import json,sys; r=[x["identifier"] for x in json.load(sys.stdin)["runtimes"] if x.get("platform")=="iOS"]; print(r[-1] if r else "")')
+    [[ -n "$TYPE" && -n "$RUNTIME" ]] && SIMULATOR_ID=$(xcrun simctl create "${SIM_MATCH} check" "$TYPE" "$RUNTIME")
+  fi
+  echo "::notice title=Simulator::$(xcrun simctl list devices --json | SIM_ID="$SIMULATOR_ID" python3 -c 'import json,os,sys; print(next((x["name"] + " on " + k.rsplit(".", 1)[-1] for k, v in json.load(sys.stdin)["devices"].items() for x in v if x["udid"] == os.environ["SIM_ID"]), "?"))')"
+fi
 if [[ -z "$SIMULATOR_ID" ]]; then
-  echo 'No iPhone simulator available; refusing to continue.'
+  echo "No ${SIM_MATCH:-iPhone} simulator available; refusing to continue."
   exit 1
+fi
+# The iPad layout shots (Tests/UI/IPadLayoutShots.swift) run on an iPad only: 7 toolbox UI tests on
+# an iPhone, 12 on an iPad.
+SKIP_TESTS=()
+if [[ -z "${SIM_MATCH:-}" ]]; then
+  SKIP_TESTS=(-skip-testing:ToolboxUITests/IPadLayoutShots)
 fi
 if [[ "${RUN_TESTS:-1}" == "1" ]]; then
   PHASE=test
@@ -141,6 +170,12 @@ if [[ "${RUN_TESTS:-1}" == "1" ]]; then
   python3 -I "$THERMO_DIR/pc-gateway/thermo_gateway.py" --fake "$THERMO_DIR/fixtures/fake-sensors.json" \
     --bind 127.0.0.1 --port "$THERMO_PORT" > build/fake-thermo-gateway.log 2>&1 &
   HELPER_PIDS="$HELPER_PIDS $!"
+  # The miner's fixture feed, for its start/stop buttons in live mode (the iPad layout shots).
+  MINER_FEED_PORT="${MINER_FEED_PORT:-8796}"
+  python3 -m http.server "$MINER_FEED_PORT" --bind 127.0.0.1 --directory ../miner-status-ios/fixtures \
+    > build/miner-feed.log 2>&1 &
+  HELPER_PIDS="$HELPER_PIDS $!"
+  for _ in $(seq 1 20); do curl -sf "http://127.0.0.1:${MINER_FEED_PORT}/demo-two-machines.json" >/dev/null && break; sleep 0.5; done
   for port in "$DESK_HELPER_PORT" "$DESK_BUSY_PORT" "$DESK_CLOSED_PORT" "$DESK_POPUP_PORT" "$THERMO_PORT"; do
     for _ in $(seq 1 20); do
       curl -sf "http://127.0.0.1:${port}/health" >/dev/null && break
@@ -156,10 +191,11 @@ if [[ "${RUN_TESTS:-1}" == "1" ]]; then
   TEST_RUNNER_DESK_ELEVATE_KEY="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["elevate_key"])' "$DESK_FIXTURES/fake-config.json")" \
   TEST_RUNNER_DESK_HELPER_TOKEN="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["token"])' "$DESK_FIXTURES/fake-config.json")" \
   TEST_RUNNER_DESK_DEAD_PORT="$DESK_DEAD_PORT" \
+  TEST_RUNNER_MINER_UI_SOURCE_URL="http://127.0.0.1:${MINER_FEED_PORT}/demo-two-machines.json" \
   TEST_RUNNER_THERMO_GATEWAY_URL="http://127.0.0.1:${THERMO_PORT}" \
   TEST_RUNNER_THERMO_DEAD_URL="http://127.0.0.1:${THERMO_DEAD_PORT}" \
   xcodebuild test -project Toolbox.xcodeproj -scheme Lightbox \
-    -parallel-testing-enabled NO \
+    -parallel-testing-enabled NO ${SKIP_TESTS[@]+"${SKIP_TESTS[@]}"} \
     -destination "platform=iOS Simulator,id=$SIMULATOR_ID" -derivedDataPath build/DerivedData \
     -resultBundlePath build/Tests.xcresult CODE_SIGNING_ALLOWED=NO 2>&1 | tee "$CURRENT_LOG"
   stop_helpers
@@ -249,6 +285,9 @@ fi
 test "$(plutil -extract CFBundleDisplayName raw -o - "$APP/zh-Hant.lproj/InfoPlist.strings")" = '工具箱'
 echo "Display name: $DISPLAY_NAME (zh-Hant: 工具箱)"
 echo "MinimumOSVersion: $(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$PLIST")"
+if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+  echo "::notice title=Archive UIDeviceFamily::$(/usr/libexec/PlistBuddy -c 'Print :UIDeviceFamily' "$PLIST" | tr -s ' \n' ' ')"
+fi
 
 # 6. Package an unsigned IPA and record its SHA256.
 PHASE=package

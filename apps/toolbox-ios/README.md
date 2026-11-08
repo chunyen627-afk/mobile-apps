@@ -1,6 +1,6 @@
 # 工具箱（toolbox-ios）
 
-把相簿、礦機狀態、桌面遙控和溫濕度放進同一個 iPhone App，底部分頁切換，以後的新工具也加在這裡。
+把相簿、礦機狀態、桌面遙控和溫濕度放進同一個 App（iPhone 與 iPad 共用一個），用分頁切換（iPhone 在底部，iPad 在上方），以後的新工具也加在這裡。
 
 免費 Apple 帳號每台手機同時只能有 3 個側載 App（SideStore 自己佔 1 個），每 7 天也只能建立 10 個 App ID。把工具合在一起，就只佔 1 個名額、只要續簽一次。
 
@@ -17,6 +17,7 @@
 - **桌面遙控的通知連結**：小幫手的手機通知帶 `deskremote://` 連結，工具箱也接這個連結，點通知會切到桌面遙控分頁、直接開那個對話（分頁列先收到連結，再交給分頁）。單獨的桌面遙控 App 還裝著時，iOS 會挑其中一個開；停用單獨版後就固定開工具箱。
 - **記住上次的工具**：下次打開時回到上次用的分頁。
 - **各分頁保留自己的畫面**：切到另一個工具再切回來，畫面停在原處。
+- **iPad**：同一個 App 也是 iPad 原生版面（`TARGETED_DEVICE_FAMILY` "1,2"；其實 0.6.1 以前的 IPA 就已經是 iPhone＋iPad，`project.yml` 專案層寫的 "1" 被 XcodeGen 的 target 預設蓋掉，現在兩層都明寫 "1,2"）。iPadOS 18 起分頁在畫面上方。為 iPad 調過的地方：礦機左右分欄（左邊清單加寬到約 340 點、機器排在最上面、右邊預設顯示第一台、開停的確認框指著按鈕）；相簿資料夾、溫濕度列表與詳情、桌面遙控的電腦清單、電腦頁與對話列表在寬螢幕（橫向）維持約 720 點寬置中，不拉滿；溫濕度詳情在 iPad 橫向時兩排選項並成一排、曲線改矮，不用捲就看得到；桌面遙控對話在打字時，上方的跳出視窗卡片縮成一行（名稱＋按鈕）。iPhone 版面不變。
 
 ## 安裝與資料
 
@@ -61,6 +62,8 @@ bash scripts/build.sh
 5. 產出 `build/Toolbox-unsigned.ipa` 與 SHA256
 
 截圖推到 `ci-screenshots-toolbox-ios` 分支（含桌面遙控自己那 70 多張，上限 10 MB），不必登入就能看。只有 commit 訊息帶 `[release-ipa]`（使用者同意發布後才加）時，才把 IPA 和閃退分析符號檔發布成公開 prerelease `toolbox-<版本>-build<N>`。
+
+**iPad**：workflow 的 `ipad` job 只在 commit 訊息帶 `[release-ipa]` 或 `[ipad]` 時跑，平常推送不跑，不拖慢 CI。它在 macos-26 runner 用最新的 Xcode 與最新 iPadOS 模擬器（iPad mini 最新機型；`SIM_MATCH=iPad mini` 讓 `build.sh` 挑 iPad）把整套 `build.sh` 再跑一次，和 iPhone job 同時進行（不會擋住 iPhone job 的發布）。iPad 上多跑 `Tests/UI/IPadLayoutShots.swift` 的 5 項（四個分頁的主要子畫面，直向和橫向各一張，截圖名 `ipad-…`、寬 1000 px），所以工具箱 UI 測試在 iPad 是 12 項、在 iPhone 是 7 項（`build.sh` 在 iPhone 上用 `-skip-testing` 跳過）。礦機的開停按鈕要即時模式，`build.sh` 另外用 `python3 -m http.server` 提供礦機的 fixtures。截圖推到 `ci-screenshots-toolbox-ios-ipad`（上限 15 MB）。
 
 ## 驗證狀態
 

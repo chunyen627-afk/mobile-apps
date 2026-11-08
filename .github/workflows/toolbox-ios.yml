@@ -147,3 +147,61 @@ jobs:
           path: ${{ env.APP_DIR }}/build/reports
           if-no-files-found: warn
           retention-days: 1
+  # The same build and every test on the newest iPad mini simulator, with the newest Xcode and
+  # iPadOS on the macos-26 image, plus the iPad layout shots (Tests/UI/IPadLayoutShots.swift).
+  # Only for approved releases ([release-ipa]) or when asked with [ipad], so everyday pushes stay
+  # as fast as before; it runs beside the iPhone job and publishes nothing but its screenshots.
+  ipad:
+    if: >-
+      github.event.repository.private == false &&
+      (contains(github.event.head_commit.message, '[release-ipa]') || contains(github.event.head_commit.message, '[ipad]'))
+    runs-on: macos-26
+    timeout-minutes: 90
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      APP_DIR: apps/toolbox-ios
+      SIM_MATCH: iPad mini
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select the newest Xcode
+        run: |
+          xcode=$(ls -d /Applications/Xcode_*.app | sort -V | tail -n 1)
+          sudo xcode-select -s "$xcode/Contents/Developer"
+          echo "::notice title=Xcode::$xcode $(xcodebuild -version | tr '\n' ' ')"
+      - name: Install project generator
+        run: brew install xcodegen
+      - name: Helper tests, build, unit and UI tests on an iPad mini
+        working-directory: ${{ env.APP_DIR }}
+        run: bash scripts/build.sh
+      - name: Report the iPad's screen
+        if: always()
+        working-directory: ${{ env.APP_DIR }}/build
+        run: |
+          line=$(grep -h -m1 'IPAD-SCREEN' xcodebuild-test.log || true)
+          echo "::notice title=iPad screen::${line:-not recorded}"
+      # Replaces the branch each run, like the iPhone screenshots; 15 MB cap (iPad shots are larger).
+      - name: Publish iPad simulator screenshots
+        if: always()
+        working-directory: ${{ env.APP_DIR }}/build
+        env:
+          SHOT_BRANCH: ci-screenshots-toolbox-ios-ipad
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ ! -f screenshots-ui/INDEX.txt ]; then
+            echo "No UI screenshots to publish."
+            exit 0
+          fi
+          total=$(find screenshots-ui -type f -exec stat -f %z {} + | awk '{s+=$1} END {print s+0}')
+          echo "screenshots total: $total bytes"
+          if [ "$total" -gt 15728640 ]; then
+            echo "Screenshots exceed 15 MB; refusing to publish."
+            exit 1
+          fi
+          cd screenshots-ui
+          printf 'run %s\ncommit %s\n' "$GITHUB_RUN_ID" "$GITHUB_SHA" > RUN.txt
+          git init -q -b "$SHOT_BRANCH"
+          git add .
+          git -c user.name=github-actions -c user.email=41898282+github-actions[bot]@users.noreply.github.com \
+            commit -q -m "iPad simulator screenshots for run $GITHUB_RUN_ID ($GITHUB_SHA)"
+          git push -q --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/${SHOT_BRANCH}"
+          echo "::notice title=Screenshots::$(grep -c . INDEX.txt) iPad screenshots on branch ${SHOT_BRANCH} for run ${GITHUB_RUN_ID}"

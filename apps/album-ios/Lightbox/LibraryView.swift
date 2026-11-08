@@ -137,6 +137,7 @@ struct LibraryView: View {
                 }
             } header: { Text("\(filtered.count) 個項目") } footer: { Text("點資料夾名稱進入；勾選資料夾會遞迴包含子目錄。父子目錄重疊時，播放清單會自動去重。") }
         }
+        .modifier(ReadableListWidth())
         .searchable(text: $search, prompt: "搜尋此層名稱")
         .safeAreaInset(edge: .bottom) {
             HStack(spacing: 14) {
@@ -209,5 +210,18 @@ struct LibraryView: View {
                 ToolbarItem(placement: .cancellationAction) { Button(model.scanFinished ? "返回" : "取消掃描") { model.cancelScan() } }
             }
         }
+    }
+}
+
+/// On a wide screen (an iPad in landscape) the list keeps a readable width in the middle instead
+/// of stretching edge to edge; on an iPhone, or an iPad mini in portrait, nothing changes. Safe-area
+/// padding, not content margins: a zero margin would also drop the list's own insets.
+fileprivate struct ReadableListWidth: ViewModifier {
+    @State private var width: CGFloat = 0
+
+    func body(content: Content) -> some View {
+        content
+            .safeAreaPadding(.horizontal, width > 820 ? (width - 720) / 2 : 0)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     }
 }

@@ -92,6 +92,7 @@ struct ThermoListView: View {
                 }
             }
         }
+        .modifier(ReadableListWidth())
         .navigationTitle("溫濕度")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -218,6 +219,8 @@ struct ThermoDetailView: View {
     @ObservedObject var model: ThermoModel
     let ref: ThermoSensorRef
     @State private var renaming: ThermoSensor?
+    /// An iPad in landscape: the history gets a lower chart so the page fits without scrolling.
+    @State private var wideAndShort = false
 
     var body: some View {
         if let found = model.sensor(ref) {
@@ -266,7 +269,7 @@ struct ThermoDetailView: View {
                     Text("電量不足，請更換 CR2032 電池。").font(.footnote).foregroundStyle(.red)
                 }
             }
-            ThermoHistorySection(model: model, ref: ref)
+            ThermoHistorySection(model: model, ref: ref, wideAndShort: wideAndShort)
             Section {
                 Button { renaming = sensor } label: {
                     LabeledContent("名稱") {
@@ -313,6 +316,8 @@ struct ThermoDetailView: View {
                 }
             }
         }
+        .modifier(ReadableListWidth())
+        .onGeometryChange(for: Bool.self) { $0.size.width > 900 && $0.size.width > $0.size.height } action: { wideAndShort = $0 }
         .navigationTitle(model.displayName(sensor))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -532,5 +537,18 @@ struct ThermoSettingsView: View {
         ), in: range, step: step) {
             LabeledContent(title, value: String(format: "%.0f%@", model.preferences.comfort[keyPath: value], unit))
         }
+    }
+}
+
+/// On a wide screen (an iPad in landscape) the list keeps a readable width in the middle instead
+/// of stretching edge to edge; on an iPhone, or an iPad mini in portrait, nothing changes. Safe-area
+/// padding, not content margins: a zero margin would also drop the list's own insets.
+fileprivate struct ReadableListWidth: ViewModifier {
+    @State private var width: CGFloat = 0
+
+    func body(content: Content) -> some View {
+        content
+            .safeAreaPadding(.horizontal, width > 820 ? (width - 720) / 2 : 0)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     }
 }

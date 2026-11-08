@@ -17,6 +17,8 @@ struct RootView: View {
                 NavigationSplitView {
                     OverviewList(model: model, selection: $selection) { showingSettings = true }
                         .modeBanner(model)
+                        // Wide enough that a machine's status lines do not wrap word by word.
+                        .navigationSplitViewColumnWidth(min: 300, ideal: 340, max: 400)
                 } detail: {
                     NavigationStack {
                         if let selection {
@@ -37,6 +39,11 @@ struct RootView: View {
                 }
             }
         }
+        // On the iPad the detail column is never left empty: the first machine shows until another
+        // is picked, also after switching between the demo and a live source.
+        .onAppear(perform: selectFirstMachineIfNeeded)
+        .onChange(of: model.snapshots.map(\.machineId)) { _ in selectFirstMachineIfNeeded() }
+        .onChange(of: sizeClass) { _ in selectFirstMachineIfNeeded() }
         .sheet(isPresented: $showingSettings) { SourceSettingsView(model: model) }
         // Foreground-only warning when a live machine leaves green; the PC side notifies when closed.
         .alert("礦機需要注意", isPresented: Binding(
@@ -53,6 +60,13 @@ struct RootView: View {
         .onChange(of: scenePhase) { phase in
             model.setForeground(phase == .active)
         }
+    }
+
+    private func selectFirstMachineIfNeeded() {
+        guard sizeClass == .regular else { return }
+        let ids = model.snapshots.map(\.machineId)
+        if let selection, ids.contains(selection) { return }
+        selection = ids.first
     }
 }
 

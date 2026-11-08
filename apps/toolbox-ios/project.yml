@@ -19,7 +19,9 @@ settings:
   base:
     SWIFT_VERSION: "5.0"
     SWIFT_STRICT_CONCURRENCY: targeted
-    TARGETED_DEVICE_FAMILY: "1"
+    # iPhone and iPad. Also set on the app target below: XcodeGen's iOS target preset sets "1,2"
+    # there, which is what every IPA up to 0.6.1 shipped although this line said "1".
+    TARGETED_DEVICE_FAMILY: "1,2"
     # Continues the album's numbering: the toolbox installs over the album (0.3.2 build 5).
     # 0.5: the desk remote joined as the third tab. 0.5.1: memory, tab and heartbeat in the
     # album's diagnostics (four unexplained ends on 11/01). 0.5.2: the album no longer ends when a
@@ -73,6 +75,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: org.personal.lightbox.album
+        TARGETED_DEVICE_FAMILY: "1,2"
         OTHER_LDFLAGS: ["$(inherited)", "-ObjC"]
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: NO

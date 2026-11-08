@@ -1,3 +1,4 @@
+import UIKit
 import XCTest
 
 // Drives the toolbox on a simulator: every tool is reachable from the tab bar, each keeps its own
@@ -27,9 +28,18 @@ final class ToolboxUITests: XCTestCase {
         }
     }
 
-    private var albumTab: XCUIElement { app.tabBars.buttons["相簿"] }
-    private var minerTab: XCUIElement { app.tabBars.buttons["礦機狀態"] }
-    private var deskTab: XCUIElement { app.tabBars.buttons["桌面遙控"] }
+    private var albumTab: XCUIElement { tab("相簿") }
+    private var minerTab: XCUIElement { tab("礦機狀態") }
+    private var deskTab: XCUIElement { tab("桌面遙控") }
+
+    /// A tool's tab: in the tab bar at the bottom on an iPhone; on an iPad (iPadOS 18 and later) the
+    /// tabs float at the top and are not a tab bar to XCUITest, so they are found by their label.
+    private func tab(_ name: String) -> XCUIElement {
+        if UIDevice.current.userInterfaceIdiom != .pad {
+            return app.tabBars.buttons[name]
+        }
+        return app.buttons.matching(NSPredicate(format: "label == %@", name)).firstMatch
+    }
     private var albumStart: XCUIElement { app.buttons["開始播放"] }
     private var minerBanner: XCUIElement { app.descendants(matching: .any)["mode-banner"] }
 
@@ -65,6 +75,11 @@ final class ToolboxUITests: XCTestCase {
         XCTAssertTrue(albumStart.waitForExistence(timeout: 10), "album screen lost after switching")
         minerTab.tap()
         XCTAssertTrue(app.navigationBars["詳情（示範）"].waitForExistence(timeout: 10), "miner tab did not keep its screen")
+        // On an iPad the list stays beside the detail: there is no back.
+        guard UIDevice.current.userInterfaceIdiom != .pad else {
+            XCTAssertTrue(row.exists, "the machine list is not beside the detail")
+            return
+        }
         app.navigationBars.buttons.firstMatch.tap()
         XCTAssertTrue(row.waitForExistence(timeout: 10), "back from the miner detail did not return to the list")
     }
@@ -126,9 +141,15 @@ final class ToolboxUITests: XCTestCase {
         session.tap()
         let input = element("chat-input")
         XCTAssertTrue(input.waitForExistence(timeout: 15), "the conversation did not open in the tab")
-        let tabBar = app.tabBars.firstMatch
-        XCTAssertTrue(tabBar.exists, "tab bar missing in the conversation")
-        XCTAssertLessThanOrEqual(input.frame.maxY, tabBar.frame.minY + 1, "the input bar is under the tab bar: \(input.frame) vs \(tabBar.frame)")
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            // The tabs float at the top on an iPad: the input bar only has to be on the screen.
+            XCTAssertTrue(deskTab.exists, "tabs missing in the conversation")
+            XCTAssertLessThanOrEqual(input.frame.maxY, app.windows.firstMatch.frame.maxY + 1, "the input bar is off the screen: \(input.frame)")
+        } else {
+            let tabBar = app.tabBars.firstMatch
+            XCTAssertTrue(tabBar.exists, "tab bar missing in the conversation")
+            XCTAssertLessThanOrEqual(input.frame.maxY, tabBar.frame.minY + 1, "the input bar is under the tab bar: \(input.frame) vs \(tabBar.frame)")
+        }
         snapshot("07-toolbox-desk-chat")
         albumTab.tap()
         XCTAssertTrue(poll(timeout: 10) { albumTab.isSelected }, "album tab did not open")
@@ -294,7 +315,7 @@ final class ToolboxUITests: XCTestCase {
         snapshot("19-thermo-name-from-gateway")
     }
 
-    private var thermoTab: XCUIElement { app.tabBars.buttons["溫濕度"] }
+    private var thermoTab: XCUIElement { tab("溫濕度") }
 
     /// A list row's text: SwiftUI exposes it either in the row's own label or as static texts.
     private func shows(_ text: String, in row: XCUIElement) -> Bool {

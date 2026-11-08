@@ -191,6 +191,7 @@ final class AlbumUITests: XCTestCase {
         app.buttons["暫停"].tap()
         let title = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "測試照片 ")).firstMatch.label
         viewport.pinch(withScale: 2, velocity: 1)
+        capture("photo-paused-pinch-first")
         assertPhotoZoom { $0 > 150 }
         XCTAssertFalse(app.buttons["leavePlayer"].exists, "Zoom should hide chrome without a spurious single tap")
         capture("photo-paused-pinched")

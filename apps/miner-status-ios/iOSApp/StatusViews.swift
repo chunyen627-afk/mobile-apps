@@ -50,9 +50,10 @@ struct OverviewList: View {
             }
         }
 
-        switch model.mode {
-        case .demo: demoSection
-        case .live: liveSection
+        // In the iPad sidebar (a selection is passed) the machines come first, so they show without
+        // scrolling, also in landscape; on the iPhone the demo or source section stays above them.
+        if selection == nil {
+            modeSection
         }
 
         if let problem = model.feedProblem {
@@ -73,6 +74,10 @@ struct OverviewList: View {
             }
         }
 
+        if selection != nil {
+            modeSection
+        }
+
         if !model.advice.isEmpty {
             AdviceSection(model: model, items: model.advice, now: model.displayNow)
         }
@@ -91,6 +96,13 @@ struct OverviewList: View {
                     Text(light.legend).font(.caption)
                 }
             }
+        }
+    }
+
+    @ViewBuilder private var modeSection: some View {
+        switch model.mode {
+        case .demo: demoSection
+        case .live: liveSection
         }
     }
 
@@ -201,23 +213,10 @@ struct MachineDetailView: View {
                 DetailContent(snapshot: snapshot,
                               earnings: model.hasEarnings ? model.earnings(for: snapshot) : nil,
                               market: model.market, cumulative: model.cumulative, now: model.displayNow,
-                              control: model.mode == .live ? RemoteControl(model: model, request: { pendingControl = $0 }) : nil)
+                              control: model.mode == .live ? RemoteControl(model: model, pending: $pendingControl) : nil)
             } else {
                 Text("目前沒有這台機器的資料").foregroundStyle(.secondary)
             }
-        }
-        .confirmationDialog(pendingControl == .stop ? "停止這台的挖礦？" : "開始這台的挖礦？",
-                            isPresented: Binding(get: { pendingControl != nil }, set: { if !$0 { pendingControl = nil } }),
-                            titleVisibility: .visible) {
-            if let action = pendingControl {
-                Button(action == .stop ? "確定停止挖礦" : "確定開始挖礦", role: action == .stop ? .destructive : nil) {
-                    Task { await model.sendControl(action, to: machineId) }
-                }
-                .accessibilityIdentifier("confirm-control")
-            }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text(pendingControl == .stop ? "電腦端的保護程式會停止礦工並還原時脈。" : "電腦端的保護程式會先檢查溫度與電源，不安全時會拒絕。")
         }
         .navigationTitle(model.mode == .demo ? "詳情（示範）" : "詳情")
         .navigationBarTitleDisplayMode(.inline)
@@ -250,7 +249,7 @@ struct DetailContent: View {
 
             if let control, let report = snapshot.sample?.control {
                 RemoteControlSection(model: control.model, machineId: snapshot.machineId, report: report,
-                                     request: control.request)
+                                     pending: control.pending)
             }
 
             if let health = snapshot.sample?.health {
