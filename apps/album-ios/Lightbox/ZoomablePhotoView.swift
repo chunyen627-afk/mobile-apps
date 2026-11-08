@@ -33,6 +33,17 @@ final class ZoomablePhotoView: UIView, UIScrollViewDelegate, UIGestureRecognizer
     private(set) var zoomEnabled = false
     private var identity: String?
     private var viewportSize = CGSize.zero
+    #if DEBUG && targetEnvironment(simulator)
+    /// UI tests only: what last reset or ended a zoom, appended to the zoom value (an iPad pinch
+    /// on the simulator came back at 100%, 11/08).
+    private var zoomTrace = ""
+    private func trace(_ event: String) {
+        guard SimulatorFixtures.active else { return }
+        zoomTrace = String((zoomTrace + " " + event).suffix(240))
+    }
+    #else
+    private func trace(_ event: String) {}
+    #endif
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -75,7 +86,7 @@ final class ZoomablePhotoView: UIView, UIScrollViewDelegate, UIGestureRecognizer
         self.identity = identity
         self.zoomEnabled = zoomEnabled
         imageView.image = image
-        if changed || resumed { resetToFit() }
+        if changed || resumed { trace("set changed=\(changed) resumed=\(resumed)"); resetToFit() }
         scrollView.maximumZoomScale = zoomEnabled ? 5 : 1
         scrollView.pinchGestureRecognizer?.isEnabled = zoomEnabled
         updatePanAndAccessibility()
@@ -86,6 +97,7 @@ final class ZoomablePhotoView: UIView, UIScrollViewDelegate, UIGestureRecognizer
         super.layoutSubviews()
         scrollView.frame = bounds
         if viewportSize != bounds.size {
+            trace("layout \(Int(viewportSize.width))x\(Int(viewportSize.height))>\(Int(bounds.width))x\(Int(bounds.height))")
             viewportSize = bounds.size
             // Rotation must never leave an old zoom offset outside the new viewport.
             resetToFit()
@@ -116,11 +128,18 @@ final class ZoomablePhotoView: UIView, UIScrollViewDelegate, UIGestureRecognizer
         // the scroll view owns them even at an edge; dragging must not change media.
         scrollView.panGestureRecognizer.isEnabled = zoomEnabled && scrollView.zoomScale > 1.01
         imageView.accessibilityValue = "縮放 \(Int((scrollView.zoomScale * 100).rounded()))%"
+        #if DEBUG && targetEnvironment(simulator)
+        if SimulatorFixtures.active, !zoomTrace.isEmpty { imageView.accessibilityValue! += " |\(zoomTrace)" }
+        #endif
         imageView.accessibilityHint = zoomEnabled ? "雙指縮放；放大後拖移，雙點放大或還原" : "暫停後可雙指縮放"
     }
 
     func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
-    func scrollViewWillBeginZooming(_ scrollView: UIScrollView, with view: UIView?) { zoomBegan?() }
+    func scrollViewWillBeginZooming(_ scrollView: UIScrollView, with view: UIView?) { trace("begin"); zoomBegan?() }
+    func scrollViewDidEndZooming(_ scrollView: UIScrollView, with view: UIView?, atScale scale: CGFloat) {
+        trace("end \(Int((scale * 100).rounded()))%")
+        updatePanAndAccessibility()
+    }
     func scrollViewDidZoom(_ scrollView: UIScrollView) {
         centerPhoto()
         updatePanAndAccessibility()

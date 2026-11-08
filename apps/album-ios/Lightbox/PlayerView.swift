@@ -108,6 +108,15 @@ struct PlayerView: View {
                 }.foregroundStyle(.white).buttonStyle(PlayerButtonStyle())
             }
         }
+        #if DEBUG && targetEnvironment(simulator)
+        .overlay(alignment: .topLeading) {
+            // UI tests only: the player state for a failing check; nearly transparent, not tappable.
+            if SimulatorFixtures.active {
+                Text(playback.debugState).font(.system(size: 6)).opacity(0.02).allowsHitTesting(false)
+                    .accessibilityIdentifier("playerDebug")
+            }
+        }
+        #endif
         .statusBarHidden()
         .persistentSystemOverlays(.hidden)
         .onAppear { playback.start() }

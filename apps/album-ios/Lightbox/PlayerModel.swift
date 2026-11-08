@@ -222,6 +222,11 @@ final class PlayerModel: ObservableObject {
         vlc?.seek(min(max(0, seconds), videoDuration))
     }
 
+    #if DEBUG && targetEnvironment(simulator)
+    /// UI tests only (see PlayerView): why a tap may not hide the controls.
+    var debugState: String { "interacting=\(interacting) paused=\(paused) controls=\(controlsVisible) message=\(message != nil)" }
+    #endif
+
     func setInteracting(_ active: Bool) {
         interacting = active
         if active { slideTask?.cancel() }

@@ -238,7 +238,8 @@ final class AlbumUITests: XCTestCase {
 
     private func assertPhotoZoom(file: StaticString = #filePath, line: UInt = #line, _ condition: @escaping (Int) -> Bool) {
         let expectation = XCTNSPredicateExpectation(predicate: NSPredicate { [self] _, _ in
-            let text = (app.images["displayedPhoto"].value as? String) ?? ""
+            // "縮放 150%", then on the simulator a trace of what reset or ended the zoom.
+            let text = ((app.images["displayedPhoto"].value as? String) ?? "").split(separator: "%").first.map(String.init) ?? ""
             guard let percent = Int(text.filter { $0.isNumber }) else { return false }
             return condition(percent)
         }, object: nil)
@@ -270,6 +271,10 @@ final class AlbumUITests: XCTestCase {
         XCTAssertEqual(app.staticTexts["videoTime"].label, position, "Hiding controls must not resume a paused video")
     }
 
+    private var playerDebug: String {
+        let debug = app.staticTexts["playerDebug"]
+        return debug.exists ? debug.label : "no debug state"
+    }
     private var savedNote: XCUIElement { app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "使用已儲存清單")).firstMatch }
     // Start each group of playing controls from a newly revealed overlay.
     // An exists snapshot can be true just before the four-second timer fires.
@@ -292,7 +297,8 @@ final class AlbumUITests: XCTestCase {
     private func waitUntilGone(_ element: XCUIElement, timeout: TimeInterval, file: StaticString = #filePath, line: UInt = #line) {
         let expectation = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: element)
         XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: timeout), .completed,
-                       "still shown after \(timeout) s", file: file, line: line)
+                       "still shown after \(timeout) s; player: \(playerDebug)", file: file, line: line)
+        if element.exists { capture("still-shown-line-\(line)") }
     }
     private func capture(_ name: String) {
         // XCUITest can report idle before UIKit's rotation/AVPlayerLayer transition has settled.

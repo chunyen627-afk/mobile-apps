@@ -14,7 +14,9 @@ final class ToolboxUITests: XCTestCase {
         XCUIDevice.shared.orientation = .portrait
         app = XCUIApplication()
         app.launchEnvironment["LIGHTBOX_UI_TEST"] = "1"
-        app.launchArguments = ["-AppleLanguages", "(zh-Hant)", "-AppleLocale", "zh_TW"]
+        // -resumeLive NO: the miner starts in its demo even when an earlier test on this simulator
+        // (the iPad layout shots) left it reading a live source.
+        app.launchArguments = ["-AppleLanguages", "(zh-Hant)", "-AppleLocale", "zh_TW", "-resumeLive", "NO"]
     }
 
     override func tearDownWithError() throws {
