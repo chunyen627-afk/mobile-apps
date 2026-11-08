@@ -868,8 +868,11 @@ final class DeskRemoteUITests: XCTestCase {
         snapshot("38c-cancelled")
         // Again, and this time update anyway: it updates.
         pressUpdate()
+        // Back at the top of the page, which the update button has scrolled away, and the list
+        // builds no row off screen: look for it as for 取消 above, not only wait (CI run
+        // 42506489990: the note told of the question while its card was not built).
         let quit = element("popup-button-仍要更新")
-        XCTAssertTrue(quit.waitForExistence(timeout: 30), "Claude's question did not come back")
+        XCTAssertTrue(poll(timeout: 30) { self.reveal(quit) }, "Claude's question did not come back")
         XCTAssertTrue(reveal(quit), "the quit button cannot be reached")
         quit.tap()
         let sureQuit = app.buttons["按「仍要更新」"].firstMatch
