@@ -1214,11 +1214,21 @@ final class DeskRemoteUITests: XCTestCase {
 
     /// A list row just below the screen's edge already exists and reports itself hittable, so
     /// `reveal` tapped it without scrolling and the tap landed off screen (CI 11/02: the PC page's
-    /// memory rows pushed Claude's row there). Its middle has to be inside the window.
+    /// memory rows pushed Claude's row there). Its middle has to be inside the window, and not
+    /// under the navigation bar or the bottom tab bar either: the list runs on beneath both, and a
+    /// row there also reports itself hittable while a tap on it lands on the bar (CI run
+    /// 42490517389, test38: Claude's 取消 sat under the title and the tap did nothing). The bars
+    /// are only counted where they are (iOS 26 puts an iPad's tab bar at the top).
     private func onScreen(_ element: XCUIElement) -> Bool {
         let window = app.windows.firstMatch.frame
+        var top = window.minY + 40
+        var bottom = window.maxY - 40
+        let nav = app.navigationBars.firstMatch
+        if nav.exists, nav.frame.maxY < window.midY { top = max(top, nav.frame.maxY) }
+        let tabs = app.tabBars.firstMatch
+        if tabs.exists, tabs.frame.minY > window.midY { bottom = min(bottom, tabs.frame.minY) }
         let frame = element.frame
-        return window.insetBy(dx: 0, dy: 40).contains(CGPoint(x: frame.midX, y: frame.midY))
+        return frame.midY > top && frame.midY < bottom && frame.midX > window.minX && frame.midX < window.maxX
     }
 
     /// Taps until `next` shows: a row that moves while the PC page is still filling in (the
