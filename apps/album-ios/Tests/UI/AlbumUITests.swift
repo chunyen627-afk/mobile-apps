@@ -134,7 +134,7 @@ final class AlbumUITests: XCTestCase {
             app.buttons["暫停"].tap()
             XCTAssertTrue(app.sliders["影片進度"].waitForExistence(timeout: 15))
             app.buttons["繼續"].tap()
-            waitUntilGone(app.buttons["leavePlayer"], timeout: 8)
+            waitUntilGone(app.buttons["leavePlayer"], timeout: 12)  // 4 s hide timer; 8 s was once short on the iPhone runner (11/08)
             assertVideoFits(aspect: pass == 0 ? 16.0 / 9.0 : 4.0 / 3.0)
             capture("avi-fit-playing-\(pass)")
             centerTap()
@@ -192,7 +192,7 @@ final class AlbumUITests: XCTestCase {
         let title = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "測試照片 ")).firstMatch.label
         capture("photo-paused-before-pinch")
         XCTAssertTrue(app.buttons["繼續"].exists, "the slideshow did not pause before the pinch")
-        viewport.pinch(withScale: 2, velocity: 1)
+        pinchToZoom(viewport)
         capture("photo-paused-pinch-first")
         assertPhotoZoom { $0 > 150 }
         XCTAssertFalse(app.buttons["leavePlayer"].exists, "Zoom should hide chrome without a spurious single tap")
@@ -211,7 +211,7 @@ final class AlbumUITests: XCTestCase {
         assertPhotoZoom { $0 == 100 }
         centerTap()
         app.buttons["暫停"].tap()
-        viewport.pinch(withScale: 2, velocity: 1)
+        pinchToZoom(viewport)
         assertPhotoZoom { $0 > 150 }
         centerTap()
         app.buttons["下一個"].tap()
@@ -229,11 +229,31 @@ final class AlbumUITests: XCTestCase {
         centerTap()
         XCTAssertTrue(app.staticTexts[title].waitForExistence(timeout: 3))
         Thread.sleep(forTimeInterval: 1)
-        viewport.pinch(withScale: 2, velocity: 1)
+        pinchToZoom(viewport)
         assertPhotoZoom { $0 > 150 }
         XCUIDevice.shared.orientation = .landscapeLeft
         assertPhotoZoom { $0 == 100 }
         capture("photo-zoom-rotation-refit")
+    }
+
+    /// A pinch that enlarges. On the iPad simulator (Xcode 26.6) XCUITest's pinch with scale 2 and
+    /// velocity 1 ended at scale 1 although the zoom began (traced on 11/08: "begin end 100%", no
+    /// reset), so two other pinches are tried before the caller's check fails.
+    private func pinchToZoom(_ viewport: XCUIElement) {
+        let pinches: [(scale: CGFloat, velocity: CGFloat)] = [(2, 1), (3, 0.5), (4, 2)]
+        for pinch in pinches {
+            viewport.pinch(withScale: pinch.scale, velocity: pinch.velocity)
+            let deadline = Date().addingTimeInterval(2)
+            while Date() < deadline {
+                if photoZoomPercent() > 150 { return }
+                Thread.sleep(forTimeInterval: 0.2)
+            }
+        }
+    }
+
+    private func photoZoomPercent() -> Int {
+        let text = ((app.images["displayedPhoto"].value as? String) ?? "").split(separator: "%").first.map(String.init) ?? ""
+        return Int(text.filter { $0.isNumber }) ?? 0
     }
 
     private func assertPhotoZoom(file: StaticString = #filePath, line: UInt = #line, _ condition: @escaping (Int) -> Bool) {
