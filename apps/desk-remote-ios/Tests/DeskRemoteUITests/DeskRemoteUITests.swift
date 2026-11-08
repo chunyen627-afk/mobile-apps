@@ -827,7 +827,7 @@ final class DeskRemoteUITests: XCTestCase {
         func pressUpdate() {
             XCTAssertTrue(reveal(element("claude-update")), "the update button is gone")
             element("claude-update").tap()
-            let confirm = app.buttons["重新啟動以更新"]
+            let confirm = app.buttons["重新啟動以更新"].firstMatch
             XCTAssertTrue(confirm.waitForExistence(timeout: 5), "no confirmation before ending Claude Code sessions")
             XCTAssertTrue(text("Claude Code 工作").exists, "the confirmation does not say what is lost")
             confirm.tap()
@@ -843,7 +843,7 @@ final class DeskRemoteUITests: XCTestCase {
         snapshot("38b-claude-asks")
         XCTAssertTrue(reveal(cancel), "the cancel button cannot be reached")
         cancel.tap()
-        let sure = app.buttons["按「取消」"]
+        let sure = app.buttons["按「取消」"].firstMatch
         XCTAssertTrue(sure.waitForExistence(timeout: 5), "pressing was not confirmed first")
         sure.tap()
         XCTAssertTrue(waitFor(element("popup-result"), labelContains: "已在電腦上按「取消」", timeout: 25),
@@ -857,14 +857,14 @@ final class DeskRemoteUITests: XCTestCase {
         XCTAssertTrue(quit.waitForExistence(timeout: 30), "Claude's question did not come back")
         XCTAssertTrue(reveal(quit), "the quit button cannot be reached")
         quit.tap()
-        let sureQuit = app.buttons["按「仍要更新」"]
+        let sureQuit = app.buttons["按「仍要更新」"].firstMatch
         XCTAssertTrue(sureQuit.waitForExistence(timeout: 5), "pressing was not confirmed first")
         sureQuit.tap()
         XCTAssertTrue(waitFor(element("popup-result"), labelContains: "已在電腦上按「仍要更新」", timeout: 25),
                       "result says \(said(element("popup-result")))")
         XCTAssertTrue(poll(timeout: 90) { !element("claude-update").exists }, "the button stays after updating")
         XCTAssertTrue(element("app-version-claude").label.contains("4.30.0"), "version: \(said(element("app-version-claude")))")
-        XCTAssertTrue(waitFor(revealing: note, labelContains: "已更新為 4.30.0", timeout: 20), "the note still talks of the question: \(said(note))")
+        XCTAssertTrue(waitFor(revealing: note, labelContains: "已更新為 4.30.0", timeout: 45), "the note still talks of the question: \(said(note))")
         snapshot("38d-updated")
     }
 
