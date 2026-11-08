@@ -171,7 +171,7 @@ struct DeskChatView: View {
                 }
                 // A window waiting on the PC keeps messages from going through: answer it here.
                 if let popups = pcState?.shownPopups, !popups.isEmpty || presser.result != nil {
-                    DeskPopupList(popups: popups, presser: presser, compact: true) { popup, button in
+                    DeskPopupList(popups: popups, presser: presser, compact: true, oneLine: inputFocused) { popup, button in
                         Task { await presser.press(popup, button, client: store.client(pcID)) { await refreshPC() } }
                     }
                     .padding(8)
