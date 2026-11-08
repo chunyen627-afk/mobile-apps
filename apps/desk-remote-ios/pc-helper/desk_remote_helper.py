@@ -38,7 +38,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.39'
+VERSION = '0.5.40'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -1737,6 +1737,7 @@ class Hub:
         self.ram = None                   # MemoryWatch: the commit charge and what was freed (0.5.30)
         self.disk_version = helper_on_disk  # the helper version installed on disk, maybe newer than this one
         self.restart = None               # () -> None: start the helper again (it exits), from the phone
+        self.clipboard = None             # ClipboardSync when a shared clipboard folder is configured (0.5.40)
         self.alerts = {'usage_percent': 80, 'context_percent': 80}
         self.chosen_modes = {}            # (app, id) -> (mode, when): a Codex pick its rollout shows only next turn
         self.page_names = {}              # (app, id) -> the page title last seen for it, when its files say otherwise
@@ -1762,7 +1763,8 @@ class Hub:
         fast = {app: source.fast() for app, source in self.sources.items()
                 if 'fast' in self.capabilities and (self.strings.get(app) or {}).get('fast_on') and hasattr(source, 'fast')}
         extra = ((['elevate'] if self.elevate is not None else []) + (['screen'] if self.screen is not None else [])
-                 + (['restart'] if self.restart is not None else []))
+                 + (['restart'] if self.restart is not None else [])
+                 + (['clipboard'] if self.clipboard is not None else []))
         disk = self.disk_version()
         newer = disk if disk and version_key(disk) > version_key(VERSION) else None
         return {'ok': True, 'pc': {'name': self.pc_name, 'helperVersion': VERSION, 'helperUpdate': newer},
@@ -4026,6 +4028,539 @@ MAX_BODY = 64 * 1024
 PHOTO_BODY = 40 * 1024 * 1024      # a message with up to 10 photos (base64) from the phone
 
 
+# ---------------------------------------------------------------------------------------------
+# Shared clipboard (0.5.40). A folder the cloud drive syncs between the PCs (G:\我的雲端硬碟\剪貼簿)
+# holds one file per copied item, newest by name; each PC publishes what is copied on it and puts
+# what arrives from elsewhere into its own clipboard, and the phone reads and writes the same
+# folder through whichever PC it can reach (asked 11/8: text and pictures, both ways).
+
+CLIPBOARD_KINDS = {'.txt': 'text', '.png': 'image', '.jpg': 'image', '.jpeg': 'image', '.gif': 'image', '.webp': 'image'}
+CLIPBOARD_MEDIA = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp'}
+CLIPBOARD_EXTENSION = {media: ext for ext, media in CLIPBOARD_MEDIA.items() if ext != '.jpeg'}
+CLIPBOARD_PREVIEW = 300            # characters of a long text sent with the list
+CLIPBOARD_INLINE = 4000            # a text up to this many characters comes whole with the list
+CLIPBOARD_TEXT_LIMIT = 1024 * 1024
+CLIPBOARD_IMAGE_LIMIT = 12 * 1024 * 1024
+CLIPBOARD_FRESH = 600              # seconds: an older arrival (the PC was off) is listed, not pasted
+CLIPBOARD_ID = re.compile(r'(\d{13})_([^\\/\x00-\x1f]{1,60})')
+CLIPBOARD_PHONE = '手機'
+
+
+def clipboard_tag(name):
+    """A PC's name as it goes into a file name."""
+    return re.sub(r'[\\/:*?"<>|\s\x00-\x1f]+', '_', name or '').strip('_')[:40] or 'pc'
+
+
+def dib_to_png(dib):
+    """PNG bytes of a CF_DIB clipboard picture, or None when Pillow is missing or the DIB is odd."""
+    if PIL_IMAGE is None or len(dib) < 40:
+        return None
+    import io
+    import struct
+    try:
+        header, = struct.unpack_from('<I', dib, 0)
+        bits, = struct.unpack_from('<H', dib, 14)
+        compression, = struct.unpack_from('<I', dib, 16)
+        colors, = struct.unpack_from('<I', dib, 32)  # biClrUsed
+        table = colors * 4 if colors else (4 << bits if bits <= 8 else 0)
+        masks = 12 if compression == 3 and header == 40 else 0
+        offset = 14 + header + masks + table
+        bmp = b'BM' + struct.pack('<IHHI', 14 + len(dib), 0, 0, offset) + dib
+        with PIL_IMAGE.open(io.BytesIO(bmp)) as image:
+            image.load()
+            out = io.BytesIO()
+            image.save(out, format='PNG', optimize=True)
+            return out.getvalue()
+    except (OSError, ValueError, TypeError, struct.error) as exc:
+        logging.info('clipboard picture not read: %s', exc)
+        return None
+
+
+def png_to_dib(png):
+    """CF_DIB bytes (24-bit, bottom-up) of a PNG, or None."""
+    if PIL_IMAGE is None:
+        return None
+    import io
+    try:
+        with PIL_IMAGE.open(io.BytesIO(png)) as image:
+            image.load()
+            out = io.BytesIO()
+            image.convert('RGB').save(out, format='BMP')
+            return out.getvalue()[14:]
+    except (OSError, ValueError, TypeError) as exc:
+        logging.info('clipboard picture not written: %s', exc)
+        return None
+
+
+class ClipboardStore:
+    """The shared folder: `<epoch ms>_<source>.<ext>` per item, the newest first by name."""
+
+    def __init__(self, folder, pc_name, keep=50, clock=time.time):
+        self.folder = Path(folder)
+        self.tag = clipboard_tag(pc_name)
+        self.keep = keep
+        self.clock = clock
+        self.lock = threading.Lock()
+        self.last_ms = 0
+
+    def available(self):
+        """The folder exists, or could be made under an existing cloud folder."""
+        if self.folder.is_dir():
+            return True
+        try:
+            if self.folder.parent.is_dir():
+                self.folder.mkdir()
+                return True
+        except OSError:
+            pass
+        return False
+
+    def entries(self):
+        """(ms, id, source, kind, path, size), newest first; other files in the folder are ignored."""
+        out = []
+        try:
+            with os.scandir(self.folder) as it:
+                for entry in it:
+                    stem, ext = os.path.splitext(entry.name)
+                    kind = CLIPBOARD_KINDS.get(ext.lower())
+                    match = CLIPBOARD_ID.fullmatch(stem)
+                    if kind is None or match is None or entry.name.startswith(('~', '.')):
+                        continue
+                    try:
+                        if not entry.is_file():
+                            continue
+                        size = entry.stat().st_size
+                    except OSError:
+                        continue
+                    out.append((int(match.group(1)), stem, match.group(2), kind, Path(entry.path), size))
+        except OSError:
+            return []
+        out.sort(key=lambda row: (row[0], row[1]), reverse=True)
+        return out
+
+    def newest(self):
+        rows = self.entries()
+        return rows[0] if rows else None
+
+    def find(self, item_id):
+        if not isinstance(item_id, str) or not CLIPBOARD_ID.fullmatch(item_id):
+            return None
+        for row in self.entries():
+            if row[1] == item_id:
+                return row
+        return None
+
+    def describe(self, row):
+        ms, item_id, source, kind, path, size = row
+        item = {'id': item_id, 'kind': kind, 'source': source, 'at': iso(ms), 'bytes': size}
+        if kind == 'text':
+            text = self.text(item_id, row)
+            if text is None:
+                return None
+            if len(text) > CLIPBOARD_INLINE:
+                item['text'] = text[:CLIPBOARD_PREVIEW]
+                item['truncated'] = True
+            else:
+                item['text'] = text
+        else:
+            item['media'] = CLIPBOARD_MEDIA.get(path.suffix.lower(), 'image/png')
+        return item
+
+    def items(self, limit=20):
+        out = []
+        for row in self.entries():
+            item = self.describe(row)
+            if item is not None:
+                out.append(item)
+            if len(out) >= limit:
+                break
+        return out
+
+    def text(self, item_id, row=None):
+        row = row or self.find(item_id)
+        if row is None or row[3] != 'text':
+            return None
+        try:
+            return row[4].read_text(encoding='utf-8-sig')
+        except (OSError, UnicodeDecodeError):
+            return None
+
+    def image(self, item_id, row=None):
+        """(media, bytes) of a picture item, or None."""
+        row = row or self.find(item_id)
+        if row is None or row[3] != 'image' or row[5] > CLIPBOARD_IMAGE_LIMIT:
+            return None
+        try:
+            return CLIPBOARD_MEDIA.get(row[4].suffix.lower(), 'image/png'), row[4].read_bytes()
+        except OSError:
+            return None
+
+    def _write(self, source, ext, data):
+        with self.lock:
+            ms = max(int(self.clock() * 1000), self.last_ms + 1)
+            self.last_ms = ms
+            name = f'{ms:013d}_{clipboard_tag(source)}{ext}'
+            part = self.folder / f'~{name}.part'
+            part.write_bytes(data)
+            os.replace(part, self.folder / name)
+            self.prune()
+        return f'{ms:013d}_{clipboard_tag(source)}'
+
+    def put_text(self, text, source):
+        return self._write(source, '.txt', text.encode('utf-8'))
+
+    def put_image(self, data, media, source):
+        return self._write(source, CLIPBOARD_EXTENSION.get(media, '.png'), data)
+
+    def prune(self):
+        for row in self.entries()[self.keep:]:
+            try:
+                row[4].unlink()
+            except OSError:
+                pass  # The other PC may be removing it too.
+
+
+class WinClipboard:
+    """The Windows clipboard through user32: text, a picture, or one copied picture file."""
+    CF_UNICODETEXT, CF_DIB, CF_HDROP = 13, 8, 15
+    GMEM_MOVEABLE = 0x0002
+
+    def __init__(self):
+        from ctypes import wintypes
+        self.user32 = user32 = ctypes.WinDLL('user32', use_last_error=True)
+        self.kernel32 = kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        self.shell32 = shell32 = ctypes.WinDLL('shell32', use_last_error=True)
+        for name, restype, argtypes in (
+                ('OpenClipboard', wintypes.BOOL, [wintypes.HWND]), ('CloseClipboard', wintypes.BOOL, []),
+                ('EmptyClipboard', wintypes.BOOL, []), ('GetClipboardSequenceNumber', wintypes.DWORD, []),
+                ('IsClipboardFormatAvailable', wintypes.BOOL, [wintypes.UINT]),
+                ('GetClipboardData', wintypes.HANDLE, [wintypes.UINT]),
+                ('SetClipboardData', wintypes.HANDLE, [wintypes.UINT, wintypes.HANDLE]),
+                ('RegisterClipboardFormatW', wintypes.UINT, [wintypes.LPCWSTR])):
+            fn = getattr(user32, name)
+            fn.restype, fn.argtypes = restype, argtypes
+        for name, restype, argtypes in (
+                ('GlobalLock', wintypes.LPVOID, [wintypes.HGLOBAL]), ('GlobalUnlock', wintypes.BOOL, [wintypes.HGLOBAL]),
+                ('GlobalSize', ctypes.c_size_t, [wintypes.HGLOBAL]), ('GlobalAlloc', wintypes.HGLOBAL, [wintypes.UINT, ctypes.c_size_t]),
+                ('GlobalFree', wintypes.HGLOBAL, [wintypes.HGLOBAL])):
+            fn = getattr(kernel32, name)
+            fn.restype, fn.argtypes = restype, argtypes
+        shell32.DragQueryFileW.restype = wintypes.UINT
+        shell32.DragQueryFileW.argtypes = [wintypes.HANDLE, wintypes.UINT, wintypes.LPWSTR, wintypes.UINT]
+        self.exclude = user32.RegisterClipboardFormatW('ExcludeClipboardContentFromMonitorProcessing')
+        self.png = user32.RegisterClipboardFormatW('PNG')
+
+    def sequence(self):
+        return self.user32.GetClipboardSequenceNumber()
+
+    def _open(self):
+        for _ in range(10):
+            if self.user32.OpenClipboard(None):
+                return True
+            time.sleep(0.05)
+        return False
+
+    def _bytes(self, fmt):
+        handle = self.user32.GetClipboardData(fmt)
+        if not handle:
+            return None
+        pointer = self.kernel32.GlobalLock(handle)
+        if not pointer:
+            return None
+        try:
+            return ctypes.string_at(pointer, self.kernel32.GlobalSize(handle))
+        finally:
+            self.kernel32.GlobalUnlock(handle)
+
+    def read(self):
+        """('text', str) | ('image', png bytes) | ('file', path) | ('skip', None) for content marked
+        not to be watched (password managers, the helper's own pastes) | None for anything else."""
+        if not self._open():
+            return None
+        try:
+            if self.user32.IsClipboardFormatAvailable(self.exclude):
+                return ('skip', None)
+            if self.user32.IsClipboardFormatAvailable(self.CF_UNICODETEXT):
+                handle = self.user32.GetClipboardData(self.CF_UNICODETEXT)
+                pointer = self.kernel32.GlobalLock(handle) if handle else None
+                if not pointer:
+                    return None
+                try:
+                    return ('text', ctypes.wstring_at(pointer))
+                finally:
+                    self.kernel32.GlobalUnlock(handle)
+            if self.user32.IsClipboardFormatAvailable(self.png):
+                data = self._bytes(self.png)
+                return ('image', data) if data and data.startswith(b'\x89PNG') else None
+            if self.user32.IsClipboardFormatAvailable(self.CF_DIB):
+                data = self._bytes(self.CF_DIB)
+                png = dib_to_png(data) if data else None
+                return ('image', png) if png else None
+            if self.user32.IsClipboardFormatAvailable(self.CF_HDROP):
+                handle = self.user32.GetClipboardData(self.CF_HDROP)
+                if handle and self.shell32.DragQueryFileW(handle, 0xFFFFFFFF, None, 0) == 1:
+                    buffer = ctypes.create_unicode_buffer(32768)
+                    if self.shell32.DragQueryFileW(handle, 0, buffer, 32768):
+                        return ('file', buffer.value)
+            return None
+        finally:
+            self.user32.CloseClipboard()
+
+    def _put(self, fmt, data):
+        handle = self.kernel32.GlobalAlloc(self.GMEM_MOVEABLE, len(data))
+        if not handle:
+            return False
+        pointer = self.kernel32.GlobalLock(handle)
+        if not pointer:
+            self.kernel32.GlobalFree(handle)
+            return False
+        ctypes.memmove(pointer, data, len(data))
+        self.kernel32.GlobalUnlock(handle)
+        if not self.user32.SetClipboardData(fmt, handle):
+            self.kernel32.GlobalFree(handle)
+            return False
+        return True
+
+    def write_text(self, text):
+        if not self._open():
+            return False
+        try:
+            self.user32.EmptyClipboard()
+            return self._put(self.CF_UNICODETEXT, text.encode('utf-16-le') + b'\x00\x00')
+        finally:
+            self.user32.CloseClipboard()
+
+    def write_image(self, png):
+        """The picture as CF_DIB (every program pastes it) and as PNG (browsers and chat apps keep
+        the transparency)."""
+        dib = png_to_dib(png)
+        if dib is None or not self._open():
+            return False
+        try:
+            self.user32.EmptyClipboard()
+            return self._put(self.CF_DIB, dib) and self._put(self.png, png)
+        finally:
+            self.user32.CloseClipboard()
+
+
+class ClipboardSync:
+    """Publishes what is copied on this PC into the store and puts what arrives from the other
+    PC or the phone into this PC's clipboard. What it put there itself is recognised by its digest,
+    so a copy never bounces between the PCs."""
+
+    def __init__(self, store, clipboard, pc_name, apply=True, publish=True, fresh=CLIPBOARD_FRESH,
+                 clock=time.time, sleep=time.sleep, tick=1.0):
+        self.store, self.clipboard, self.pc_name = store, clipboard, pc_name
+        self.apply, self.publish, self.fresh = apply, publish, fresh
+        self.clock, self.sleep, self.tick = clock, sleep, tick
+        self.last_sequence = clipboard.sequence() if clipboard is not None else 0
+        newest = store.newest() if store.available() else None
+        self.seen_ms = newest[0] if newest else 0     # arrivals up to here were there before the start
+        self.applied = None                           # digest of what was last put into or read from the clipboard
+        self.failed_at = 0.0
+        self.lock = threading.Lock()
+
+    @staticmethod
+    def digest(kind, value):
+        return hashlib.sha1((kind + ':').encode() + (value.encode('utf-8') if kind == 'text' else value)).hexdigest()
+
+    def once(self):
+        with self.lock:
+            if self.publish:
+                self.publish_change()
+            self.apply_arrival()
+
+    def publish_change(self):
+        sequence = self.clipboard.sequence()
+        if sequence == self.last_sequence:
+            return
+        self.last_sequence = sequence
+        read = self.clipboard.read()
+        if not read or read[0] == 'skip':
+            return
+        kind, value = read
+        media = 'image/png'
+        if kind == 'file':
+            picture = local_image(value)
+            if picture is None:
+                return
+            kind, media, value = 'image', picture['media'], base64.b64decode(picture['data'])
+        if kind == 'text' and (not value.strip() or len(value) > CLIPBOARD_TEXT_LIMIT):
+            return
+        if kind == 'image' and len(value) > CLIPBOARD_IMAGE_LIMIT:
+            return
+        digest = self.digest(kind, value)
+        if digest == self.applied:
+            return  # what this PC was just given
+        if not self.store.available():
+            return
+        item_id = self.store.put_text(value, self.pc_name) if kind == 'text' else self.store.put_image(value, media, self.pc_name)
+        self.applied = digest
+        self.seen_ms = max(self.seen_ms, int(item_id[:13]))
+        logging.info('clipboard %s published (%d bytes)', kind, len(value) if kind == 'image' else len(value.encode('utf-8')))
+
+    def apply_arrival(self):
+        if not self.store.available():
+            return
+        newest = self.store.newest()
+        if newest is None or newest[0] <= self.seen_ms:
+            return
+        self.seen_ms = newest[0]
+        ms, item_id, source, kind, path, size = newest
+        if source == self.store.tag or not self.apply or self.clock() - ms / 1000 > self.fresh:
+            return
+        self.put_item(newest)
+
+    def put_item(self, row):
+        """Puts a stored item into this PC's clipboard; False when it is gone or cannot be read."""
+        ms, item_id, source, kind, path, size = row
+        if kind == 'text':
+            value = self.store.text(item_id, row)
+            if value is None:
+                return False
+            return self._set('text', value)
+        picture = self.store.image(item_id, row)
+        if picture is None:
+            return False
+        media, data = picture
+        if media != 'image/png':
+            data = self._as_png(data)
+            if data is None:
+                return False
+        return self._set('image', data)
+
+    def _as_png(self, data):
+        if PIL_IMAGE is None:
+            return None
+        import io
+        try:
+            with PIL_IMAGE.open(io.BytesIO(data)) as image:
+                image.load()
+                out = io.BytesIO()
+                image.save(out, format='PNG')
+                return out.getvalue()
+        except (OSError, ValueError, TypeError):
+            return None
+
+    def _set(self, kind, value):
+        digest = self.digest(kind, value)
+        if digest == self.applied:
+            return True
+        ok = self.clipboard.write_text(value) if kind == 'text' else self.clipboard.write_image(value)
+        if ok:
+            self.applied = digest
+            self.last_sequence = self.clipboard.sequence()
+            logging.info('clipboard %s taken from %s', kind, 'the shared folder')
+        return ok
+
+    def from_phone(self, kind, value, media='image/png', source=CLIPBOARD_PHONE, store=True):
+        """What the phone sent: stored (unless another PC already did) and put into this PC's
+        clipboard. Returns the stored item, or None when only the clipboard was set."""
+        with self.lock:
+            item = None
+            if store:
+                if not self.store.available():
+                    raise ActionError('clipboard-folder', '共用剪貼簿資料夾不在（雲端硬碟沒掛上）')
+                item_id = self.store.put_text(value, source) if kind == 'text' else self.store.put_image(value, media, source)
+                self.seen_ms = max(self.seen_ms, int(item_id[:13]))
+                row = self.store.find(item_id)
+                item = self.store.describe(row) if row else None
+            if self.apply:
+                data = value
+                if kind == 'image' and media != 'image/png':
+                    data = self._as_png(value)
+                if data is not None:
+                    self._set(kind, data)
+            return item
+
+    def apply_id(self, item_id):
+        with self.lock:
+            row = self.store.find(item_id)
+            return row is not None and self.put_item(row)
+
+    def run_forever(self):
+        while True:
+            try:
+                self.once()
+            except Exception:
+                if time.monotonic() - self.failed_at > 300:
+                    logging.exception('clipboard sync failed')
+                    self.failed_at = time.monotonic()
+            self.sleep(self.tick)
+
+
+class FakeClipboard:
+    """A clipboard in memory, for tests and the simulator's fake helper."""
+
+    def __init__(self):
+        self.content = None   # ('text', str) | ('image', png) | ('skip', None)
+        self.seq = 1
+
+    def sequence(self):
+        return self.seq
+
+    def copy(self, kind, value):
+        self.content = (kind, value)
+        self.seq += 1
+
+    def read(self):
+        return self.content
+
+    def write_text(self, text):
+        self.copy('text', text)
+        return True
+
+    def write_image(self, png):
+        self.copy('image', png)
+        return True
+
+
+def clipboard_sync_from_config(cfg, pc_name):
+    """The shared clipboard the config asks for, or None. `clipboard.folder` is the cloud folder
+    both PCs see; `apply` (default on) puts arrivals into this PC's clipboard, `publish` (default
+    on) uploads what is copied here."""
+    settings = cfg.get('clipboard')
+    if not settings or not settings.get('folder'):
+        return None
+    store = ClipboardStore(settings['folder'], pc_name, keep=int(settings.get('keep', 50)))
+    if not store.available():
+        logging.warning('shared clipboard folder is not there: %s', settings['folder'])
+    try:
+        clipboard = WinClipboard()
+    except (OSError, AttributeError) as exc:
+        logging.warning('clipboard not available: %s', exc)
+        return None
+    return ClipboardSync(store, clipboard, pc_name, apply=bool(settings.get('apply', True)),
+                         publish=bool(settings.get('publish', True)))
+
+
+def clipboard_post(sync, body):
+    """(status, json) for what the phone sent to the shared clipboard: `text`, or `image`
+    (base64 JPEG/PNG); `store: false` only puts it into this PC's clipboard (another PC has
+    stored it already)."""
+    source = body.get('source') if isinstance(body.get('source'), str) and body.get('source').strip() else CLIPBOARD_PHONE
+    store = body.get('store', True) is not False
+    try:
+        if isinstance(body.get('text'), str):
+            text = body['text']
+            if not text.strip():
+                return 400, error('bad-request', '沒有文字')
+            if len(text) > CLIPBOARD_TEXT_LIMIT:
+                return 413, error('too-large', '文字太長')
+            item = sync.from_phone('text', text, source=source, store=store)
+        elif isinstance(body.get('image'), str):
+            data = decode_image(body['image'], CLIPBOARD_IMAGE_LIMIT)
+            if data is None:
+                return 400, error('bad-request', '圖片要是 JPEG 或 PNG，且不超過 12 MB')
+            media = 'image/png' if data.startswith(b'\x89PNG') else 'image/jpeg'
+            item = sync.from_phone('image', data, media=media, source=source, store=store)
+        else:
+            return 400, error('bad-request', '要有 text 或 image')
+    except ActionError as exc:
+        return 503, error(exc.code, exc.message)
+    return 200, {'ok': True, 'item': item}
+
+
 def capture_screen(timeout=20):
     """JPEG bytes of this PC's whole desktop from screen_capture.ps1 (its own DPI-aware
     process), passed through a pipe so the picture is never written to disk; None when the
@@ -4169,6 +4704,19 @@ def handler_for(hub, gate, networks, runner=None):
                     return self.send_json(409, error('busy', '手機的動作還在排隊，做完再重啟'))
                 threading.Timer(1.0, hub.restart).start()  # after this answer has gone out
                 return self.send_json(202, {'ok': True, 'message': '小幫手重新啟動中，約 15 秒後回來'})
+            if parts and parts[0] == 'clipboard':
+                if hub.clipboard is None:
+                    return self.send_json(404, error('not-found', '這台電腦沒有設定共用剪貼簿'))
+                body = self.read_body(PHOTO_BODY)
+                if body is None:
+                    return None
+                if len(parts) == 1:
+                    return self.send_json(*clipboard_post(hub.clipboard, body))
+                if len(parts) == 4 and parts[1] == 'items' and parts[3] == 'apply':
+                    if not hub.clipboard.apply_id(parts[2]):
+                        return self.send_json(404, error('not-found', '這筆內容已不在共用資料夾'))
+                    return self.send_json(200, {'ok': True})
+                return self.send_json(404, error('not-found', '沒有這個路徑'))
             if runner is None:
                 return self.send_json(405, error('read-only', '這一版只能讀取'))
             body = self.read_body(PHOTO_BODY if parts[-1:] == ['messages'] else MAX_BODY)
@@ -4208,6 +4756,30 @@ def handler_for(hub, gate, networks, runner=None):
                 if not data:
                     return self.send_json(503, error('screen-failed', '讀不到電腦畫面（可能已鎖定或沒有登入）'))
                 return self.send_jpeg(data)
+            if parts and parts[0] == 'clipboard':
+                sync = hub.clipboard
+                if sync is None:
+                    return self.send_json(404, error('not-found', '這台電腦沒有設定共用剪貼簿'))
+                if len(parts) == 1:
+                    if not sync.store.available():
+                        return self.send_json(503, error('clipboard-folder', '共用剪貼簿資料夾不在（雲端硬碟沒掛上）'))
+                    return self.send_json(200, {'ok': True, 'pc': hub.pc_name,
+                                                'items': sync.store.items(max(1, min(number('limit', 20), 50)))})
+                if len(parts) == 3 and parts[1] == 'items':
+                    text = sync.store.text(parts[2])
+                    if text is None:
+                        return self.send_json(404, error('not-found', '這筆內容已不在共用資料夾'))
+                    return self.send_json(200, {'ok': True, 'text': text})
+                if len(parts) == 3 and parts[1] == 'images':
+                    picture = sync.store.image(parts[2])
+                    if picture is None:
+                        return self.send_json(404, error('not-found', '這張圖已不在共用資料夾'))
+                    media, data = picture
+                    if query.get('small'):  # the phone's copy: long side 1600 px at most
+                        media, encoded = shrink_picture(media, base64.b64encode(data).decode('ascii'))
+                        data = base64.b64decode(encoded)
+                    return self.send_bytes(data, media)
+                return self.send_json(404, error('not-found', '沒有這個路徑'))
             if parts == ['elevate']:
                 if hub.elevate is None:
                     return self.send_json(404, error('not-found', '這台電腦沒有安裝提權夥伴'))
@@ -4350,6 +4922,13 @@ class FakeSetup:
         pc = self.root / 'pc'
         return {'claude': ClaudeSource(pc / 'claude-data', pc / 'claude-projects'),
                 'codex': CodexSource(pc / 'codex')}
+
+    def clipboard_sync(self):
+        """A shared clipboard folder with the fixture items (fixtures/fake-helper/clipboard), over a
+        clipboard in memory, so the simulator can list, copy and send."""
+        folder = self.root / 'clipboard'
+        shutil.copytree(self.fixtures / 'clipboard', folder)
+        return ClipboardSync(ClipboardStore(folder, self.cfg['pc_name']), FakeClipboard(), self.cfg['pc_name'])
 
     def elevate_relay(self):
         """The companion's Python twin with a test key and one waiting request (fixture data)."""
@@ -4914,6 +5493,7 @@ def main(argv=None):
             hub.restart = lambda: disk.__setitem__(0, VERSION)
         hub.elevate = fake.elevate_relay()
         hub.screen = lambda: (fake.fixtures / 'screen.jpg').read_bytes()
+        hub.clipboard = fake.clipboard_sync()
         gate = AuthGate(cfg['token'])
         return serve(hub, gate, cfg, networks, runner)
     path = args.config or default_config_path()
@@ -4938,6 +5518,9 @@ def main(argv=None):
                                memory=path.parent / 'usage_seen.json')
         hub.ram = MemoryWatch(pc_name, worker=driver.worker)
         hub.restart = lambda: restart_helper(driver.worker)
+    hub.clipboard = clipboard_sync_from_config(cfg, pc_name)
+    if hub.clipboard is not None:
+        threading.Thread(target=hub.clipboard.run_forever, daemon=True).start()
     submit = Path((cfg.get('elevate') or {}).get('submit_file') or elevate.submit_file())
     if submit.exists():  # written by install-elevated.ps1 (run once as administrator)
         port, token = elevate.load_submit(submit)

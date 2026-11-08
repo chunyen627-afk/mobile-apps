@@ -178,8 +178,8 @@ public struct HelperClient: Sendable {
         try await imageBytes(["v1", app.rawValue, "sessions", id, "images", imageId])
     }
 
-    private func imageBytes(_ path: [String]) async throws -> Data {
-        guard let url = endpoint.url(path) else { throw HelperFailure.badResponse }
+    private func imageBytes(_ path: [String], query: [URLQueryItem] = []) async throws -> Data {
+        guard let url = endpoint.url(path, query: query) else { throw HelperFailure.badResponse }
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
         request.httpMethod = "GET"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -264,7 +264,49 @@ public struct HelperClient: Sendable {
         return current
     }
 
+    // MARK: - Shared clipboard (helper 0.5.40, capability "clipboard")
+
+    /// The shared clipboard folder's items, newest first. Short, so the next PC is tried soon
+    /// when this one is off.
+    public func clipboard(limit: Int = 30) async throws -> ClipboardList {
+        try await get(["v1", "clipboard"], query: [URLQueryItem(name: "limit", value: String(limit))], timeout: 6)
+    }
+
+    /// The whole text of a long item.
+    public func clipboardText(_ id: String) async throws -> String {
+        let body: ItemText = try await get(["v1", "clipboard", "items", id], timeout: 15)
+        return body.text
+    }
+
+    /// A picture item; `small` asks for the phone's copy (long side 1600 px at most).
+    public func clipboardImage(_ id: String, small: Bool = true) async throws -> Data {
+        try await imageBytes(["v1", "clipboard", "images", id], query: small ? [URLQueryItem(name: "small", value: "1")] : [])
+    }
+
+    /// Sends the phone's text: stored in the shared folder when `store`, and put into this PC's
+    /// clipboard either way.
+    public func sendClipboard(text: String, store: Bool = true) async throws -> ClipboardItem? {
+        let put: ClipboardPut = try await post(["v1", "clipboard"], body: ClipboardRequest(text: text, store: store ? nil : false), timeout: 15)
+        return put.item
+    }
+
+    /// Sends the phone's picture (JPEG or PNG bytes).
+    public func sendClipboard(image: Data, store: Bool = true) async throws -> ClipboardItem? {
+        let put: ClipboardPut = try await post(["v1", "clipboard"], body: ClipboardRequest(image: image.base64EncodedString(), store: store ? nil : false),
+                                               timeout: 40)
+        return put.item
+    }
+
+    /// Puts a stored item into this PC's clipboard.
+    public func applyClipboard(_ id: String) async throws {
+        let _: OkBody = try await post(["v1", "clipboard", "items", id, "apply"], body: ClipboardRequest(), timeout: 15)
+    }
+
     private func post<T: Decodable>(_ segments: [String], _ body: ActionRequest, timeout: TimeInterval = 20) async throws -> T {
+        try await post(segments, body: body, timeout: timeout)
+    }
+
+    private func post<B: Encodable, T: Decodable>(_ segments: [String], body: B, timeout: TimeInterval) async throws -> T {
         guard let url = endpoint.url(segments) else { throw HelperFailure.badResponse }
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: timeout)
         request.httpMethod = "POST"

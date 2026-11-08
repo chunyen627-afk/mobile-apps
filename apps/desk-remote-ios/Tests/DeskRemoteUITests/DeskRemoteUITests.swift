@@ -964,6 +964,42 @@ final class DeskRemoteUITests: XCTestCase {
         snapshot("41-plan-open")
     }
 
+    /// The shared clipboard (helper 0.5.40): the fixture items newest first, a tap puts one on this
+    /// phone's clipboard, and text typed here reaches the PC and comes back in the list as the
+    /// phone's. The fake helper's folder is shared by the tests of one run, so the row count is
+    /// not asserted.
+    func test42SharedClipboardListsCopiesAndSends() throws {
+        try launchWithHelper()
+        let link = element("clipboard-link")
+        XCTAssertTrue(link.waitForExistence(timeout: 10), "clipboard link missing")
+        XCTAssertTrue(settled(link), "the clipboard link keeps moving")
+        link.tap()
+        let newest = element("clipboard-row-1762560120000_手機")
+        XCTAssertTrue(newest.waitForExistence(timeout: 15), "the fixture items did not load")
+        XCTAssertTrue(newest.label.contains("https://example.com/tn12/weekly-report"), "the row says: \(newest.label)")
+        XCTAssertTrue(reveal(element("clipboard-row-1762560060000_示範電腦")), "the picture item is missing")
+        XCTAssertTrue(reveal(element("clipboard-row-1762560000000_家裡")), "the oldest text item is missing")
+        snapshot("42-clipboard-list")
+        UIPasteboard.general.string = "before the tap"
+        XCTAssertTrue(reveal(newest), "the newest row is not on screen")
+        newest.tap()
+        XCTAssertTrue(poll(timeout: 10) { UIPasteboard.general.string == "https://example.com/tn12/weekly-report" },
+                      "tapping a row did not copy it to the phone; the clipboard holds: \(UIPasteboard.general.string ?? "nothing")")
+        XCTAssertTrue(waitFor(newest, labelContains: "已複製到手機", timeout: 5), "no check mark after copying: \(newest.label)")
+        // A vertical TextField is a text view to XCUITest, so look it up by identifier only.
+        let input = element("clipboard-text")
+        XCTAssertTrue(reveal(input), "the text box is missing")
+        input.tap()
+        input.typeText("從模擬器送到電腦")
+        app.buttons["clipboard-send"].tap()
+        XCTAssertTrue(waitFor(element("clipboard-note"), labelContains: "已送到 示範電腦", timeout: 15),
+                      "the note says: \(said(element("clipboard-note")))")
+        let sent = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'clipboard-row-' AND label CONTAINS '從模擬器送到電腦'")).firstMatch
+        XCTAssertTrue(sent.waitForExistence(timeout: 15), "the text sent did not come back in the list")
+        XCTAssertTrue(sent.label.contains("手機"), "the row is not marked as the phone's: \(sent.label)")
+        snapshot("42-clipboard-sent")
+    }
+
     // MARK: - Helpers
 
     /// How many photos the fake helper's transcript of `session` holds from the user.

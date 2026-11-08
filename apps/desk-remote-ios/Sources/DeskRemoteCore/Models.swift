@@ -488,3 +488,56 @@ struct HelperErrorBody: Decodable, Sendable {
     let message: String?
     let idleSeconds: Int?
 }
+
+// MARK: - Shared clipboard (helper 0.5.40, capability "clipboard")
+
+/// `GET /v1/clipboard`: the shared folder's items, newest first, and the PC that answered.
+public struct ClipboardList: Decodable, Equatable, Sendable {
+    public let pc: String
+    public let items: [ClipboardItem]
+}
+
+/// One copied item: text (whole when short, a preview with `truncated` when long) or a picture.
+public struct ClipboardItem: Decodable, Equatable, Hashable, Identifiable, Sendable {
+    public let id: String
+    /// "text" or "image".
+    public let kind: String
+    /// The PC's name as the helper tags its files, or "手機".
+    public let source: String
+    public let at: String?
+    public let bytes: Int
+    public let text: String?
+    public let truncated: Bool?
+    public let media: String?
+
+    public init(id: String, kind: String, source: String, at: String?, bytes: Int, text: String? = nil,
+                truncated: Bool? = nil, media: String? = nil) {
+        self.id = id
+        self.kind = kind
+        self.source = source
+        self.at = at
+        self.bytes = bytes
+        self.text = text
+        self.truncated = truncated
+        self.media = media
+    }
+
+    public var isImage: Bool { kind == "image" }
+}
+
+/// `POST /v1/clipboard`: the stored item, or nil when the PC only took it into its clipboard.
+struct ClipboardPut: Decodable, Sendable {
+    let item: ClipboardItem?
+}
+
+struct ClipboardRequest: Encodable {
+    var text: String?
+    var image: String?
+    var source: String?
+    /// false: another PC has stored it in the shared folder already; only paste it here.
+    var store: Bool?
+}
+
+struct OkBody: Decodable, Sendable {
+    let ok: Bool
+}

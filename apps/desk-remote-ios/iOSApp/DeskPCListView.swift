@@ -19,6 +19,17 @@ struct DeskPCListView: View {
                 .accessibilityElement(children: .combine)
                 .accessibilityIdentifier("pc-empty")
             }
+            // The shared clipboard (helper 0.5.40): first, so it is one tap away (asked 11/8).
+            if !store.pcs.isEmpty {
+                Section {
+                    NavigationLink(value: DeskRoute.clipboard) {
+                        Label("剪貼簿", systemImage: "doc.on.clipboard")
+                    }
+                    .accessibilityIdentifier("clipboard-link")
+                } footer: {
+                    Text("手機與電腦互通：電腦上複製的文字與圖片點一下就到手機，手機的也能送到每一台電腦。")
+                }
+            }
             ForEach(store.pcs) { pc in
                 Section {
                     NavigationLink(value: DeskRoute.pc(pc.id)) {

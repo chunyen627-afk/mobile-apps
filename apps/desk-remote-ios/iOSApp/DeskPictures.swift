@@ -18,7 +18,11 @@ final class DeskImageCache {
     /// picture at a time, however many rows show it.
     func image(pc: UUID, app: DeskApp, session: String, id: String,
                fetch: @escaping @Sendable () async throws -> Data) async -> UIImage? {
-        let key = "\(pc.uuidString)/\(app.rawValue)/\(session)/\(id)"
+        await image(key: "\(pc.uuidString)/\(app.rawValue)/\(session)/\(id)", fetch: fetch)
+    }
+
+    /// Any picture by a key of the caller's choosing (the shared clipboard's items).
+    func image(key: String, fetch: @escaping @Sendable () async throws -> Data) async -> UIImage? {
         if let hit = cache.object(forKey: key as NSString) { return hit }
         if let running = loading[key] { return await running.value }
         let task = Task<UIImage?, Never> {
