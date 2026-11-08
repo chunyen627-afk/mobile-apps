@@ -14,6 +14,7 @@ import time
 import unittest
 from unittest import mock
 import urllib.error
+import urllib.parse
 import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -2372,6 +2373,218 @@ class HelperRestartTests(HttpTests):
         self.assertEqual(restarted, [True], 'restarted after the answer went out')
         disk[0] = h.VERSION
         self.assertIsNone(self.get('/v1/state')[1]['pc']['helperUpdate'], 'the same version: nothing newer')
+
+
+class ClipboardTests(unittest.TestCase):
+    """The shared clipboard folder (0.5.40): one file per copied item, both PCs and the phone."""
+
+    def setUp(self):
+        self.folder = Path(tempfile.mkdtemp(prefix='desk-clip-'))
+        self.addCleanup(shutil.rmtree, self.folder, True)
+        self.now = [1_700_000_000.0]
+        self.store = h.ClipboardStore(self.folder / '剪貼簿', '辦公室 PC', keep=3, clock=lambda: self.now[0])
+
+    def test_items_are_files_named_by_time_and_source_newest_first_and_pruned(self):
+        self.assertTrue(self.store.available(), 'made under the existing cloud folder')
+        self.assertEqual(self.store.tag, '辦公室_PC')
+        first = self.store.put_text('第一段', '辦公室 PC')
+        self.assertEqual(first, '1700000000000_辦公室_PC')
+        self.assertTrue((self.folder / '剪貼簿' / '1700000000000_辦公室_PC.txt').is_file())
+        second = self.store.put_text('第二段', '辦公室 PC')
+        self.assertEqual(second, '1700000000001_辦公室_PC', 'the same millisecond: one later, never the same name')
+        self.now[0] += 5
+        picture = self.store.put_image(base64.b64decode(h.FAKE_PNG), 'image/png', '手機')
+        self.assertTrue((self.folder / '剪貼簿' / f'{picture}.png').is_file())
+        items = self.store.items()
+        self.assertEqual([i['id'] for i in items], [picture, second, first], 'newest first')
+        self.assertEqual(items[0], {'id': picture, 'kind': 'image', 'source': '手機', 'at': '2023-11-14T22:13:25Z',
+                                    'bytes': 981, 'media': 'image/png'})
+        self.assertEqual(items[2]['text'], '第一段')
+        self.assertEqual(self.store.image(picture)[0], 'image/png')
+        self.assertIsNone(self.store.text(picture), 'a picture has no text')
+        self.assertIsNone(self.store.image(second), 'a text is not a picture')
+        self.assertIsNone(self.store.find('../../etc/passwd'))
+        self.assertIsNone(self.store.find('1700000000000_辦公室_PC/x'))
+        # Other files in the folder (desktop.ini, half-written parts) are not items.
+        (self.folder / '剪貼簿' / 'desktop.ini').write_text('x')
+        (self.folder / '剪貼簿' / '~1700000009999_x.txt.part').write_text('x')
+        (self.folder / '剪貼簿' / 'notes.txt').write_text('x')
+        self.assertEqual(len(self.store.items()), 3)
+        # A long text comes as a preview with the list; keep=3 drops the oldest.
+        self.now[0] += 5
+        long_id = self.store.put_text('很長' * 3000, '家裡')
+        items = self.store.items()
+        self.assertEqual([i['id'] for i in items], [long_id, picture, second], 'the oldest was pruned')
+        self.assertEqual(items[0]['truncated'], True)
+        self.assertEqual(len(items[0]['text']), h.CLIPBOARD_PREVIEW)
+        self.assertEqual(len(self.store.text(long_id)), 6000)
+        self.assertEqual(self.store.items(limit=1), items[:1])
+        missing = h.ClipboardStore(self.folder / 'nowhere' / '剪貼簿', 'pc')
+        self.assertFalse(missing.available(), 'no cloud folder: not made')
+        self.assertEqual(missing.items(), [])
+
+    def test_a_copy_on_this_pc_goes_to_the_folder_and_an_arrival_into_its_clipboard(self):
+        clipboard = h.FakeClipboard()
+        sync = h.ClipboardSync(self.store, clipboard, '辦公室 PC', clock=lambda: self.now[0])
+        sync.once()
+        self.assertEqual(self.store.items(), [], 'nothing copied yet')
+        clipboard.copy('text', '複製的字')
+        sync.once()
+        items = self.store.items()
+        self.assertEqual([(i['text'], i['source']) for i in items], [('複製的字', '辦公室_PC')])
+        sync.once()
+        self.assertEqual(len(self.store.items()), 1, 'the same sequence number: not published again')
+        clipboard.copy('text', '   \n')
+        clipboard.copy('skip', None)
+        sync.once()
+        self.assertEqual(len(self.store.items()), 1, 'blank text and content marked not to be watched stay out')
+        clipboard.copy('image', base64.b64decode(h.FAKE_PNG))
+        sync.once()
+        self.assertEqual(self.store.items()[0]['kind'], 'image')
+        # A picture file copied in Explorer goes as a picture.
+        shot = self.folder / 'shot.png'
+        shot.write_bytes(base64.b64decode(h.FAKE_PNG) + b'\x00')  # not the picture just copied
+        clipboard.copy('file', str(shot))
+        sync.once()
+        self.assertEqual(self.store.items()[0]['kind'], 'image')
+        self.assertEqual(len(self.store.items()), 3)
+        # The other PC's item arrives (the cloud synced it): into this clipboard, once.
+        self.now[0] += 1
+        other = h.ClipboardStore(self.folder / '剪貼簿', '家裡', clock=lambda: self.now[0])
+        other.put_text('家裡複製的', '家裡')
+        sync.once()
+        self.assertEqual(clipboard.read(), ('text', '家裡複製的'))
+        count = len(self.store.items())
+        sync.once()
+        sync.once()
+        self.assertEqual(len(self.store.items()), count, 'what was put into the clipboard is not published back')
+        self.now[0] += 1
+        other.put_image(base64.b64decode(h.FAKE_PNG), 'image/png', '家裡')
+        sync.once()
+        self.assertEqual(clipboard.read(), ('image', base64.b64decode(h.FAKE_PNG)))
+        # An old arrival (this PC was off while it synced) is listed but not pasted over the clipboard.
+        clipboard.copy('text', '現在的')
+        sync.once()
+        stale = h.ClipboardStore(self.folder / '剪貼簿', '家裡', clock=lambda: self.now[0] + 1)
+        stale.put_text('很久以前', '家裡')
+        self.now[0] += h.CLIPBOARD_FRESH + 60
+        sync.once()
+        self.assertEqual(clipboard.read(), ('text', '現在的'))
+        # The phone's text: stored under its name and pasted here; store=False only pastes.
+        self.now[0] += 1
+        item = sync.from_phone('text', '手機送的')
+        self.assertEqual((item['source'], item['text']), ('手機', '手機送的'))
+        self.assertEqual(clipboard.read(), ('text', '手機送的'))
+        self.assertIsNone(sync.from_phone('text', '另一台已存', store=False))
+        self.assertEqual(clipboard.read(), ('text', '另一台已存'))
+        self.assertEqual(self.store.items()[0]['text'], '手機送的', 'nothing stored twice')
+        sync.once()
+        self.assertEqual(self.store.items()[0]['text'], '手機送的', 'and the phone\'s paste is not published as a copy')
+        # Apply by id, and an unknown id.
+        self.assertTrue(sync.apply_id(item['id']))
+        self.assertEqual(clipboard.read(), ('text', '手機送的'))
+        self.assertFalse(sync.apply_id('1700000000000_nobody'))
+        # apply=False: arrivals are listed only.
+        quiet = h.ClipboardSync(self.store, h.FakeClipboard(), '辦公室 PC', apply=False, clock=lambda: self.now[0])
+        self.now[0] += 1
+        other.put_text('只列不貼', '家裡')
+        quiet.once()
+        self.assertIsNone(quiet.clipboard.read())
+        # A sync over a folder the cloud has not mounted does nothing and refuses the phone's item.
+        gone = h.ClipboardSync(h.ClipboardStore(self.folder / 'nowhere' / 'x', 'pc'), h.FakeClipboard(), 'pc')
+        gone.clipboard.copy('text', 'x')
+        gone.once()
+        with self.assertRaises(h.ActionError):
+            gone.from_phone('text', 'x')
+        self.assertEqual(h.clipboard_tag('家裡/桌機: A*B'), '家裡_桌機_A_B')
+        self.assertIsNone(h.clipboard_sync_from_config({}, 'pc'), 'no clipboard section: off')
+
+    @unittest.skipIf(h.PIL_IMAGE is None, 'Pillow not installed')
+    def test_a_windows_bitmap_turns_into_png_and_back(self):
+        png = base64.b64decode(h.FAKE_PNG)
+        dib = h.png_to_dib(png)
+        self.assertEqual(int.from_bytes(dib[:4], 'little'), 40, 'a BITMAPINFOHEADER without the file header')
+        back = h.dib_to_png(dib)
+        self.assertTrue(back.startswith(b'\x89PNG'))
+        import io
+        with h.PIL_IMAGE.open(io.BytesIO(back)) as image:
+            self.assertEqual(image.size, (24, 24))
+        self.assertIsNone(h.dib_to_png(b'short'))
+        self.assertIsNone(h.png_to_dib(b'not a png'))
+        self.assertEqual(h.ClipboardSync.digest('text', 'a'), h.ClipboardSync.digest('text', 'a'))
+        self.assertNotEqual(h.ClipboardSync.digest('text', 'a'), h.ClipboardSync.digest('image', b'a'))
+
+
+class ClipboardHttpTests(FakeEnvironment):
+    def test_the_phone_lists_copies_and_sends_through_the_helper(self):
+        hub = h.Hub('示範電腦', self.sources, h.FixedPresence(self.fake.cfg['presence']))
+        server = ThreadingHTTPServer(('127.0.0.1', 0), h.handler_for(hub, h.AuthGate(TOKEN), [ipaddress.ip_network('127.0.0.0/8')]))
+        server.daemon_threads = True
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        base = f'http://127.0.0.1:{server.server_address[1]}'
+
+        def call(path, method='GET', body=None, token=TOKEN):
+            data = json.dumps(body).encode('utf-8') if body is not None else None
+            request = urllib.request.Request(base + path, method=method, data=data, headers={'Authorization': f'Bearer {token}'})
+            try:
+                with urllib.request.urlopen(request, timeout=10) as response:
+                    raw = response.read()
+                    kind = response.headers.get('Content-Type') or ''
+                    return response.status, (json.loads(raw) if kind.startswith('application/json') else (kind, raw))
+            except urllib.error.HTTPError as exc:
+                return exc.code, json.loads(exc.read())
+
+        self.assertNotIn('clipboard', call('/v1/state')[1]['capabilities'])
+        self.assertEqual(call('/v1/clipboard')[0], 404, 'no shared clipboard configured')
+        hub.clipboard = self.fake.clipboard_sync()
+        self.assertIn('clipboard', call('/v1/state')[1]['capabilities'])
+        code, body = call('/v1/clipboard')
+        self.assertEqual(code, 200)
+        self.assertEqual(body['pc'], '示範電腦')
+        self.assertEqual([(i['kind'], i['source']) for i in body['items']],
+                         [('text', '手機'), ('image', '示範電腦'), ('text', '家裡')], 'the fixture items, newest first')
+        self.assertEqual(body['items'][0]['text'], 'https://example.com/tn12/weekly-report')
+        self.assertEqual(call('/v1/clipboard?limit=1')[1]['items'], body['items'][:1])
+        picture = body['items'][1]['id']
+        code, (kind, raw) = call(f'/v1/clipboard/images/{urllib.parse.quote(picture)}')
+        self.assertEqual((code, kind, raw), (200, 'image/png', base64.b64decode(h.FAKE_PNG)))
+        self.assertEqual(call(f'/v1/clipboard/images/{urllib.parse.quote(picture)}?small=1')[0], 200)
+        code, body = call(f'/v1/clipboard/items/{urllib.parse.quote(body["items"][2]["id"])}')
+        self.assertEqual((code, body['text']), (200, '會議室 Wi-Fi：demo-guest／密碼 4821（示範用）'))
+        self.assertEqual(call(f'/v1/clipboard/items/{urllib.parse.quote(picture)}')[0], 404, 'a picture has no text')
+        self.assertEqual(call('/v1/clipboard/items/nope')[0], 404)
+        self.assertEqual(call('/v1/clipboard', token='wrong')[0], 401)
+        # The phone sends text: stored as the phone's and put into this PC's clipboard.
+        code, body = call('/v1/clipboard', 'POST', {'text': '從手機來的'})
+        self.assertEqual(code, 200, body)
+        self.assertEqual((body['item']['source'], body['item']['text']), ('手機', '從手機來的'))
+        self.assertEqual(hub.clipboard.clipboard.read(), ('text', '從手機來的'))
+        self.assertEqual(call('/v1/clipboard')[1]['items'][0]['id'], body['item']['id'])
+        # A second PC gets the same with store=false: only its clipboard changes.
+        code, body = call('/v1/clipboard', 'POST', {'text': '從手機來的', 'store': False})
+        self.assertEqual((code, body['item']), (200, None))
+        self.assertEqual(call('/v1/clipboard')[1]['items'][0]['text'], '從手機來的')
+        self.assertEqual(len([i for i in call('/v1/clipboard')[1]['items'] if i.get('text') == '從手機來的']), 1)
+        # A picture from the phone (JPEG), named by the phone.
+        code, body = call('/v1/clipboard', 'POST', {'image': base64.b64encode(JPEG).decode('ascii'), 'source': 'iPhone'})
+        self.assertEqual(code, 200, body)
+        self.assertEqual((body['item']['kind'], body['item']['source'], body['item']['media']), ('image', 'iPhone', 'image/jpeg'))
+        self.assertEqual(call(f'/v1/clipboard/images/{urllib.parse.quote(body["item"]["id"])}')[1], ('image/jpeg', JPEG))
+        self.assertEqual(call('/v1/clipboard', 'POST', {'text': '  '})[0], 400)
+        self.assertEqual(call('/v1/clipboard', 'POST', {'image': 'bm90IGFuIGltYWdl'})[0], 400)
+        self.assertEqual(call('/v1/clipboard', 'POST', {})[0], 400)
+        # The phone asks this PC to take an older item into its clipboard.
+        old = call('/v1/clipboard')[1]['items'][-1]['id']
+        self.assertEqual(call(f'/v1/clipboard/items/{urllib.parse.quote(old)}/apply', 'POST', {})[0], 200)
+        self.assertEqual(hub.clipboard.clipboard.read(), ('text', '會議室 Wi-Fi：demo-guest／密碼 4821（示範用）'))
+        self.assertEqual(call('/v1/clipboard/items/1700000000000_nobody/apply', 'POST', {})[0], 404)
+        self.assertEqual(call('/v1/clipboard/other', 'POST', {})[0], 404)
+        # The cloud folder gone: the list says so instead of showing nothing.
+        hub.clipboard.store.folder = hub.clipboard.store.folder.parent / 'unmounted' / 'clipboard'
+        self.assertEqual(call('/v1/clipboard')[0], 503)
+        self.assertEqual(call('/v1/clipboard', 'POST', {'text': 'x'})[0], 503)
 
 
 class StringsTests(unittest.TestCase):
