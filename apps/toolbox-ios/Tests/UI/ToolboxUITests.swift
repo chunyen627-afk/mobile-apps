@@ -285,8 +285,13 @@ final class ToolboxUITests: XCTestCase {
         for _ in 0..<6 where !hide.isHittable {
             app.swipeDown()
         }
-        hide.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
-        XCTAssertTrue(poll(timeout: 5) { (hide.value as? String) == "1" }, "hide switch did not turn on")
+        // A tap while the list still settles from the swipes can be lost (iPad run 42459465153):
+        // tap again only after 3 s without the switch turning on, so it never toggles twice.
+        for _ in 0..<2 where (hide.value as? String) != "1" {
+            hide.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
+            _ = poll(timeout: 3) { (hide.value as? String) == "1" }
+        }
+        XCTAssertTrue(poll(timeout: 3) { (hide.value as? String) == "1" }, "hide switch did not turn on")
         app.navigationBars.buttons.firstMatch.tap()
         let hidden = element("thermo-hidden-group")
         XCTAssertTrue(hidden.waitForExistence(timeout: 10), "hidden section missing")
