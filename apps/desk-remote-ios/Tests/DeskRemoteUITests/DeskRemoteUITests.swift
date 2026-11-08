@@ -19,6 +19,19 @@ final class DeskRemoteUITests: XCTestCase {
         continueAfterFailure = false
     }
 
+    /// Every failure keeps the screen it happened on ("fail-L<line>" in the screenshots), so a
+    /// rare failure can be read from one run instead of guessed at.
+    override func record(_ issue: XCTIssue) {
+        var issue = issue
+        if app != nil {
+            let shot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+            shot.name = "fail-L\(issue.sourceCodeContext.location?.lineNumber ?? 0)"
+            shot.lifetime = .keepAlways
+            issue.add(shot)
+        }
+        super.record(issue)
+    }
+
     // MARK: - PC list and form
 
     func test01EmptyState() throws {
@@ -403,9 +416,11 @@ final class DeskRemoteUITests: XCTestCase {
                       "switch did not finish: \(said(element("model-busy")))")
         // Back to the top of the sheet by scrolling its own list: swiping the whole app down closes
         // the sheet on an iPad (a form sheet in the middle of the screen).
+        // Where the row is, not whether it is hittable: asking a row scrolled out of the sheet
+        // fails the test outright ("activation point invalid", iPad run 42463296836).
         let metaModel = element("meta-model")
-        let list = app.collectionViews.firstMatch.exists ? app.collectionViews.firstMatch : app.tables.firstMatch
-        for _ in 0 ..< 6 where !(metaModel.exists && metaModel.isHittable) {
+        let list = sheetList
+        for _ in 0 ..< 6 where !(metaModel.exists && inside(metaModel, list)) {
             list.swipeDown(velocity: .slow)
         }
         XCTAssertTrue(poll(timeout: 30) { metaModel.exists && metaModel.label.contains("Sonnet 5.5") },
@@ -776,8 +791,8 @@ final class DeskRemoteUITests: XCTestCase {
         XCTAssertTrue(revealInSheet(toggle), "no fast mode switch for Codex")
         XCTAssertTrue(poll(timeout: 5) { toggle.isEnabled }, "the switch stays disabled")
         XCTAssertEqual(toggle.value as? String, "0", "fast mode starts off")
-        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
         let note = element("fast-busy")
+        XCTAssertTrue(flip(toggle, until: note), "the switch did not start switching: \(said(note))")
         XCTAssertTrue(waitFor(note, labelContains: "已切換為快速模式", timeout: 20), "did not finish: \(said(note))")
         XCTAssertTrue(poll(timeout: 5) { toggle.value as? String == "1" }, "the switch went back off")
         snapshot("37-fast-on")
@@ -787,7 +802,7 @@ final class DeskRemoteUITests: XCTestCase {
         bar.tap()
         XCTAssertTrue(revealInSheet(toggle), "the switch is gone")
         XCTAssertTrue(poll(timeout: 5) { toggle.isEnabled && toggle.value as? String == "1" }, "the sheet shows it off")
-        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
+        XCTAssertTrue(flip(toggle, until: note), "the switch did not start switching back: \(said(note))")
         XCTAssertTrue(waitFor(note, labelContains: "已切換為標準模式", timeout: 20), "did not switch back: \(said(note))")
         element("meta-done").tap()
     }
@@ -1051,6 +1066,7 @@ final class DeskRemoteUITests: XCTestCase {
     private func openPC() {
         let row = element("pc-row-示範電腦")
         XCTAssertTrue(row.waitForExistence(timeout: 10), "preset PC missing")
+        XCTAssertTrue(settled(row), "the PC row keeps moving")
         row.tap()
     }
 
@@ -1061,6 +1077,9 @@ final class DeskRemoteUITests: XCTestCase {
         XCTAssertTrue(element("pc-presence").waitForExistence(timeout: 10), "PC state did not load")
         let row = element("app-row-\(app)")
         XCTAssertTrue(row.waitForExistence(timeout: 10), "\(app) row missing")
+        // The memory, pop-up and usage rows of the state can still push it down after the
+        // presence row is there; a tap on a moving row was lost (iPad run 42459465153, test14).
+        XCTAssertTrue(settled(row), "the \(app) row keeps moving")
         row.tap()
     }
 
@@ -1080,6 +1099,7 @@ final class DeskRemoteUITests: XCTestCase {
         openSessions(app)
         let row = element("session-row-\(id)")
         XCTAssertTrue(row.waitForExistence(timeout: 10), "conversation \(id) missing")
+        XCTAssertTrue(settled(row), "the conversation row keeps moving")
         row.tap()
     }
 
@@ -1116,22 +1136,78 @@ final class DeskRemoteUITests: XCTestCase {
     }
 
     private func scrollUntilBuilt(_ element: XCUIElement) {
-        for _ in 0 ..< 4 where !element.exists { app.swipeDown() }
-        for _ in 0 ..< 8 where !element.exists { app.swipeUp() }
+        for _ in 0 ..< 6 where !element.exists { drag(towardsEnd: false) }
+        for _ in 0 ..< 12 where !element.exists { drag(towardsEnd: true) }
     }
 
+    /// Scrolls until the element is on screen and hittable, and has stopped moving.
+    /// Drags without a flick (`drag`): a flicked list coasts on, so a check could find the row
+    /// passing by, the next flick carry it off again, and the tap that followed only stopped the
+    /// coasting list (test27 "no mode progress", test38 "cancelling took the update button away").
+    /// Towards the element once the list has built it; before that up the page, then down.
     private func reveal(_ element: XCUIElement) -> Bool {
         // On screen first: asking an off-screen card's button whether it is hittable fails the
         // test outright ("activation point invalid", CI 11/02).
         let visible = { element.exists && self.onScreen(element) && element.isHittable }
-        if poll(timeout: 2, visible) { return true }
-        for _ in 0 ..< 4 {
-            app.swipeDown()
-            if poll(timeout: 1, visible) { return true }
+        if poll(timeout: 2, visible) { return settled(element) }
+        var searched = 0
+        for _ in 0 ..< 18 {
+            let towardsEnd: Bool
+            if element.exists {
+                towardsEnd = element.frame.midY > app.windows.firstMatch.frame.midY
+            } else {
+                towardsEnd = searched >= 6
+                searched += 1
+            }
+            drag(towardsEnd: towardsEnd)
+            if poll(timeout: 1, visible) { return settled(element) }
         }
-        for _ in 0 ..< 8 {
-            app.swipeUp()
-            if poll(timeout: 1, visible) { return true }
+        return false
+    }
+
+    /// Moves the page by about a third of its height and holds before lifting the finger, so
+    /// the list stops where it was dragged to instead of coasting.
+    private func drag(towardsEnd: Bool, in area: XCUIElement? = nil) {
+        let target = area ?? app.windows.firstMatch
+        let from = target.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: towardsEnd ? 0.7 : 0.35))
+        let to = target.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: towardsEnd ? 0.35 : 0.7))
+        from.press(forDuration: 0.1, thenDragTo: to, withVelocity: .slow, thenHoldForDuration: 0.3)
+    }
+
+    /// True once the element's frame stays put for a moment: a sheet sliding in, or rows still
+    /// shifting while a page fills in, take a tap at the wrong place or drop it.
+    private func settled(_ element: XCUIElement, timeout: TimeInterval = 5) -> Bool {
+        var last = CGRect.null
+        return poll(timeout: timeout) {
+            guard element.exists else {
+                last = .null
+                return false
+            }
+            let now = element.frame
+            defer { last = now }
+            return now == last && !now.isEmpty
+        }
+    }
+
+    private func inside(_ element: XCUIElement, _ area: XCUIElement) -> Bool {
+        let frame = element.frame
+        return area.frame.contains(CGPoint(x: frame.midX, y: frame.midY))
+    }
+
+    /// The open sheet's list (the chat behind it is a scroll view, not a list).
+    private var sheetList: XCUIElement {
+        app.collectionViews.firstMatch.exists ? app.collectionViews.firstMatch : app.tables.firstMatch
+    }
+
+    /// Flips a switch at its knob and waits for what it starts. A sheet that has just come up
+    /// does not take touches until it has finished sliding in, and its rows report their final
+    /// place before that (iPad run 42463296836: the fast switch's second tap did nothing); only
+    /// when nothing started is it tapped once more, so it is never flipped twice.
+    private func flip(_ toggle: XCUIElement, until started: XCUIElement) -> Bool {
+        guard settled(toggle) else { return false }
+        for _ in 0 ..< 2 {
+            toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
+            if started.waitForExistence(timeout: 3) { return true }
         }
         return false
     }
@@ -1161,13 +1237,14 @@ final class DeskRemoteUITests: XCTestCase {
     }
 
     /// Scrolls a sheet's list up only: a downward swipe at the top of a sheet closes it (CI 10/27).
+    /// Without a flick and by where the row is, as `reveal`.
     private func revealInSheet(_ element: XCUIElement) -> Bool {
-        let visible = { element.exists && element.isHittable }
-        if poll(timeout: 2, visible) { return true }
-        let list = app.collectionViews.firstMatch.exists ? app.collectionViews.firstMatch : app.tables.firstMatch
-        for _ in 0 ..< 8 {
-            list.swipeUp(velocity: .slow)
-            if poll(timeout: 1, visible) { return true }
+        let list = sheetList
+        let visible = { element.exists && self.inside(element, list) && element.isHittable }
+        if poll(timeout: 2, visible) { return settled(element) }
+        for _ in 0 ..< 10 {
+            drag(towardsEnd: true, in: list)
+            if poll(timeout: 1, visible) { return settled(element) }
         }
         return false
     }

@@ -169,6 +169,7 @@ struct DeskPCView: View {
 
     private func runUpdate() async {
         guard let client = store.client(pcID) else { return }
+        let before = state?.version(.claude)?.running
         updating = true
         defer { updating = false }
         updateNote = "正在電腦上按「重新啟動以更新」…"
@@ -182,6 +183,12 @@ struct DeskPCView: View {
             updateNote = "沒有成功：\(DeskText.failure(.unreachable))"
         }
         await refresh()
+        // Claude's question answered from this page while the press was still being followed:
+        // the new version came in then, when the change watcher above keeps out of the way, and
+        // the note went on talking of the question (CI run 42448887783, test38).
+        if let now = state?.version(.claude)?.running, let before, now != before {
+            updateNote = "Claude 桌面版已更新為 \(now)"
+        }
     }
 
     private func runRestart(_ newer: String) async {
