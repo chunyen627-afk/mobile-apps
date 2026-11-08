@@ -2462,6 +2462,15 @@ class ClipboardTests(unittest.TestCase):
         other.put_image(base64.b64decode(h.FAKE_PNG), 'image/png', '家裡')
         sync.once()
         self.assertEqual(clipboard.read(), ('image', base64.b64decode(h.FAKE_PNG)))
+        # Windows' own cloud clipboard brought the other PC's copy here before the cloud drive did:
+        # the same text is the newest item already, so it is not stored a second time.
+        self.now[0] += 1
+        other.put_text('兩邊同時有', '家裡')
+        clipboard.copy('text', '兩邊同時有')
+        sync.once()
+        self.assertEqual([i['source'] for i in self.store.items() if i.get('text') == '兩邊同時有'], ['家裡'])
+        sync.once()
+        self.assertEqual(clipboard.read(), ('text', '兩邊同時有'), 'and not pasted again either')
         # An old arrival (this PC was off while it synced) is listed but not pasted over the clipboard.
         clipboard.copy('text', '現在的')
         sync.once()
