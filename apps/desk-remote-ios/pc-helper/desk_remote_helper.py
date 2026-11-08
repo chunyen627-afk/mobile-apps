@@ -38,7 +38,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.35'
+VERSION = '0.5.36'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -2152,8 +2152,10 @@ class WindowsDriver:
         self.queued = bool(answer.get('queued'))
         return answer.get('replaced') or None
 
-    def new_send(self, app, button, text):
-        self.ask(app, cmd='new_send', name=button, text=text)
+    def new_send(self, app, button, text, model=None, effort=None):
+        """Opens a new conversation, picks `model` and `effort` on its empty page when given,
+        then sends `text`."""
+        self.ask(app, cmd='new_send', name=button, text=text, model=model or '', effort=effort or '')
 
     def popups(self):
         """Windows on the desktop waiting for an answer: [{hwnd, title, process, text, buttons}]."""
@@ -2258,8 +2260,8 @@ class WindowsDriver:
         return self.ask(app, cmd='model', doc=doc, model=label).get('how')
 
     def set_effort(self, app, doc, label):
-        if app != 'claude':
-            raise ActionError('not-supported', 'only Claude effort can be switched')
+        """Claude: the effort submenu of the model menu. Codex: the slider in its model menu,
+        clicked at the effort's tick (helper 0.5.36)."""
         return self.ask(app, cmd='effort', doc=doc, effort=label).get('how')
 
     def set_mode(self, app, doc, label):
@@ -3011,6 +3013,12 @@ class ActionRunner:
                 return 400, error('bad-request', f'訊息太長（上限 {self.MAX_TEXT} 字）')
         strings = self.strings.get(app) or {}
         choice_keys = {'model': ('models', '模型'), 'effort': ('efforts', '推理強度'), 'mode': ('modes', '權限模式')}
+        if kind == 'new':
+            # A new conversation may start with a model and effort (the phone's sheet, 11/8).
+            for choice in ('model', 'effort'):
+                key, what = choice_keys[choice]
+                if payload.get(choice) and payload[choice] not in (strings.get(key) or []):
+                    return 400, error('bad-request', f'沒有這個{what}')
         if kind in choice_keys:
             key, what = choice_keys[kind]
             if not strings.get(key):
@@ -3539,8 +3547,10 @@ class ActionRunner:
         how = self.driver.set_effort(app, info['doc'], label)
         self.presence.end_own()
         logging.info('effort %s %s by %s', app, label, how)
+        # Codex writes the effort to its rollout only with the next reply (as the model).
+        later = '（下一則回覆起使用）' if app == 'codex' else ''
         self.update(action, state='done', verified=True,
-                    message=f'本來就是 {label}' if how == 'already' else f'推理強度已切換為 {label}')
+                    message=f'本來就是 {label}' if how == 'already' else f'推理強度已切換為 {label}{later}')
 
     def do_mode(self, action):
         """The permission mode. Claude's mode button names the mode, so the worker checks it;
@@ -3639,6 +3649,7 @@ class ActionRunner:
 
     def do_new(self, action):
         app, text, project = action['app'], action['text'], action.get('project')
+        model, effort = action.get('model') or None, action.get('effort') or None
         source = self.hub.sources[app]
         before = {row['id'] for row in source.list_sessions(50)}
         strings = self.strings.get(app) or {}
@@ -3657,8 +3668,10 @@ class ActionRunner:
             self.driver.open(app, info)
             self.wait_doc(app, info)
             time.sleep(self.settle_seconds)
-        self.driver.new_send(app, button, text)
+        self.driver.new_send(app, button, text, model, effort)
         self.presence.end_own()
+        picked = '、'.join(part for part in ((f'模型 {model}' if model else ''), (f'推理強度 {effort}' if effort else '')) if part)
+        opened = f'已開新對話（{picked}）' if picked else '已開新對話'
         self.update(action, message='已送出，等待新對話出現')
         deadline = self.clock() + self.verify_seconds
         while True:
@@ -3666,7 +3679,7 @@ class ActionRunner:
             if fresh:
                 row = fresh[0]
                 self.update(action, state='done', verified=True, sessionId=row['id'], title=row['title'],
-                            message='已開新對話')
+                            message=opened)
                 return
             if self.clock() >= deadline:
                 self.update(action, state='done', verified=False,
@@ -4259,6 +4272,7 @@ class FakeDriver:
         self.calls = []
         self.open_doc = {}
         self.codex_models = {}  # page title -> model picked on the phone
+        self.codex_efforts = {}   # Codex: the effort the slider was set to, per page
         self.running = set()    # page titles whose turn is running (a stop button shows)
         self.page_titles = {}   # id -> the title its page shows, where tests make it differ
         self.fake_popups = []   # windows that popped up on the desktop (--fake-popup)
@@ -4308,8 +4322,11 @@ class FakeDriver:
 
     def set_effort(self, app, doc, label):
         self.calls.append(('set_effort', app, label))
-        if app != 'claude':
-            raise ActionError('not-supported', '')
+        if app == 'codex':  # the slider's pick shows on the model button until the next reply
+            if self.codex_efforts.get(doc, '中') == label:
+                return 'already'
+            self.codex_efforts[doc] = label
+            return 'fake'
         path, data = self.session_file(app, doc)
         ids = {v: k for k, v in EFFORT_LABELS.items()}
         if EFFORT_LABELS.get(data.get('effort')) == label:
@@ -4499,10 +4516,14 @@ class FakeDriver:
         self.later(app, path, reply, delay, doc)
         return replaced
 
-    def new_send(self, app, button, text):
+    def new_send(self, app, button, text, model=None, effort=None):
         self.calls.append(('new_send', app, button))
         session_id, path = self.setup.create_session(app, text[:24])
         self.open_doc[app] = self.hub.sources[app].info(session_id)['doc']
+        if model:
+            self.set_model(app, self.open_doc[app], model)
+        if effort:
+            self.set_effort(app, self.open_doc[app], effort)
         self.write(app, path, 'user', text)
         self.later(app, path, f'（示範）新對話收到：{text[:30]}')
 

@@ -719,6 +719,38 @@ class DrivingTests(FakeEnvironment):
         run_all(runner)
         self.assertEqual(driver.calls[-1], ('new_send', 'codex', '在 demo-app 中開始新對話'))
 
+    def test_a_new_conversation_starts_with_the_chosen_model_and_effort(self):
+        """The phone's new-conversation sheet picks a model and effort first (11/8): both are set
+        on the empty page before the first message, and the result names them."""
+        _, driver, _, runner = drive(self.fake)
+        self.assertEqual(runner.submit('new', 'claude', None, {'text': 'x', 'model': 'GPT-6 Sol'})[0], 400)
+        self.assertEqual(runner.submit('new', 'codex', None, {'text': 'x', 'effort': '極限'})[0], 400)
+        body = runner.submit('new', 'claude', None, {'text': '看一下 README', 'model': 'Sonnet 5.5', 'effort': '高'})[1]
+        run_all(runner)
+        status = runner.status(body['id'])
+        self.assertEqual((status['state'], status['verified']), ('done', True), status)
+        self.assertEqual(status['message'], '已開新對話（模型 Sonnet 5.5、推理強度 高）')
+        self.assertEqual(driver.calls[-3:], [('new_send', 'claude', '新增'), ('set_model', 'claude', 'Sonnet 5.5'),
+                                             ('set_effort', 'claude', '高')])
+        body = runner.submit('new', 'codex', None, {'text': 'x', 'effort': '超高'})[1]
+        run_all(runner)
+        self.assertEqual(runner.status(body['id'])['message'], '已開新對話（推理強度 超高）')
+        self.assertEqual(driver.calls[-1], ('set_effort', 'codex', '超高'))
+
+    def test_codexs_effort_is_switched_from_the_phone(self):
+        """Codex's effort is a slider in its model menu (11/8): clicked at the effort's tick, and
+        reported as taking effect from the next reply, like its model."""
+        _, driver, _, runner = drive(self.fake)
+        body = runner.submit('effort', 'codex', X, {'effort': '高'})[1]
+        run_all(runner)
+        status = runner.status(body['id'])
+        self.assertEqual((status['state'], status['verified']), ('done', True), status)
+        self.assertEqual(status['message'], '推理強度已切換為 高（下一則回覆起使用）')
+        self.assertIn(('set_effort', 'codex', '高'), driver.calls)
+        body = runner.submit('effort', 'codex', X, {'effort': '高'})[1]
+        run_all(runner)
+        self.assertEqual(runner.status(body['id'])['message'], '本來就是 高')
+
     def test_questions_are_notified_but_not_what_the_phone_did(self):
         sent = []
         _, _, watcher, runner = drive(self.fake, notify=lambda *a: sent.append(a))
@@ -1800,7 +1832,7 @@ class PopupTests(FakeEnvironment):
 
     def test_effort_and_mode_switch_and_show_in_meta(self):
         hub, driver, watcher, runner = drive(self.fake)
-        self.assertEqual(runner.submit('effort', 'codex', X, {'effort': '高'})[1]['error'], 'not-supported')
+        self.assertEqual(runner.submit('effort', 'codex', X, {'effort': '極限'})[0], 400)
         self.assertEqual(runner.submit('effort', 'claude', A, {'effort': '極限'})[0], 400)
         body = runner.submit('effort', 'claude', A, {'effort': '超高'})[1]
         run_all(runner)
@@ -2037,7 +2069,8 @@ class PopupTests(FakeEnvironment):
         hub, _, _, _ = drive(self.fake)
         hub.capabilities = hub.capabilities + ['effort', 'mode', 'stop']
         state = hub.state()
-        self.assertEqual(state['efforts'], {'claude': ['低', '中', '高', '超高', '最高', 'Ultracode']})
+        self.assertEqual(state['efforts'], {'claude': ['低', '中', '高', '超高', '最高', 'Ultracode'],
+                                            'codex': ['低', '中', '高', '超高']})
         self.assertEqual(state['modes']['codex'], ['要求核准', '代我核准'])
         self.assertEqual(state['stop'], ['claude', 'codex'])
 

@@ -194,6 +194,9 @@ struct DeskNewSessionView: View {
     @State private var status: String?
     @State private var working = false
     @State private var confirmBusy: Int??
+    @State private var pcState: HelperState?
+    @State private var model: String?
+    @State private var effort: String?
     private let clientId = UUID().uuidString
 
     var body: some View {
@@ -206,6 +209,22 @@ struct DeskNewSessionView: View {
                 } footer: {
                     Text("電腦上的 \(app.displayName) 會開一個新對話（使用桌面版目前預設的資料夾），貼上這段文字並送出。")
                 }
+                // The model and effort are picked on the new conversation's empty page before the
+                // first message (helper 0.5.36; the user 11/8: choose them when opening, not after).
+                if let pcState, !pcState.models(app).isEmpty || !pcState.efforts(app).isEmpty {
+                    Section {
+                        if !pcState.models(app).isEmpty {
+                            DeskNewSessionPick(title: "模型", options: pcState.models(app), choice: $model)
+                                .accessibilityIdentifier("new-session-model")
+                        }
+                        if !pcState.efforts(app).isEmpty {
+                            DeskNewSessionPick(title: "推理強度", options: pcState.efforts(app), choice: $effort)
+                                .accessibilityIdentifier("new-session-effort")
+                        }
+                    } footer: {
+                        Text("沒選就照桌面版目前的設定。")
+                    }
+                }
                 if let status {
                     Text(status)
                         .font(.footnote)
@@ -215,6 +234,7 @@ struct DeskNewSessionView: View {
             }
             .navigationTitle("新對話")
             .navigationBarTitleDisplayMode(.inline)
+            .task { pcState = try? await store.client(pcID)?.state() }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
@@ -240,7 +260,7 @@ struct DeskNewSessionView: View {
         defer { working = false }
         status = "送出中…"
         do {
-            let first = try await client.newSession(app, text: text, clientMsgId: clientId, force: force)
+            let first = try await client.newSession(app, text: text, clientMsgId: clientId, model: model, effort: effort, force: force)
             let end = try await client.follow(first, timeout: 60) { status = $0.message }
             status = end.message
             if end.state == "done", let id = end.sessionId {
@@ -253,6 +273,22 @@ struct DeskNewSessionView: View {
             status = "沒有送出：\(DeskText.failure(error))"
         } catch {
             status = "沒有送出：\(DeskText.failure(.unreachable))"
+        }
+    }
+}
+
+/// One choice for the new conversation: the desktop app's current setting (nil) or one option.
+struct DeskNewSessionPick: View {
+    let title: String
+    let options: [String]
+    @Binding var choice: String?
+
+    var body: some View {
+        Picker(title, selection: $choice) {
+            Text("照目前的").tag(String?.none)
+            ForEach(options, id: \.self) { option in
+                Text(option).tag(String?.some(option))
+            }
         }
     }
 }
