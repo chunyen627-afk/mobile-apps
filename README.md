@@ -4,7 +4,7 @@
 
 | App | 平台 | 用途 | 驗證狀態 |
 | --- | --- | --- | --- |
-| [工具箱](https://github.com/chunyen627-afk/mobile-apps/tree/claude/toolbox-ios/apps/toolbox-ios) | iPhone／iPad，iOS 17+ | 相簿、礦機狀態、桌面遙控、溫濕度四個分頁（iPhone 在底部、iPad 在上方），只佔 1 個側載名額；沿用相簿的 Bundle ID，覆蓋安裝保留設定 | **0.6.3 build 18**（2026-11-09）：iPhone 與 iPad 模擬器整套測試都通過後才發布（[run 42567927606](https://github.com/chunyen627-afk/mobile-apps/actions/runs/42567927606)），截圖已人工檢視；IPA 在公開 [Release toolbox-0.6.3-build18](https://github.com/chunyen627-afk/mobile-apps/releases/tag/toolbox-0.6.3-build18)。手機上裝的是 0.5.4 build 14，0.6.x 尚未實機安裝；iPad 只驗過模擬器。程式在 `claude/toolbox-ios` 分支，尚未合併 main |
+| [工具箱](https://github.com/chunyen627-afk/mobile-apps/tree/claude/toolbox-ios/apps/toolbox-ios) | iPhone／iPad，iOS 17+ | 相簿、礦機狀態、桌面遙控、溫濕度四個分頁（iPhone 在底部、iPad 在上方），只佔 1 個側載名額；沿用相簿的 Bundle ID，覆蓋安裝保留設定 | **0.6.3 build 18**（2026-11-09）：iPhone 與 iPad 模擬器整套測試都通過後才發布（[run 42567927606](https://github.com/chunyen627-afk/mobile-apps/actions/runs/42567927606)），截圖已人工檢視；IPA 在公開 [Release toolbox-0.6.3-build18](https://github.com/chunyen627-afk/mobile-apps/releases/tag/toolbox-0.6.3-build18)。2026-11-09 已裝到 iPhone；這版剪貼簿的新行為（點網址開瀏覽器、點圖片放大、按複製鈕才複製）尚未在手機上逐項確認；iPad 只驗過模擬器。程式在 `claude/toolbox-ios` 分支，尚未合併 main |
 
 工具箱裡的四個分頁：
 
