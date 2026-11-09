@@ -28,8 +28,9 @@ settings:
     # folder is opened on a connection the NAS closed (SIGPIPE ignored, reconnect and retry once).
     # 0.5.3: a NAS not answering over ZeroTier is tried up to five times before the album gives up.
     # 0.6: the thermometers joined as the fourth tab. 0.6.2: the shared clipboard in the desk remote tab.
-    MARKETING_VERSION: "0.6.2"
-    CURRENT_PROJECT_VERSION: "17"
+    # 0.6.3: clipboard rows open a picture or a web address; only the copy button copies.
+    MARKETING_VERSION: "0.6.3"
+    CURRENT_PROJECT_VERSION: "18"
 targets:
   # Named Lightbox, as the album app it replaces: the same bundle identifier, executable and
   # Swift module, so the album's unit tests (`@testable import Lightbox`) run here unchanged.
