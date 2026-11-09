@@ -61,9 +61,9 @@ bash scripts/build.sh
 4. 封裝 Release，檢查五個內嵌框架（AMSMB2、MobileVLCKit、MinerStatusCore、DeskRemoteCore、ThermoCore）、Bundle ID、在地網路權限、桌面遙控的四個權限說明與 `deskremote://` 連結、沒有背景模式、沒有測試資料或小幫手檔案被包進去
 5. 產出 `build/Toolbox-unsigned.ipa` 與 SHA256
 
-截圖推到 `ci-screenshots-toolbox-ios` 分支（含桌面遙控自己那 70 多張，上限 10 MB），不必登入就能看。只有 commit 訊息帶 `[release-ipa]`（使用者同意發布後才加）時，才把 IPA 和閃退分析符號檔發布成公開 prerelease `toolbox-<版本>-build<N>`。
+截圖推到 `ci-screenshots-toolbox-ios` 分支（含桌面遙控自己那 70 多張，上限 10 MB），不必登入就能看。只有 commit 訊息帶 `[release-ipa]`（使用者同意發布後才加）時，才把 IPA 和閃退分析符號檔發布成公開 prerelease `toolbox-<版本>-build<N>`：iPhone job 把測過的 IPA 和符號檔交給另一個 `release` job（暫存 1 天），`release` job 要等 iPhone job 和 iPad job 都通過才發布（2026-11-09 起，使用者要求；之前發布步驟在 iPhone job 裡，0.6.2 build 17 就在 iPad 還有 2 項失敗時發出去了）。
 
-**iPad**：workflow 的 `ipad` job 只在 commit 訊息帶 `[release-ipa]` 或 `[ipad]` 時跑，平常推送不跑，不拖慢 CI。它在 macos-26 runner 用最新的 Xcode 與最新 iPadOS 模擬器（iPad mini 最新機型；`SIM_MATCH=iPad mini` 讓 `build.sh` 挑 iPad）把整套 `build.sh` 再跑一次，和 iPhone job 同時進行（不會擋住 iPhone job 的發布）。iPad 上多跑 `Tests/UI/IPadLayoutShots.swift` 的 5 項（四個分頁的主要子畫面，直向和橫向各一張，截圖名 `ipad-…`、寬 1000 px），所以工具箱 UI 測試在 iPad 是 12 項、在 iPhone 是 7 項（`build.sh` 在 iPhone 上用 `-skip-testing` 跳過）。礦機的開停按鈕要即時模式，`build.sh` 另外用 `python3 -m http.server` 提供礦機的 fixtures。截圖推到 `ci-screenshots-toolbox-ios-ipad`（上限 15 MB）。
+**iPad**：workflow 的 `ipad` job 只在 commit 訊息帶 `[release-ipa]` 或 `[ipad]` 時跑，平常推送不跑，不拖慢 CI。它在 macos-26 runner 用最新的 Xcode 與最新 iPadOS 模擬器（iPad mini 最新機型；`SIM_MATCH=iPad mini` 讓 `build.sh` 挑 iPad）把整套 `build.sh` 再跑一次，和 iPhone job 同時進行；帶 `[release-ipa]` 時 iPad 沒全過就不發布。iPad 上多跑 `Tests/UI/IPadLayoutShots.swift` 的 5 項（四個分頁的主要子畫面，直向和橫向各一張，截圖名 `ipad-…`、寬 1000 px），所以工具箱 UI 測試在 iPad 是 12 項、在 iPhone 是 7 項（`build.sh` 在 iPhone 上用 `-skip-testing` 跳過）。礦機的開停按鈕要即時模式，`build.sh` 另外用 `python3 -m http.server` 提供礦機的 fixtures。截圖推到 `ci-screenshots-toolbox-ios-ipad`（上限 15 MB）。
 
 ## 驗證狀態
 

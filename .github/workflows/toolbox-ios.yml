@@ -58,10 +58,11 @@ jobs:
             echo "- SHA256: \`$sha\`"
             grep -E "Executed [0-9]+ tests?, with [0-9]+ failures" test-summary.txt | sed 's/^/- XCTest: /'
           } >> "$GITHUB_STEP_SUMMARY"
-      # Public prerelease of the tested IPA plus its crash symbols, only when the head commit message
-      # contains [release-ipa]; that marker is added only after the user approves the release. The
-      # IPA is about 50 MB because of the album's VLC framework (the user approved it); 100 MB cap.
-      - name: Publish IPA release (approved builds only)
+      # Only when the head commit message contains [release-ipa] (added only after the user approves
+      # the release): name the tested IPA and its crash symbols for the release and hand them to the
+      # release job below, which publishes only after this job and the iPad job both pass. The IPA
+      # is about 50 MB because of the album's VLC framework (the user approved it); 100 MB cap.
+      - name: Prepare release files (approved builds only)
         if: success() && contains(github.event.head_commit.message, '[release-ipa]')
         working-directory: ${{ env.APP_DIR }}/build
         env:
@@ -71,33 +72,30 @@ jobs:
           version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist")
           build=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$plist")
           tag="toolbox-${version}-build${build}"
-          asset="Toolbox-${version}-build${build}-unsigned.ipa"
-          symbols="Toolbox-${version}-build${build}-crash-symbols.zip"
-          cp Toolbox-unsigned.ipa "$asset"
-          (cd Toolbox.xcarchive && /usr/bin/zip -qr "../$symbols" dSYMs)
-          size=$(stat -f %z "$asset")
-          if [ "$size" -gt 104857600 ]; then
-            echo "IPA exceeds 100 MB; refusing to publish."
-            exit 1
-          fi
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Release $tag already exists; raise CURRENT_PROJECT_VERSION before releasing again."
             exit 1
           fi
-          sha=$(shasum -a 256 "$asset" | cut -d' ' -f1)
-          notes=$(printf '%s\n' \
-            "未簽署 IPA，需用自己的 Apple 帳號簽署後安裝。沿用相簿的 Bundle ID，覆蓋安裝會保留相簿與礦機設定；只含模擬器測試資料與離線示範資料，不含任何真實位址、密碼或金鑰。" \
-            "桌面遙控分頁要重新配對電腦（單獨的桌面遙控 App 的設定不會帶過來）；電腦端小幫手在 apps/desk-remote-ios/pc-helper。" \
-            "溫濕度分頁要在設定填入閘道網址；閘道程式在 apps/thermo-ios/pc-gateway。" \
-            "" \
-            "- 來源 commit：${GITHUB_SHA}" \
-            "- 建置與測試：run ${GITHUB_RUN_ID}（小幫手、溫濕度閘道、相簿、礦機、桌面遙控與溫濕度的單元測試，工具箱（含溫濕度分頁）、相簿與桌面遙控的模擬器 UI 測試皆通過才發布）" \
-            "- 大小：${size} bytes" \
-            "- SHA256：${sha}" \
-            "- ${symbols}：閃退分析用符號檔")
-          gh release create "$tag" "$asset" "$symbols" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-            --prerelease --title "工具箱 ${version}（build ${build}）" --notes "$notes"
-          echo "::notice title=IPA release::${tag} ${asset} size ${size} bytes, SHA256 ${sha}"
+          mkdir -p release
+          asset="Toolbox-${version}-build${build}-unsigned.ipa"
+          symbols="Toolbox-${version}-build${build}-crash-symbols.zip"
+          cp Toolbox-unsigned.ipa "release/$asset"
+          (cd Toolbox.xcarchive && /usr/bin/zip -qr "../release/$symbols" dSYMs)
+          size=$(stat -f %z "release/$asset")
+          if [ "$size" -gt 104857600 ]; then
+            echo "IPA exceeds 100 MB; refusing to publish."
+            exit 1
+          fi
+          printf 'tag=%s\nversion=%s\nbuild=%s\nasset=%s\nsymbols=%s\n' \
+            "$tag" "$version" "$build" "$asset" "$symbols" > release/release.env
+      - name: Hand the release files to the release job
+        if: success() && contains(github.event.head_commit.message, '[release-ipa]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: Toolbox-release
+          path: ${{ env.APP_DIR }}/build/release
+          if-no-files-found: error
+          retention-days: 1
       - name: Collect small reports (1 MB limit)
         id: collect
         if: always()
@@ -225,3 +223,45 @@ jobs:
             commit -q -m "iPad simulator screenshots for run $GITHUB_RUN_ID ($GITHUB_SHA)"
           git push -q --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/${SHOT_BRANCH}"
           echo "::notice title=Screenshots::$(grep -c . INDEX.txt) iPad screenshots on branch ${SHOT_BRANCH} for run ${GITHUB_RUN_ID}"
+  # Public prerelease of the tested IPA plus its crash symbols. It waits for both the iPhone job and
+  # the iPad job and runs only if both passed, so a red iPad run can no longer release.
+  release:
+    needs: [build, ipad]
+    if: >-
+      success() && github.event.repository.private == false &&
+      contains(github.event.head_commit.message, '[release-ipa]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Fetch the release files from the iPhone job
+        uses: actions/download-artifact@v4
+        with:
+          name: Toolbox-release
+          path: release
+      - name: Publish IPA release (approved builds, iPhone and iPad passed)
+        working-directory: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          field() { grep -E "^$1=" release.env | cut -d= -f2-; }
+          tag=$(field tag); version=$(field version); build=$(field build)
+          asset=$(field asset); symbols=$(field symbols)
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $tag already exists; raise CURRENT_PROJECT_VERSION before releasing again."
+            exit 1
+          fi
+          size=$(stat -c %s "$asset")
+          sha=$(sha256sum "$asset" | cut -d' ' -f1)
+          notes=$(printf '%s\n' \
+            "未簽署 IPA，需用自己的 Apple 帳號簽署後安裝。沿用相簿的 Bundle ID，覆蓋安裝會保留相簿與礦機設定；只含模擬器測試資料與離線示範資料，不含任何真實位址、密碼或金鑰。" \
+            "桌面遙控分頁要重新配對電腦（單獨的桌面遙控 App 的設定不會帶過來）；電腦端小幫手在 apps/desk-remote-ios/pc-helper。" \
+            "溫濕度分頁要在設定填入閘道網址；閘道程式在 apps/thermo-ios/pc-gateway。" \
+            "" \
+            "- 來源 commit：${GITHUB_SHA}" \
+            "- 建置與測試：run ${GITHUB_RUN_ID}（小幫手、溫濕度閘道、相簿、礦機、桌面遙控與溫濕度的單元測試，工具箱（含溫濕度分頁）、相簿與桌面遙控的模擬器 UI 測試在 iPhone 與 iPad 同一輪皆通過才發布）" \
+            "- 大小：${size} bytes" \
+            "- SHA256：${sha}" \
+            "- ${symbols}：閃退分析用符號檔")
+          gh release create "$tag" "$asset" "$symbols" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --prerelease --title "工具箱 ${version}（build ${build}）" --notes "$notes"
+          echo "::notice title=IPA release::${tag} ${asset} size ${size} bytes, SHA256 ${sha}"
