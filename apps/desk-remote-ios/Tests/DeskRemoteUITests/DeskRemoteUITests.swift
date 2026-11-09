@@ -983,11 +983,23 @@ final class DeskRemoteUITests: XCTestCase {
         XCTAssertTrue(reveal(element("clipboard-row-1762560060000_示範電腦")), "the picture item is missing")
         XCTAssertTrue(reveal(element("clipboard-row-1762560000000_家裡")), "the oldest text item is missing")
         snapshot("42-clipboard-list")
-        XCTAssertTrue(reveal(newest), "the newest row is not on screen")
-        newest.tap()
-        // The app leaves the system pasteboard alone under test (its sync with the Mac hangs a
-        // headless runner); the check mark says the copy happened.
-        XCTAssertTrue(waitFor(newest, labelContains: "已複製到手機", timeout: 10), "no check mark after copying: \(newest.label)")
+        // A tap on the picture opens it full size (its share sheet saves it to Photos); the row
+        // itself never copies (asked 11/9).
+        let picture = element("clipboard-row-1762560060000_示範電腦")
+        XCTAssertTrue(reveal(picture), "the picture row is not on screen")
+        picture.tap()
+        XCTAssertTrue(element("picture-viewer").waitForExistence(timeout: 10), "the picture did not open")
+        snapshot("42-clipboard-picture")
+        app.buttons["關閉"].tap()
+        XCTAssertTrue(poll(timeout: 5) { !self.element("picture-viewer").exists }, "the picture viewer stayed open")
+        // Only the copy button copies. The newest row is a web address, which a tap would hand to
+        // the browser, so the test does not tap the row itself. The app leaves the system
+        // pasteboard alone under test (its sync with the Mac hangs a headless runner); the
+        // button's check mark says the copy happened.
+        let copy = app.buttons["clipboard-copy-1762560120000_手機"]
+        XCTAssertTrue(reveal(copy), "the copy button of the newest row is not on screen")
+        copy.tap()
+        XCTAssertTrue(waitFor(copy, labelContains: "已複製到手機", timeout: 10), "no check mark after copying: \(copy.label)")
         // A vertical TextField is a text view to XCUITest, so look it up by identifier only.
         let input = element("clipboard-text")
         XCTAssertTrue(reveal(input), "the text box is missing")

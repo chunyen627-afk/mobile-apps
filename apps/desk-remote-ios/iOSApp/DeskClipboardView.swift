@@ -148,6 +148,25 @@ final class DeskClipboardModel: ObservableObject {
         guard let via, let client = store.client(via) else { return nil }
         return await DeskImageCache.shared.image(key: "clipboard/\(id)") { try await client.clipboardImage(id) }
     }
+
+    /// The picture as stored (not the thumbnail-sized copy), for the viewer and its share sheet.
+    func loadFullImage(_ id: String) async -> UIImage? {
+        guard let via, let client = store.client(via) else { return nil }
+        return await DeskImageCache.shared.image(key: "clipboard-full/\(id)") { try await client.clipboardImage(id, small: false) }
+    }
+
+    /// The web address an item is, when its whole text is one (a tap opens it instead of copying).
+    static func link(in item: ClipboardItem) -> URL? {
+        guard !item.isImage, item.truncated != true, let text = item.text?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !text.contains(where: { $0.isWhitespace }),
+              text.lowercased().hasPrefix("http://") || text.lowercased().hasPrefix("https://"),
+              let url = URL(string: text), url.host != nil else { return nil }
+        return url
+    }
+}
+
+private struct ClipboardShownPicture: Identifiable {
+    let id: String
 }
 
 extension NSItemProvider {
@@ -174,6 +193,8 @@ struct DeskClipboardView: View {
     @ObservedObject var store: DeskStore
     @StateObject private var model: DeskClipboardModel
     @State private var draft = ""
+    @State private var shownPicture: ClipboardShownPicture?
+    @Environment(\.openURL) private var openURL
 
     init(store: DeskStore) {
         self.store = store
@@ -216,7 +237,7 @@ struct DeskClipboardView: View {
                         .accessibilityIdentifier("clipboard-note")
                 }
             } footer: {
-                Text("「貼上」把手機剪貼簿裡的文字或圖片送到每一台連得到的電腦（直接進它們的剪貼簿，並存進雲端硬碟的共用資料夾）。電腦上複製的東西會出現在下面，點一下就複製到手機；長按可指定放進哪一台電腦的剪貼簿。")
+                Text("「貼上」把手機剪貼簿裡的文字或圖片送到每一台連得到的電腦（直接進它們的剪貼簿，並存進雲端硬碟的共用資料夾）。電腦上複製的東西會出現在下面：按右邊的複製鈕才複製到手機；網址點一下用瀏覽器打開，圖片點一下放大（左上角分享可存到照片）；長按可指定放進哪一台電腦的剪貼簿。")
             }
             if let failure = model.failure {
                 DeskNotice(text: failure, tint: .red)
@@ -229,9 +250,15 @@ struct DeskClipboardView: View {
                         .accessibilityIdentifier("clipboard-empty")
                 }
                 ForEach(model.items) { item in
-                    DeskClipboardRow(item: item, copied: model.copied == item.id, loadImage: model.loadImage) {
+                    DeskClipboardRow(item: item, copied: model.copied == item.id, loadImage: model.loadImage, open: {
+                        if item.isImage {
+                            shownPicture = ClipboardShownPicture(id: item.id)
+                        } else if let url = DeskClipboardModel.link(in: item) {
+                            openURL(url)
+                        }
+                    }, copy: {
                         Task { await model.copyToPhone(item) }
-                    }
+                    })
                     .contextMenu {
                         ForEach(store.pcs) { pc in
                             Button {
@@ -241,61 +268,82 @@ struct DeskClipboardView: View {
                             }
                         }
                     }
-                    .accessibilityIdentifier("clipboard-row-\(item.id)")
                 }
             }
         }
         .navigationTitle("剪貼簿")
+        .sheet(item: $shownPicture) { picked in
+            DeskPictureViewer(id: picked.id, loadImage: model.loadFullImage)
+        }
         .deskForegroundLoop(every: 5, failing: { model.unreachable }) { await model.refresh() }
         .refreshable { await model.refresh() }
     }
 }
 
-/// One item: the text (or a thumbnail), who copied it and when; a tap copies it to this phone.
+/// One item: the text (or a thumbnail), who copied it and when. Only the copy button at the right
+/// copies it to this phone (asked 11/9); a tap on a picture opens it full size (the viewer's share
+/// sheet saves it to Photos), a tap on a web address opens it in the browser, other text does
+/// nothing on a tap.
 struct DeskClipboardRow: View {
     let item: ClipboardItem
     let copied: Bool
     let loadImage: (String) async -> UIImage?
+    let open: () -> Void
     let copy: () -> Void
 
+    private var link: URL? { DeskClipboardModel.link(in: item) }
+
     var body: some View {
-        Button(action: copy) {
-            HStack(alignment: .center, spacing: 10) {
-                if item.isImage {
-                    DeskClipboardThumbnail(id: item.id, loadImage: loadImage)
-                }
-                VStack(alignment: .leading, spacing: 3) {
-                    if item.isImage {
-                        Text("圖片・\(ByteCountFormatter.string(fromByteCount: Int64(item.bytes), countStyle: .file))")
-                    } else {
-                        Text(item.text ?? "")
-                            .lineLimit(4)
-                        if item.truncated == true {
-                            Text("長文字，點一下複製全部")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    Text([item.source, DeskText.relative(item.at)].compactMap { $0 }.joined(separator: "・"))
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 4)
-                if copied {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                        .accessibilityLabel("已複製到手機")
-                } else {
-                    Image(systemName: "doc.on.doc")
-                        .foregroundStyle(.secondary)
-                        .accessibilityHidden(true)
-                }
+        HStack(alignment: .center, spacing: 10) {
+            if item.isImage || link != nil {
+                Button(action: open) { content }
+                    .buttonStyle(.plain)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityHint(item.isImage ? "放大" : "用瀏覽器打開")
+                    .accessibilityIdentifier("clipboard-row-\(item.id)")
+            } else {
+                content
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("clipboard-row-\(item.id)")
             }
-            .contentShape(Rectangle())
+            Spacer(minLength: 4)
+            // Two buttons in one list row: borderless, so a tap on either does not fire the other.
+            Button(action: copy) {
+                Image(systemName: copied ? "checkmark.circle.fill" : "doc.on.doc")
+                    .foregroundStyle(copied ? AnyShapeStyle(.green) : AnyShapeStyle(.secondary))
+                    .frame(width: 32, height: 32)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel(copied ? "已複製到手機" : "複製到手機")
+            .accessibilityIdentifier("clipboard-copy-\(item.id)")
         }
-        .buttonStyle(.plain)
-        .accessibilityElement(children: .combine)
-        .accessibilityValue(copied ? "已複製到手機" : "")
+    }
+
+    private var content: some View {
+        HStack(alignment: .center, spacing: 10) {
+            if item.isImage {
+                DeskClipboardThumbnail(id: item.id, loadImage: loadImage)
+            }
+            VStack(alignment: .leading, spacing: 3) {
+                if item.isImage {
+                    Text("圖片・\(ByteCountFormatter.string(fromByteCount: Int64(item.bytes), countStyle: .file))")
+                } else {
+                    Text(item.text ?? "")
+                        .lineLimit(4)
+                        .foregroundStyle(link == nil ? AnyShapeStyle(.primary) : AnyShapeStyle(.tint))
+                    if item.truncated == true {
+                        Text("長文字，按複製鈕會複製全部")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Text([item.source, DeskText.relative(item.at)].compactMap { $0 }.joined(separator: "・"))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .contentShape(Rectangle())
     }
 }
 
