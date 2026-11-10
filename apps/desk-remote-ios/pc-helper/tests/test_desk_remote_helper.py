@@ -1239,7 +1239,7 @@ for line in sys.stdin:
             watcher.tick()
         self.assertEqual(reads, ['claude', 'claude'])
         self.assertTrue(any('家裡 is idle longer' in line for line in logs.output), logs.output)
-        mine = json.loads((shared / '_presence' / '示範電腦.json').read_text(encoding='utf-8'))
+        mine = json.loads((shared / '_idle_示範電腦.json').read_text(encoding='utf-8'))
         self.assertEqual((mine['pc'], mine['idleSeconds'], mine['locked'], mine['busy']), ('示範電腦', 420, False, False))
         # 家裡 in use again (idle 30 s): this PC reads. A note from a PC that is busy with a video,
         # or older than three minutes (off, or not syncing), does not count either.

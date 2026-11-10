@@ -4102,14 +4102,18 @@ def clipboard_tag(name):
 # Which PC reads the usage card (0.5.43; asked 11/10: "the one idle longest"). The PCs share one
 # Claude account, and the phone shows the newest reading from any of them, so one reading is
 # enough: each helper notes its own idle time in the shared clipboard folder (the cloud drive
-# carries it over in seconds), and reads the card only while no other PC is idle longer.
+# carries it over in seconds), and reads the card only while no other PC is idle longer. The
+# notes are files in the folder itself, `_idle_<PC>.json` (the clipboard list only takes names
+# that start with 13 digits): a subfolder made by both PCs at once came out twice on the drive
+# ("_presence" and "_presence (1)", 11/10).
 IDLE_NOTE_EVERY = 30               # seconds between a PC's notes
 IDLE_NOTE_FRESH = 180              # seconds: an older note is a PC that is off, or not syncing
+IDLE_NOTE_PREFIX = '_idle_'
 
 
 class IdleBoard:
     def __init__(self, folder, pc_name, clock=time.time):
-        self.folder = Path(folder) / '_presence'
+        self.folder = Path(folder)
         self.name = pc_name
         self.tag = clipboard_tag(pc_name)
         self.clock = clock
@@ -4124,10 +4128,10 @@ class IdleBoard:
         self.noted = now
         try:
             self.folder.mkdir(parents=True, exist_ok=True)
-            tmp = self.folder / f'{self.tag}.json.tmp'
+            tmp = self.folder / f'{IDLE_NOTE_PREFIX}{self.tag}.json.tmp'
             tmp.write_text(json.dumps({'pc': self.name, 'idleSeconds': idle, 'locked': bool(locked),
                                        'busy': bool(busy), 'at': self.clock()}, ensure_ascii=False), encoding='utf-8')
-            tmp.replace(self.folder / f'{self.tag}.json')
+            tmp.replace(self.folder / f'{IDLE_NOTE_PREFIX}{self.tag}.json')
         except OSError as exc:
             logging.debug('idle note not written: %s', exc)
 
@@ -4135,12 +4139,12 @@ class IdleBoard:
         """The name of another PC whose fresh note says it is idle longer than `idle` seconds and
         can read the card itself (not locked, nothing playing), or None."""
         try:
-            files = list(self.folder.glob('*.json'))
+            files = list(self.folder.glob(f'{IDLE_NOTE_PREFIX}*.json'))
         except OSError:
             return None
         now, best = self.clock(), None
         for file in files:
-            if file.stem == self.tag:
+            if file.stem == f'{IDLE_NOTE_PREFIX}{self.tag}':
                 continue
             try:
                 note = json.loads(file.read_text(encoding='utf-8'))
