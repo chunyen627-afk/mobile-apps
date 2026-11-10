@@ -841,9 +841,15 @@ final class DeskRemoteUITests: XCTestCase {
         let note = element("claude-update-note")
         func pressUpdate() {
             XCTAssertTrue(reveal(element("claude-update")), "the update button is gone")
-            element("claude-update").tap()
             let confirm = app.buttons["重新啟動以更新"].firstMatch
-            XCTAssertTrue(confirm.waitForExistence(timeout: 5), "no confirmation before ending Claude Code sessions")
+            // The row is on screen and settled, and still the tap can be dropped while the page
+            // is rebuilt around it (iPhone run 42758950390, fail-L846: the button in view, no
+            // confirmation after 5 s): when nothing came, it is tapped once more.
+            for _ in 0 ..< 2 {
+                element("claude-update").tap()
+                if confirm.waitForExistence(timeout: 8) { break }
+            }
+            XCTAssertTrue(confirm.exists, "no confirmation before ending Claude Code sessions")
             XCTAssertTrue(text("Claude Code 工作").exists, "the confirmation does not say what is lost")
             confirm.tap()
         }
@@ -1263,7 +1269,7 @@ final class DeskRemoteUITests: XCTestCase {
     }
 
     private func inside(_ element: XCUIElement, _ area: XCUIElement) -> Bool {
-        guard let frame = look(element)?.frame else { return false }
+        guard area.exists, let frame = look(element)?.frame else { return false }
         return area.frame.contains(CGPoint(x: frame.midX, y: frame.midY))
     }
 
@@ -1322,6 +1328,12 @@ final class DeskRemoteUITests: XCTestCase {
     /// Scrolls a sheet's list up only: a downward swipe at the top of a sheet closes it (CI 10/27).
     /// Without a flick and by where the row is, as `reveal`.
     private func revealInSheet(_ element: XCUIElement) -> Bool {
+        // Right after the tap that opens the sheet neither list is there yet, and asking the
+        // missing table for its frame fails the test outright (iPad run 42758950390, test26:
+        // "No matches found for … Descendants matching type Table"): wait for the sheet first.
+        guard poll(timeout: 10, { self.app.collectionViews.firstMatch.exists || self.app.tables.firstMatch.exists }) else {
+            return false
+        }
         let list = sheetList
         let visible = { element.exists && self.inside(element, list) && element.isHittable }
         if poll(timeout: 2, visible) { return settled(element) }
