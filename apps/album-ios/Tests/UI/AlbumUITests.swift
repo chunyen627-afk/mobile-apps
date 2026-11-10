@@ -285,7 +285,10 @@ final class AlbumUITests: XCTestCase {
         XCTAssertTrue(app.buttons["繼續"].exists)
         let position = app.staticTexts["videoTime"].label
         tapCanvas()
-        waitUntilGone(app.buttons["leavePlayer"], timeout: 2)
+        // The player says the controls are hidden before their fade-out ends, and on a loaded
+        // iPad simulator the tree still listed the button after 2 s (toolbox run 42775759673:
+        // "still shown after 2.0 s; player: ... controls=false"): six seconds covers the fade.
+        waitUntilGone(app.buttons["leavePlayer"], timeout: 6)
         assertVideoFits(aspect: aspect)
         capture(name)
         Thread.sleep(forTimeInterval: 2)
