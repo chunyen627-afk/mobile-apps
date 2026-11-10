@@ -2634,10 +2634,16 @@ class CountingCamera:
         self.closed += 1
 
 
+def frame_number(data):
+    """The CountingCamera frame a JPEG came from."""
+    return int(data[3:])
+
+
 class CameraFeedTests(unittest.TestCase):
     """The webcam page (0.5.41): the camera opens on the first frame asked for, stays open while
     frames keep being asked for, and closes a few seconds after the last one (user 11/10:
-    「有打開才啟動」)."""
+    「有打開才啟動」). A request gets the newest frame, which on a quick machine (CI's Mac) may be
+    a few frames on from the one before: the numbers are checked to rise, not to be consecutive."""
 
     def test_opens_on_demand_hands_out_newer_frames_and_closes_when_nobody_asks(self):
         devices = []
@@ -2650,15 +2656,16 @@ class CameraFeedTests(unittest.TestCase):
         self.assertEqual(devices, [], 'opened before anyone asked')
         first, why = feed.frame_bytes()
         self.assertIsNone(why)
-        self.assertEqual(first, b'\xff\xd8\xff1')
+        self.assertTrue(first.startswith(b'\xff\xd8\xff'))
         self.assertTrue(feed.on())
         second, _ = feed.frame_bytes()
         third, _ = feed.frame_bytes()
-        self.assertEqual((second, third), (b'\xff\xd8\xff2', b'\xff\xd8\xff3'), 'a request got an old frame again')
+        self.assertGreater(frame_number(second), frame_number(first), 'a request got an old frame again')
+        self.assertGreater(frame_number(third), frame_number(second), 'a request got an old frame again')
         self.assertEqual(len(devices), 1)
         self.assertEqual(set(devices[0].profiles), {'low'}, 'the data saver is not the default')
         clear, _ = feed.frame_bytes(profile='high')
-        self.assertEqual(clear, b'\xff\xd8\xff4')
+        self.assertGreater(frame_number(clear), frame_number(third))
         feed.frame_bytes(profile='high')
         self.assertEqual(devices[0].profiles[-1], 'high', 'the clear picture was not asked of the camera')
         time.sleep(0.8)
@@ -2666,7 +2673,7 @@ class CameraFeedTests(unittest.TestCase):
         self.assertEqual(devices[0].closed, 1, 'the camera was not released')
         again, why = feed.frame_bytes()
         self.assertIsNone(why)
-        self.assertEqual(again, b'\xff\xd8\xff1', 'the reopened camera did not start afresh')
+        self.assertLessEqual(frame_number(again), 3, 'the reopened camera did not start afresh')
         self.assertEqual((len(devices), feed.opened), (2, 2))
         time.sleep(0.8)
         self.assertEqual(devices[1].closed, 1)
@@ -2694,6 +2701,10 @@ class CameraFeedTests(unittest.TestCase):
         self.assertEqual(device.closed, 1, 'a camera that stopped giving frames was not released')
         data, why = feed.frame_bytes()  # tried again: the same device, which fails at once
         self.assertEqual((data, why), (None, '鏡頭讀不到畫面'))
+        # The answer goes out before the camera thread's clean-up: wait for the thread to end.
+        deadline = time.monotonic() + 2
+        while feed.thread is not None and time.monotonic() < deadline:
+            time.sleep(0.02)
         self.assertEqual(device.closed, 2)
 
     def test_a_slow_camera_answers_with_a_timeout_message_instead_of_hanging(self):
@@ -2754,9 +2765,12 @@ class CameraHttpTests(FakeEnvironment):
         self.assertIn('camera', state['capabilities'])
         self.assertEqual(state['camera'], {'on': False})
         self.assertEqual(self.fetch(server, '/v1/camera/frame', token='wrong')[0], 401)
-        self.assertEqual(self.fetch(server, '/v1/camera/frame'), (200, 'image/jpeg', b'\xff\xd8\xff1'))
-        self.assertEqual(self.fetch(server, '/v1/camera/frame')[2], b'\xff\xd8\xff2')
-        self.assertEqual(self.fetch(server, '/v1/camera/frame?clear=1')[2], b'\xff\xd8\xff3')
+        code, media, first = self.fetch(server, '/v1/camera/frame')
+        self.assertEqual((code, media, first[:3]), (200, 'image/jpeg', b'\xff\xd8\xff'))
+        second = self.fetch(server, '/v1/camera/frame')[2]
+        self.assertGreater(frame_number(second), frame_number(first))
+        clear = self.fetch(server, '/v1/camera/frame?clear=1')[2]
+        self.assertGreater(frame_number(clear), frame_number(second))
         self.fetch(server, '/v1/camera/frame?clear=1')
         self.assertEqual((device.profiles[0], device.profiles[-1]), ('low', 'high'))
         status = json.loads(self.fetch(server, '/v1/camera')[2])
