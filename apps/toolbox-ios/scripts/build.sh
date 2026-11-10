@@ -186,25 +186,68 @@ PHASE=test
     done
     curl -sf "http://127.0.0.1:${port}/health" >/dev/null || { echo "error: desk remote fake helper on ${port} did not start"; exit 1; }
   done
-  TEST_RUNNER_DESK_HELPER_HOST=127.0.0.1 \
-  TEST_RUNNER_DESK_HELPER_PORT="$DESK_HELPER_PORT" \
-  TEST_RUNNER_DESK_BUSY_PORT="$DESK_BUSY_PORT" \
-  TEST_RUNNER_DESK_CLOSED_PORT="$DESK_CLOSED_PORT" \
-  TEST_RUNNER_DESK_POPUP_PORT="$DESK_POPUP_PORT" \
-  TEST_RUNNER_DESK_ELEVATE_KEY="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["elevate_key"])' "$DESK_FIXTURES/fake-config.json")" \
-  TEST_RUNNER_DESK_HELPER_TOKEN="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["token"])' "$DESK_FIXTURES/fake-config.json")" \
-  TEST_RUNNER_DESK_DEAD_PORT="$DESK_DEAD_PORT" \
-  TEST_RUNNER_MINER_UI_SOURCE_URL="http://127.0.0.1:${MINER_FEED_PORT}/demo-two-machines.json" \
-  TEST_RUNNER_THERMO_GATEWAY_URL="http://127.0.0.1:${THERMO_PORT}" \
-  TEST_RUNNER_THERMO_DEAD_URL="http://127.0.0.1:${THERMO_DEAD_PORT}" \
-  xcodebuild test -project Toolbox.xcodeproj -scheme Lightbox \
+  TEST_ENV=(
+    TEST_RUNNER_DESK_HELPER_HOST=127.0.0.1
+    TEST_RUNNER_DESK_HELPER_PORT="$DESK_HELPER_PORT"
+    TEST_RUNNER_DESK_BUSY_PORT="$DESK_BUSY_PORT"
+    TEST_RUNNER_DESK_CLOSED_PORT="$DESK_CLOSED_PORT"
+    TEST_RUNNER_DESK_POPUP_PORT="$DESK_POPUP_PORT"
+    TEST_RUNNER_DESK_ELEVATE_KEY="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["elevate_key"])' "$DESK_FIXTURES/fake-config.json")"
+    TEST_RUNNER_DESK_HELPER_TOKEN="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["token"])' "$DESK_FIXTURES/fake-config.json")"
+    TEST_RUNNER_DESK_DEAD_PORT="$DESK_DEAD_PORT"
+    TEST_RUNNER_MINER_UI_SOURCE_URL="http://127.0.0.1:${MINER_FEED_PORT}/demo-two-machines.json"
+    TEST_RUNNER_THERMO_GATEWAY_URL="http://127.0.0.1:${THERMO_PORT}"
+    TEST_RUNNER_THERMO_DEAD_URL="http://127.0.0.1:${THERMO_DEAD_PORT}"
+  )
+  TEST_STATUS=0
+  env "${TEST_ENV[@]}" xcodebuild test -project Toolbox.xcodeproj -scheme Lightbox \
     -parallel-testing-enabled NO ${SKIP_TESTS[@]+"${SKIP_TESTS[@]}"} \
     -destination "platform=iOS Simulator,id=$SIMULATOR_ID" -derivedDataPath build/DerivedData \
-    -resultBundlePath build/Tests.xcresult CODE_SIGNING_ALLOWED=NO 2>&1 | tee "$CURRENT_LOG"
+    -resultBundlePath build/Tests.xcresult CODE_SIGNING_ALLOWED=NO 2>&1 | tee "$CURRENT_LOG" || TEST_STATUS=$?
+  # One more go for UI tests that failed (11/10; the user: a timing slip on a loaded runner must
+  # not cost the whole 80-minute round). Up to three failed UI test cases are run once more, with
+  # the fake helpers still up, and count as passed when they pass then. The first failure stays
+  # in the log, in Tests.xcresult and in the fail-L screenshots, so its cause is still looked
+  # into. A unit test, or more than three failures, is not a slip: no retry, the phase fails.
+  RETRIED=""
+  RETRY_LOG=build/xcodebuild-retry.log
+  if [[ "$TEST_STATUS" != 0 ]]; then
+    FAILED_CASES=$(grep -E "^Test Case '-\[[A-Za-z0-9_]+\.[A-Za-z0-9_]+ [A-Za-z0-9_]+\]' failed" "$CURRENT_LOG" \
+      | sed -E "s/^Test Case '-\[([A-Za-z0-9_]+)\.([A-Za-z0-9_]+) ([A-Za-z0-9_]+)\]' failed.*/\1\/\2\/\3/" | sort -u || true)
+    if [[ -n "$FAILED_CASES" && $(printf '%s\n' "$FAILED_CASES" | wc -l) -le 3 && -z "$(printf '%s\n' "$FAILED_CASES" | grep -v 'UITests/' || true)" ]]; then
+      ONLY=()
+      while IFS= read -r failed_case; do ONLY+=("-only-testing:$failed_case"); done <<< "$FAILED_CASES"
+      echo "Running once more: ${ONLY[*]}"
+      rm -rf build/Tests-retry.xcresult
+      TEST_STATUS=0
+      env "${TEST_ENV[@]}" xcodebuild test -project Toolbox.xcodeproj -scheme Lightbox \
+        -parallel-testing-enabled NO "${ONLY[@]}" \
+        -destination "platform=iOS Simulator,id=$SIMULATOR_ID" -derivedDataPath build/DerivedData \
+        -resultBundlePath build/Tests-retry.xcresult CODE_SIGNING_ALLOWED=NO 2>&1 | tee "$RETRY_LOG" || TEST_STATUS=$?
+      RETRIED="$FAILED_CASES"
+    fi
+  fi
   stop_helpers
-  grep -E "^Test Case .*(passed|failed)|^Test Suite '.*\.xctest'|Executed [0-9]+ tests?|\*\* TEST" "$CURRENT_LOG" > build/test-summary.txt || true
-  # The "Executed" line right after each bundle's "Test Suite '<bundle>.xctest' passed" line.
-  bundle_result() { grep -A1 "Test Suite '$1.xctest' passed" "$CURRENT_LOG" | grep -E "Executed $2 tests?, with 0 failures" | tail -n 1 | sed 's/^[[:space:]]*//'; }
+  if [[ "$TEST_STATUS" != 0 ]]; then
+    echo "xcodebuild test exited with $TEST_STATUS"
+    exit "$TEST_STATUS"
+  fi
+  { grep -E "^Test Case .*(passed|failed)|^Test Suite '.*\.xctest'|Executed [0-9]+ tests?|\*\* TEST" "$CURRENT_LOG";
+    [[ -n "$RETRIED" ]] && { echo "--- once more: $(printf '%s ' $RETRIED)"; grep -E "^Test Case .*(passed|failed)|^Test Suite '.*\.xctest'|Executed [0-9]+ tests?|\*\* TEST" "$RETRY_LOG"; }; } > build/test-summary.txt || true
+  # The "Executed" line right after each bundle's "Test Suite '<bundle>.xctest' passed" line; a
+  # bundle that failed the first time passes when every one of its failed cases passed once more.
+  bundle_result() {
+    local passed cases n again
+    passed=$(grep -A1 "Test Suite '$1.xctest' passed" "$CURRENT_LOG" | grep -E "Executed $2 tests?, with 0 failures" | tail -n 1 | sed 's/^[[:space:]]*//' || true)
+    if [[ -n "$passed" || -z "$RETRIED" ]]; then echo "$passed"; return 0; fi
+    cases=$(printf '%s\n' "$RETRIED" | grep "^$1/" || true)
+    [[ -z "$cases" ]] && return 0
+    n=$(printf '%s\n' "$cases" | wc -l | tr -d ' ')
+    grep -A1 "Test Suite '$1.xctest' failed" "$CURRENT_LOG" | grep -qE "Executed $2 tests?, with" || return 0
+    again=$(grep -A1 "Test Suite '$1.xctest' passed" "$RETRY_LOG" | grep -E "Executed $n tests?, with 0 failures" | tail -n 1 || true)
+    [[ -n "$again" ]] && echo "Executed $2 tests, $n passed once more: $(printf '%s ' $cases)"
+    return 0
+  }
   ALBUM_RESULT=$(bundle_result LightboxTests "$EXPECTED_ALBUM_TESTS")
   MINER_RESULT=$(bundle_result MinerStatusCoreTests "$EXPECTED_MINER_TESTS")
   DESK_RESULT=$(bundle_result DeskRemoteCoreTests "$EXPECTED_DESK_TESTS")
@@ -226,6 +269,7 @@ PHASE=test
     echo "::notice title=XCTest toolbox UI::${TOOLBOX_UI_RESULT}"
     echo "::notice title=XCTest album UI::${ALBUM_UI_RESULT}"
     echo "::notice title=XCTest desk remote UI::${DESK_UI_RESULT}"
+    [[ -n "$RETRIED" ]] && echo "::warning title=Passed once more::$(printf '%s ' $RETRIED)— failed the first time (see fail-L screenshots), passed when run again"
     echo "::notice title=Toolchain::$(xcodebuild -version | tr '\n' ' ')/ simulator: $(xcrun simctl list devices | grep -F "$SIMULATOR_ID" | sed 's/^ *//')"
   fi
 fi

@@ -120,7 +120,13 @@ final class IPadLayoutShots: XCTestCase {
         guard require(playVideo, 15, "album-video-list") else { return }
         playVideo.tap()
         guard require(app.sliders["影片進度"], 10, "album-video") else { return }
-        if app.buttons["暫停"].exists { app.buttons["暫停"].tap() }
+        // The controls hide a few seconds after they came up, and a button looked up twice can
+        // be gone between the look and the tap, which fails the test outright (iPad run
+        // 42783465756: "no matches found" for 暫停): one look, then a tap where it was. Should
+        // the controls have hidden by then, the tap brings them back for the screenshots.
+        if let pause = try? app.buttons["暫停"].firstMatch.snapshot() {
+            app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: pause.frame.midX, dy: pause.frame.midY)).tap()
+        }
         bothOrientations("1d-album-video-controls")
     }
 
