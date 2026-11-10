@@ -172,6 +172,12 @@ public struct HelperClient: Sendable {
         try await imageBytes(["v1", "screen"])
     }
 
+    /// The next frame from the PC's webcam (helper 0.5.41): the PC opens the camera on the first
+    /// call and closes it a few seconds after the last one.
+    public func cameraFrame() async throws -> Data {
+        try await imageBytes(["v1", "camera", "frame"])
+    }
+
     /// A picture from a conversation (a photo sent from here, a screenshot a tool took), by the
     /// id an event carries in `images`.
     public func image(_ app: DeskApp, session id: String, image imageId: String) async throws -> Data {

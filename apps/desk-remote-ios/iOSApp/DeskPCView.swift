@@ -111,6 +111,12 @@ struct DeskPCView: View {
                     }
                     .accessibilityIdentifier("pc-screen")
                 }
+                if state?.can("camera") == true {
+                    NavigationLink(value: DeskRoute.camera(pcID)) {
+                        Label("看鏡頭", systemImage: "video")
+                    }
+                    .accessibilityIdentifier("pc-camera")
+                }
             }
             if let state, DeskApp.allCases.contains(where: { state.usage($0) != nil }) {
                 Section("額度") {

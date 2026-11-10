@@ -1014,6 +1014,19 @@ final class DeskRemoteUITests: XCTestCase {
         snapshot("42-clipboard-sent")
     }
 
+    /// The webcam page (helper 0.5.41): frames keep arriving while it is open.
+    func test43CameraStreamsWhileThePageIsOpen() throws {
+        try launchWithHelper()
+        openPC()
+        XCTAssertTrue(element("pc-presence").waitForExistence(timeout: 10), "PC state did not load")
+        let row = element("pc-camera")
+        XCTAssertTrue(reveal(row), "camera row missing")
+        row.tap()
+        XCTAssertTrue(element("camera-image").waitForExistence(timeout: 15), "the camera picture did not load")
+        XCTAssertTrue(waitFor(element("camera-note"), labelContains: "每秒約", timeout: 10), "frames did not keep coming")
+        snapshot("43-camera")
+    }
+
     // MARK: - Helpers
 
     /// How many photos the fake helper's transcript of `session` holds from the user.

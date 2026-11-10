@@ -30,6 +30,8 @@ struct DeskRemoteRootView: View {
                         DeskChatView(store: store, pcID: id, app: app, session: session)
                     case .screen(let id):
                         DeskScreenView(store: store, pcID: id)
+                    case .camera(let id):
+                        DeskCameraView(store: store, pcID: id)
                     case .clipboard:
                         DeskClipboardView(store: store)
                     }
@@ -72,6 +74,8 @@ enum DeskRoute: Hashable {
     case sessions(UUID, DeskApp)
     case chat(UUID, DeskApp, SessionSummary)
     case screen(UUID)
+    /// The PC's webcam, live while the page is open (helper 0.5.41).
+    case camera(UUID)
     /// The shared clipboard, read through whichever PC answers (helper 0.5.40).
     case clipboard
 }
