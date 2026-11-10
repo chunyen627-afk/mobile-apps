@@ -2620,8 +2620,10 @@ class CountingCamera:
         self.grabbed = 0
         self.closed = 0
         self.fail_after = fail_after
+        self.profiles = []
 
-    def grab_jpeg(self):
+    def grab_jpeg(self, profile='low'):
+        self.profiles.append(profile)
         if self.fail_after is not None and self.grabbed >= self.fail_after:
             return None
         self.grabbed += 1
@@ -2654,6 +2656,11 @@ class CameraFeedTests(unittest.TestCase):
         third, _ = feed.frame_bytes()
         self.assertEqual((second, third), (b'\xff\xd8\xff2', b'\xff\xd8\xff3'), 'a request got an old frame again')
         self.assertEqual(len(devices), 1)
+        self.assertEqual(set(devices[0].profiles), {'low'}, 'the data saver is not the default')
+        clear, _ = feed.frame_bytes(profile='high')
+        self.assertEqual(clear, b'\xff\xd8\xff4')
+        feed.frame_bytes(profile='high')
+        self.assertEqual(devices[0].profiles[-1], 'high', 'the clear picture was not asked of the camera')
         time.sleep(0.8)
         self.assertFalse(feed.on(), 'still open with nobody asking')
         self.assertEqual(devices[0].closed, 1, 'the camera was not released')
@@ -2691,7 +2698,7 @@ class CameraFeedTests(unittest.TestCase):
 
     def test_a_slow_camera_answers_with_a_timeout_message_instead_of_hanging(self):
         class Stuck:
-            def grab_jpeg(self):
+            def grab_jpeg(self, profile='low'):
                 time.sleep(5)
                 return None
 
@@ -2749,6 +2756,9 @@ class CameraHttpTests(FakeEnvironment):
         self.assertEqual(self.fetch(server, '/v1/camera/frame', token='wrong')[0], 401)
         self.assertEqual(self.fetch(server, '/v1/camera/frame'), (200, 'image/jpeg', b'\xff\xd8\xff1'))
         self.assertEqual(self.fetch(server, '/v1/camera/frame')[2], b'\xff\xd8\xff2')
+        self.assertEqual(self.fetch(server, '/v1/camera/frame?clear=1')[2], b'\xff\xd8\xff3')
+        self.fetch(server, '/v1/camera/frame?clear=1')
+        self.assertEqual((device.profiles[0], device.profiles[-1]), ('low', 'high'))
         status = json.loads(self.fetch(server, '/v1/camera')[2])
         self.assertEqual((status['on'], status['frames'] >= 2), (True, True))
         self.assertEqual(json.loads(self.fetch(server, '/v1/state')[2])['camera'], {'on': True})

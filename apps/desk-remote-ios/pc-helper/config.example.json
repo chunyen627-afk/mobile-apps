@@ -11,7 +11,7 @@
   "idle_seconds": 60,
   "alerts": {"usage_percent": 80, "context_percent": 80},
   "screen": true,
-  "camera": true,
+  "camera": {"low_long_side": 640, "low_quality": 50, "long_side": 960, "quality": 70, "idle_seconds": 5},
   "drive_windows": true,
   "claude": {"context_windows": {"claude-opus-5": 1000000}}
 }

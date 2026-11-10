@@ -1023,8 +1023,11 @@ final class DeskRemoteUITests: XCTestCase {
         XCTAssertTrue(reveal(row), "camera row missing")
         row.tap()
         XCTAssertTrue(element("camera-image").waitForExistence(timeout: 15), "the camera picture did not load")
-        XCTAssertTrue(waitFor(element("camera-note"), labelContains: "每秒約", timeout: 10), "frames did not keep coming")
+        XCTAssertTrue(waitFor(element("camera-note"), labelContains: "省流量：每秒約", timeout: 10), "frames did not keep coming")
         snapshot("43-camera")
+        app.buttons["camera-clear"].tap()
+        XCTAssertTrue(waitFor(element("camera-note"), labelContains: "清晰：每秒約", timeout: 10), "the clear picture did not take over")
+        snapshot("43-camera-clear")
     }
 
     // MARK: - Helpers
