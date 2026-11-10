@@ -38,7 +38,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.40'
+VERSION = '0.5.41'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -1738,6 +1738,7 @@ class Hub:
         self.disk_version = helper_on_disk  # the helper version installed on disk, maybe newer than this one
         self.restart = None               # () -> None: start the helper again (it exits), from the phone
         self.clipboard = None             # ClipboardSync when a shared clipboard folder is configured (0.5.40)
+        self.camera = None                # CameraFeed: the webcam, open only while the phone's 看鏡頭 page is (0.5.41)
         self.alerts = {'usage_percent': 80, 'context_percent': 80}
         self.chosen_modes = {}            # (app, id) -> (mode, when): a Codex pick its rollout shows only next turn
         self.page_names = {}              # (app, id) -> the page title last seen for it, when its files say otherwise
@@ -1764,7 +1765,8 @@ class Hub:
                 if 'fast' in self.capabilities and (self.strings.get(app) or {}).get('fast_on') and hasattr(source, 'fast')}
         extra = ((['elevate'] if self.elevate is not None else []) + (['screen'] if self.screen is not None else [])
                  + (['restart'] if self.restart is not None else [])
-                 + (['clipboard'] if self.clipboard is not None else []))
+                 + (['clipboard'] if self.clipboard is not None else [])
+                 + (['camera'] if self.camera is not None else []))
         disk = self.disk_version()
         newer = disk if disk and version_key(disk) > version_key(VERSION) else None
         return {'ok': True, 'pc': {'name': self.pc_name, 'helperVersion': VERSION, 'helperUpdate': newer},
@@ -1774,7 +1776,8 @@ class Hub:
                 'warnings': warnings, 'elevate': elevate, 'usage': self.usage(), 'models': choices('model', 'models'),
                 'efforts': choices('effort', 'efforts'), 'modes': choices('mode', 'modes'), 'stop': stop,
                 'popups': self.popups(), 'recent': self.recent(), 'fast': fast, 'versions': self.versions(),
-                'memory': self.ram.snapshot() if self.ram is not None else None}
+                'memory': self.ram.snapshot() if self.ram is not None else None,
+                'camera': {'on': self.camera.on()} if self.camera is not None else None}
 
     def recent(self, per_app=3):
         """Each app's few most recently written conversations, newest first, for the phone's PC
@@ -4602,6 +4605,188 @@ def capture_screen(timeout=20):
     return data if data.startswith(b'\xff\xd8\xff') else None
 
 
+class CameraFeed:
+    """The PC's webcam for the phone's 看鏡頭 page (0.5.41). Nothing is opened until the phone asks
+    for a frame; then one thread keeps reading the camera and encoding JPEG frames while frames
+    keep being asked for, and releases it (the camera light goes off) once no frame has been asked
+    for in `idle` seconds. So the camera is on only while that page is open (the user 11/10:
+    「有打開才啟動」)."""
+
+    def __init__(self, open_device, idle=5.0):
+        self.open_device = open_device   # () -> device with grab_jpeg() -> bytes|None and close()
+        self.idle = idle
+        self.lock = threading.Lock()
+        self.ready = threading.Condition(self.lock)
+        self.thread = None
+        self.last_request = 0.0
+        self.frame = None
+        self.frames = 0                  # frames read since the camera was last opened
+        self.error = None
+        self.opened = 0                  # how many times the camera has been opened (for tests and the log)
+        self.served = 0                  # the frame number last handed out: each request waits for a newer one
+
+    def on(self):
+        """Whether the camera is open right now."""
+        with self.lock:
+            return self.thread is not None and self.error is None
+
+    def frame_bytes(self, wait=3.0):
+        """(JPEG bytes, None) of the next frame, opening the camera first when it is off, or
+        (None, why) when the camera cannot be read within `wait` seconds. Each call waits for a
+        frame newer than the one handed out before, so the phone asking again and again gets the
+        camera's own pace (about 10–30 a second) and never the same picture twice."""
+        with self.lock:
+            self.last_request = time.monotonic()
+            if self.thread is None:
+                self.error = None
+                self.frame = None
+                self.frames = self.served = 0
+                self.thread = threading.Thread(target=self._run, name='camera', daemon=True)
+                self.thread.start()
+            deadline = time.monotonic() + wait
+            while (self.frame is None or self.frames <= self.served) and self.error is None:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    return None, '鏡頭還沒給出畫面'
+                self.ready.wait(left)
+            if self.frame is None or self.frames <= self.served:
+                return None, self.error or '鏡頭還沒給出畫面'
+            self.served = self.frames
+            return self.frame, None
+
+    def _run(self):
+        device = None
+        count = 0
+        started = time.monotonic()
+        try:
+            try:
+                device = self.open_device()
+            except Exception as exc:  # in use by another program, unplugged, or OpenCV missing
+                logging.warning('camera could not be opened: %s', exc)
+                with self.lock:
+                    self.error = f'鏡頭打不開（{exc}）'
+                    self.ready.notify_all()
+                return
+            with self.lock:
+                self.opened += 1
+            logging.info('camera opened for the phone')
+            while True:
+                with self.lock:
+                    if time.monotonic() - self.last_request > self.idle:
+                        break
+                data = device.grab_jpeg()
+                if not data:
+                    logging.warning('camera gave no frame')
+                    with self.lock:
+                        self.error = '鏡頭讀不到畫面'
+                        self.ready.notify_all()
+                    break
+                count += 1
+                with self.lock:
+                    self.frame = data
+                    self.frames = count
+                    self.ready.notify_all()
+            logging.info('camera closed after %d frames in %.0f s', count, time.monotonic() - started)
+        finally:
+            if device is not None:
+                try:
+                    device.close()
+                except Exception:
+                    logging.exception('camera close failed')
+            with self.lock:
+                self.thread = None
+                self.ready.notify_all()
+
+
+class OpenCVCamera:
+    """A webcam read through OpenCV (`pip install opencv-python`): frames shrunk to `long_side`
+    pixels on the long side and encoded as JPEG for the phone."""
+
+    def __init__(self, index=0, long_side=960, quality=70):
+        import cv2
+        self.cv2 = cv2
+        backend = getattr(cv2, 'CAP_DSHOW', 0) if sys.platform == 'win32' else 0
+        self.capture = cv2.VideoCapture(index, backend) if backend else cv2.VideoCapture(index)
+        if not self.capture.isOpened():
+            self.capture.release()
+            raise RuntimeError('沒有鏡頭，或被其他程式占用')
+        self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        self.long_side = long_side
+        self.quality = quality
+
+    def grab_jpeg(self):
+        ok, frame = self.capture.read()
+        if not ok or frame is None:
+            return None
+        height, width = frame.shape[:2]
+        scale = self.long_side / max(height, width)
+        if scale < 1:
+            frame = self.cv2.resize(frame, (int(width * scale), int(height * scale)), interpolation=self.cv2.INTER_AREA)
+        ok, encoded = self.cv2.imencode('.jpg', frame, [self.cv2.IMWRITE_JPEG_QUALITY, self.quality])
+        return encoded.tobytes() if ok else None
+
+    def close(self):
+        self.capture.release()
+
+
+class FakeCamera:
+    """The simulator's camera: the fixture picture as the same frame about ten times a second."""
+
+    def __init__(self, path):
+        self.data = Path(path).read_bytes()
+        self.closed = False
+
+    def grab_jpeg(self):
+        time.sleep(0.1)
+        return self.data
+
+    def close(self):
+        self.closed = True
+
+
+def cameras_on_this_pc(timeout=30):
+    """Names of the cameras Windows lists (asked without opening any, so no camera light); []
+    elsewhere or when the question fails."""
+    if sys.platform != 'win32':
+        return []
+    import subprocess
+    try:
+        done = subprocess.run(
+            ['powershell.exe', '-NoProfile', '-NonInteractive', '-Command',
+             'Get-PnpDevice -Class Camera -Status OK -ErrorAction SilentlyContinue | ForEach-Object { $_.FriendlyName }'],
+            capture_output=True, timeout=timeout, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if done.returncode != 0:
+        return []
+    return [line.strip() for line in done.stdout.decode('utf-8', 'replace').splitlines() if line.strip()]
+
+
+def camera_from_config(cfg, names=None):
+    """A CameraFeed for the phone when `camera` in config.json is not false, OpenCV is installed
+    and Windows lists a camera; else None (the phone then shows no 看鏡頭 row). `camera` may be an
+    object: {"index": 0, "long_side": 960, "quality": 70, "idle_seconds": 5}."""
+    settings = cfg.get('camera', True)
+    if settings is False:
+        return None
+    settings = settings if isinstance(settings, dict) else {}
+    try:
+        import cv2  # noqa: F401
+    except ImportError:
+        logging.info('camera: OpenCV is not installed (pip install opencv-python); the phone gets no camera page')
+        return None
+    names = cameras_on_this_pc() if names is None else names
+    if not names:
+        logging.info('camera: Windows lists no camera; the phone gets no camera page')
+        return None
+    logging.info('camera: %s (opened only while the phone looks)', ', '.join(names))
+    index = int(settings.get('index', 0))
+    long_side = int(settings.get('long_side', 960))
+    quality = int(settings.get('quality', 70))
+    return CameraFeed(lambda: OpenCVCamera(index, long_side, quality), idle=float(settings.get('idle_seconds', 5)))
+
+
 def handler_for(hub, gate, networks, runner=None):
     screen_lock = threading.Lock()  # one capture at a time
 
@@ -4782,6 +4967,17 @@ def handler_for(hub, gate, networks, runner=None):
                 if not data:
                     return self.send_json(503, error('screen-failed', '讀不到電腦畫面（可能已鎖定或沒有登入）'))
                 return self.send_jpeg(data)
+            if parts and parts[0] == 'camera':
+                if hub.camera is None:
+                    return self.send_json(404, error('not-found', '這台電腦沒有鏡頭（或小幫手沒裝 OpenCV）'))
+                if parts == ['camera']:
+                    return self.send_json(200, {'ok': True, 'on': hub.camera.on(), 'frames': hub.camera.frames})
+                if parts == ['camera', 'frame']:
+                    data, why = hub.camera.frame_bytes()
+                    if data is None:
+                        return self.send_json(503, error('camera-failed', why))
+                    return self.send_jpeg(data)
+                return self.send_json(404, error('not-found', '沒有這個路徑'))
             if parts and parts[0] == 'clipboard':
                 sync = hub.clipboard
                 if sync is None:
@@ -5519,6 +5715,7 @@ def main(argv=None):
             hub.restart = lambda: disk.__setitem__(0, VERSION)
         hub.elevate = fake.elevate_relay()
         hub.screen = lambda: (fake.fixtures / 'screen.jpg').read_bytes()
+        hub.camera = CameraFeed(lambda: FakeCamera(fake.fixtures / 'camera.jpg'), idle=3)
         hub.clipboard = fake.clipboard_sync()
         gate = AuthGate(cfg['token'])
         return serve(hub, gate, cfg, networks, runner)
@@ -5537,6 +5734,7 @@ def main(argv=None):
         threading.Thread(target=live.run_forever, daemon=True).start()
     if cfg.get('screen', True):
         hub.screen = capture_screen
+    hub.camera = camera_from_config(cfg)
     runner = None
     if cfg.get('drive_windows', True):
         driver = WindowsDriver(load_strings())

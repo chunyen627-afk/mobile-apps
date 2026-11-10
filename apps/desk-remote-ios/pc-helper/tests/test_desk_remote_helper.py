@@ -2613,6 +2613,154 @@ class StringsTests(unittest.TestCase):
                 self.assertEqual(bad, [], 'PowerShell 5.1 misreads non-ASCII scripts without a BOM')
 
 
+class CountingCamera:
+    """A device for CameraFeed tests: every frame is different, and it remembers being closed."""
+
+    def __init__(self, fail_after=None):
+        self.grabbed = 0
+        self.closed = 0
+        self.fail_after = fail_after
+
+    def grab_jpeg(self):
+        if self.fail_after is not None and self.grabbed >= self.fail_after:
+            return None
+        self.grabbed += 1
+        time.sleep(0.02)
+        return b'\xff\xd8\xff' + str(self.grabbed).encode()
+
+    def close(self):
+        self.closed += 1
+
+
+class CameraFeedTests(unittest.TestCase):
+    """The webcam page (0.5.41): the camera opens on the first frame asked for, stays open while
+    frames keep being asked for, and closes a few seconds after the last one (user 11/10:
+    「有打開才啟動」)."""
+
+    def test_opens_on_demand_hands_out_newer_frames_and_closes_when_nobody_asks(self):
+        devices = []
+
+        def open_device():
+            devices.append(CountingCamera())
+            return devices[-1]
+        feed = h.CameraFeed(open_device, idle=0.3)
+        self.assertFalse(feed.on())
+        self.assertEqual(devices, [], 'opened before anyone asked')
+        first, why = feed.frame_bytes()
+        self.assertIsNone(why)
+        self.assertEqual(first, b'\xff\xd8\xff1')
+        self.assertTrue(feed.on())
+        second, _ = feed.frame_bytes()
+        third, _ = feed.frame_bytes()
+        self.assertEqual((second, third), (b'\xff\xd8\xff2', b'\xff\xd8\xff3'), 'a request got an old frame again')
+        self.assertEqual(len(devices), 1)
+        time.sleep(0.8)
+        self.assertFalse(feed.on(), 'still open with nobody asking')
+        self.assertEqual(devices[0].closed, 1, 'the camera was not released')
+        again, why = feed.frame_bytes()
+        self.assertIsNone(why)
+        self.assertEqual(again, b'\xff\xd8\xff1', 'the reopened camera did not start afresh')
+        self.assertEqual((len(devices), feed.opened), (2, 2))
+        time.sleep(0.8)
+        self.assertEqual(devices[1].closed, 1)
+
+    def test_a_camera_that_cannot_open_or_read_says_why_and_is_tried_again_later(self):
+        calls = []
+
+        def open_device():
+            calls.append(1)
+            raise RuntimeError('沒有鏡頭，或被其他程式占用')
+        feed = h.CameraFeed(open_device, idle=0.3)
+        data, why = feed.frame_bytes()
+        self.assertIsNone(data)
+        self.assertEqual(why, '鏡頭打不開（沒有鏡頭，或被其他程式占用）')
+        self.assertFalse(feed.on())
+        time.sleep(0.1)
+        self.assertIsNone(feed.frame_bytes()[0])
+        self.assertEqual(len(calls), 2, 'a later request did not try the camera again')
+        device = CountingCamera(fail_after=1)
+        feed = h.CameraFeed(lambda: device, idle=0.3)
+        self.assertEqual(feed.frame_bytes(), (b'\xff\xd8\xff1', None))
+        deadline = time.monotonic() + 2
+        while feed.on() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertEqual(device.closed, 1, 'a camera that stopped giving frames was not released')
+        data, why = feed.frame_bytes()  # tried again: the same device, which fails at once
+        self.assertEqual((data, why), (None, '鏡頭讀不到畫面'))
+        self.assertEqual(device.closed, 2)
+
+    def test_a_slow_camera_answers_with_a_timeout_message_instead_of_hanging(self):
+        class Stuck:
+            def grab_jpeg(self):
+                time.sleep(5)
+                return None
+
+            def close(self):
+                pass
+        feed = h.CameraFeed(Stuck, idle=0.3)
+        started = time.monotonic()
+        data, why = feed.frame_bytes(wait=0.3)
+        self.assertEqual((data, why), (None, '鏡頭還沒給出畫面'))
+        self.assertLess(time.monotonic() - started, 2)
+
+    def test_config_decides_whether_the_phone_gets_a_camera(self):
+        with mock.patch.dict(sys.modules, {'cv2': mock.MagicMock()}):
+            self.assertIsNone(h.camera_from_config({'camera': False}, names=['USB2.0 FHD UVC WebCam']))
+            self.assertIsNone(h.camera_from_config({}, names=[]), 'no camera listed, yet a page')
+            feed = h.camera_from_config({'camera': {'idle_seconds': 9}}, names=['USB2.0 FHD UVC WebCam'])
+            self.assertIsInstance(feed, h.CameraFeed)
+            self.assertEqual(feed.idle, 9)
+        with mock.patch.dict(sys.modules, {'cv2': None}):
+            self.assertIsNone(h.camera_from_config({}, names=['USB2.0 FHD UVC WebCam']), 'no OpenCV, yet a page')
+
+    def test_the_fake_camera_serves_the_fixture_picture(self):
+        camera = h.FakeCamera(FIXTURES / 'camera.jpg')
+        self.assertTrue(camera.grab_jpeg().startswith(b'\xff\xd8\xff'))
+        camera.close()
+        self.assertTrue(camera.closed)
+
+
+class CameraHttpTests(FakeEnvironment):
+    def fetch(self, server, path, token=TOKEN):
+        request = urllib.request.Request(f'http://127.0.0.1:{server.server_address[1]}{path}',
+                                         headers={'Authorization': f'Bearer {token}'})
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                return response.status, response.headers.get('Content-Type'), response.read()
+        except urllib.error.HTTPError as exc:
+            return exc.code, exc.headers.get('Content-Type'), exc.read()
+
+    def test_frames_are_jpegs_behind_the_token_and_the_state_says_when_the_camera_is_on(self):
+        hub = h.Hub('示範電腦', self.sources, h.FixedPresence(self.fake.cfg['presence']))
+        server = ThreadingHTTPServer(('127.0.0.1', 0), h.handler_for(hub, h.AuthGate(TOKEN), [ipaddress.ip_network('127.0.0.0/8')]))
+        server.daemon_threads = True
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        self.assertEqual(self.fetch(server, '/v1/camera/frame')[0], 404, 'no camera, yet not 404')
+        state = json.loads(self.fetch(server, '/v1/state')[2])
+        self.assertNotIn('camera', state['capabilities'])
+        self.assertIsNone(state['camera'])
+        device = CountingCamera()
+        hub.camera = h.CameraFeed(lambda: device, idle=0.5)
+        state = json.loads(self.fetch(server, '/v1/state')[2])
+        self.assertIn('camera', state['capabilities'])
+        self.assertEqual(state['camera'], {'on': False})
+        self.assertEqual(self.fetch(server, '/v1/camera/frame', token='wrong')[0], 401)
+        self.assertEqual(self.fetch(server, '/v1/camera/frame'), (200, 'image/jpeg', b'\xff\xd8\xff1'))
+        self.assertEqual(self.fetch(server, '/v1/camera/frame')[2], b'\xff\xd8\xff2')
+        status = json.loads(self.fetch(server, '/v1/camera')[2])
+        self.assertEqual((status['on'], status['frames'] >= 2), (True, True))
+        self.assertEqual(json.loads(self.fetch(server, '/v1/state')[2])['camera'], {'on': True})
+        self.assertEqual(self.fetch(server, '/v1/camera/other')[0], 404)
+        time.sleep(1.2)
+        self.assertEqual(device.closed, 1, 'the camera stayed on after the phone stopped asking')
+        self.assertEqual(json.loads(self.fetch(server, '/v1/state')[2])['camera'], {'on': False})
+        hub.camera = h.CameraFeed(lambda: CountingCamera(fail_after=0), idle=0.5)
+        code, _, body = self.fetch(server, '/v1/camera/frame')
+        self.assertEqual((code, json.loads(body)['error']), (503, 'camera-failed'))
+
+
 if __name__ == '__main__':
     unittest.main()
 
