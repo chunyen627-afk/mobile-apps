@@ -441,6 +441,7 @@ def drive(fake, presence=None, driver_class=None, notify=None):
     hub.strings = h.load_strings()
     driver = (driver_class or h.FakeDriver)(fake, hub, reply_after=0.2)
     watcher = h.UiWatcher(hub, driver, notify, '示範電腦')
+    watcher.screen_in_use = lambda: False  # not what plays on the PC running the tests
     hub.prompts = watcher.prompt_for
     hub.ui = watcher.current
     hub.popups = watcher.popup_list
@@ -1215,11 +1216,54 @@ for line in sys.stdin:
         presence['locked'] = True
         watcher.tick()
         self.assertEqual(reads, ['claude'])  # never on a locked PC
+        # Hands off the keyboard while a video plays (user 11/10: the card blinked over it): the
+        # card waits, and is read as soon as the video ends, not five minutes later.
+        presence['locked'] = False
+        watcher.screen_in_use = lambda: True
+        with self.assertLogs(level='INFO') as logs:
+            watcher.tick()
+            watcher.tick()
+        self.assertEqual(reads, ['claude'])
+        self.assertEqual(sum('usage card not read' in line for line in logs.output), 1)  # said once
+        watcher.screen_in_use = lambda: False
+        watcher.tick()
+        self.assertEqual(reads, ['claude', 'claude'])
+        # Two PCs on one account (asked 11/10): the one idle longest reads the card, the other
+        # leaves it, through notes in the shared clipboard folder. 家裡 idle 15 minutes: left to it.
+        shared = self.fake.root / 'shared'
+        watcher.board = h.IdleBoard(shared, '示範電腦')
+        home = h.IdleBoard(shared, '家裡')
+        home.note(900, False, False)
+        watcher.last_card_check -= 301
+        with self.assertLogs(level='INFO') as logs:
+            watcher.tick()
+        self.assertEqual(reads, ['claude', 'claude'])
+        self.assertTrue(any('家裡 is idle longer' in line for line in logs.output), logs.output)
+        mine = json.loads((shared / '_presence' / '示範電腦.json').read_text(encoding='utf-8'))
+        self.assertEqual((mine['pc'], mine['idleSeconds'], mine['locked'], mine['busy']), ('示範電腦', 420, False, False))
+        # 家裡 in use again (idle 30 s): this PC reads. A note from a PC that is busy with a video,
+        # or older than three minutes (off, or not syncing), does not count either.
+        home.noted = None
+        home.note(30, False, False)
+        watcher.tick()
+        self.assertEqual(reads, ['claude', 'claude', 'claude'])
+        home.noted = None
+        home.note(900, False, True)
+        watcher.last_card_check -= 301
+        watcher.tick()
+        self.assertEqual(reads, ['claude'] * 4)
+        home.clock = lambda: time.time() - 400
+        home.noted = None
+        home.note(9000, False, False)
+        watcher.last_card_check -= 301
+        watcher.tick()
+        self.assertEqual(reads, ['claude'] * 5)
 
     def test_the_last_usage_button_reading_survives_a_restart(self):
         hub, driver, _, _ = drive(self.fake)
         memory = self.fake.root / 'usage_seen.json'
         watcher = h.UiWatcher(hub, driver, memory=memory)
+        watcher.screen_in_use = lambda: False
         watcher.look('claude')
         watcher.check_card()
         saved = json.loads(memory.read_text(encoding='utf-8'))
