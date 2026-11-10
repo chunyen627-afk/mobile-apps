@@ -173,9 +173,10 @@ public struct HelperClient: Sendable {
     }
 
     /// The next frame from the PC's webcam (helper 0.5.41): the PC opens the camera on the first
-    /// call and closes it a few seconds after the last one.
-    public func cameraFrame() async throws -> Data {
-        try await imageBytes(["v1", "camera", "frame"])
+    /// call and closes it a few seconds after the last one. Small (data saver) unless `clear`
+    /// asks for the bigger, sharper picture (helper 0.5.42).
+    public func cameraFrame(clear: Bool = false) async throws -> Data {
+        try await imageBytes(["v1", "camera", "frame"], query: clear ? [URLQueryItem(name: "clear", value: "1")] : [])
     }
 
     /// A picture from a conversation (a photo sent from here, a screenshot a tool took), by the

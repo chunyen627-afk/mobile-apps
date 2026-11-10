@@ -38,7 +38,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.41'
+VERSION = '0.5.42'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -4624,19 +4624,21 @@ class CameraFeed:
         self.error = None
         self.opened = 0                  # how many times the camera has been opened (for tests and the log)
         self.served = 0                  # the frame number last handed out: each request waits for a newer one
+        self.profile = 'low'             # 'low' (data saver, the default) or 'high' (clear): what the phone asked for last
 
     def on(self):
         """Whether the camera is open right now."""
         with self.lock:
             return self.thread is not None and self.error is None
 
-    def frame_bytes(self, wait=3.0):
+    def frame_bytes(self, wait=3.0, profile='low'):
         """(JPEG bytes, None) of the next frame, opening the camera first when it is off, or
         (None, why) when the camera cannot be read within `wait` seconds. Each call waits for a
         frame newer than the one handed out before, so the phone asking again and again gets the
         camera's own pace (about 10–30 a second) and never the same picture twice."""
         with self.lock:
             self.last_request = time.monotonic()
+            self.profile = profile
             if self.thread is None:
                 self.error = None
                 self.frame = None
@@ -4674,7 +4676,9 @@ class CameraFeed:
                 with self.lock:
                     if time.monotonic() - self.last_request > self.idle:
                         break
-                data = device.grab_jpeg()
+                with self.lock:
+                    profile = self.profile
+                data = device.grab_jpeg(profile)
                 if not data:
                     logging.warning('camera gave no frame')
                     with self.lock:
@@ -4699,10 +4703,11 @@ class CameraFeed:
 
 
 class OpenCVCamera:
-    """A webcam read through OpenCV (`pip install opencv-python`): frames shrunk to `long_side`
-    pixels on the long side and encoded as JPEG for the phone."""
+    """A webcam read through OpenCV (`pip install opencv-python`): frames shrunk and encoded as
+    JPEG for the phone, in two sizes: 'low' (data saver, the default: 640 px, quality 50, about
+    15 KB a frame on the office webcam) and 'high' (clear: 960 px, quality 70, about 34 KB)."""
 
-    def __init__(self, index=0, long_side=960, quality=70):
+    def __init__(self, index=0, long_side=960, quality=70, low_long_side=640, low_quality=50):
         import cv2
         self.cv2 = cv2
         backend = getattr(cv2, 'CAP_DSHOW', 0) if sys.platform == 'win32' else 0
@@ -4712,18 +4717,18 @@ class OpenCVCamera:
             raise RuntimeError('沒有鏡頭，或被其他程式占用')
         self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
         self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-        self.long_side = long_side
-        self.quality = quality
+        self.sizes = {'high': (long_side, quality), 'low': (low_long_side, low_quality)}
 
-    def grab_jpeg(self):
+    def grab_jpeg(self, profile='low'):
         ok, frame = self.capture.read()
         if not ok or frame is None:
             return None
+        long_side, quality = self.sizes.get(profile, self.sizes['low'])
         height, width = frame.shape[:2]
-        scale = self.long_side / max(height, width)
+        scale = long_side / max(height, width)
         if scale < 1:
             frame = self.cv2.resize(frame, (int(width * scale), int(height * scale)), interpolation=self.cv2.INTER_AREA)
-        ok, encoded = self.cv2.imencode('.jpg', frame, [self.cv2.IMWRITE_JPEG_QUALITY, self.quality])
+        ok, encoded = self.cv2.imencode('.jpg', frame, [self.cv2.IMWRITE_JPEG_QUALITY, quality])
         return encoded.tobytes() if ok else None
 
     def close(self):
@@ -4737,7 +4742,7 @@ class FakeCamera:
         self.data = Path(path).read_bytes()
         self.closed = False
 
-    def grab_jpeg(self):
+    def grab_jpeg(self, profile='low'):
         time.sleep(0.1)
         return self.data
 
@@ -4766,7 +4771,8 @@ def cameras_on_this_pc(timeout=30):
 def camera_from_config(cfg, names=None):
     """A CameraFeed for the phone when `camera` in config.json is not false, OpenCV is installed
     and Windows lists a camera; else None (the phone then shows no 看鏡頭 row). `camera` may be an
-    object: {"index": 0, "long_side": 960, "quality": 70, "idle_seconds": 5}."""
+    object: {"index": 0, "long_side": 960, "quality": 70, "low_long_side": 640, "low_quality": 50,
+    "idle_seconds": 5} (`long_side`/`quality` are the clear picture, `low_*` the data saver)."""
     settings = cfg.get('camera', True)
     if settings is False:
         return None
@@ -4784,7 +4790,10 @@ def camera_from_config(cfg, names=None):
     index = int(settings.get('index', 0))
     long_side = int(settings.get('long_side', 960))
     quality = int(settings.get('quality', 70))
-    return CameraFeed(lambda: OpenCVCamera(index, long_side, quality), idle=float(settings.get('idle_seconds', 5)))
+    low_long_side = int(settings.get('low_long_side', 640))
+    low_quality = int(settings.get('low_quality', 50))
+    return CameraFeed(lambda: OpenCVCamera(index, long_side, quality, low_long_side, low_quality),
+                      idle=float(settings.get('idle_seconds', 5)))
 
 
 def handler_for(hub, gate, networks, runner=None):
@@ -4973,7 +4982,8 @@ def handler_for(hub, gate, networks, runner=None):
                 if parts == ['camera']:
                     return self.send_json(200, {'ok': True, 'on': hub.camera.on(), 'frames': hub.camera.frames})
                 if parts == ['camera', 'frame']:
-                    data, why = hub.camera.frame_bytes()
+                    clear = query.get('clear', [''])[0] not in ('', '0', 'false')
+                    data, why = hub.camera.frame_bytes(profile='high' if clear else 'low')
                     if data is None:
                         return self.send_json(503, error('camera-failed', why))
                     return self.send_jpeg(data)

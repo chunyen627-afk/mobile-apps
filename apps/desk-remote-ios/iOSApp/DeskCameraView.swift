@@ -14,6 +14,9 @@ struct DeskCameraView: View {
     @State private var frames = 0
     @State private var frameAt: Date?
     @State private var perSecond = 0.0
+    @State private var lastBytes = 0
+    /// Off = data saver (the default, about 15 KB a frame); on = the clear picture (about 34 KB).
+    @State private var clear = false
 
     var body: some View {
         VStack(spacing: 8) {
@@ -44,6 +47,14 @@ struct DeskCameraView: View {
         }
         .navigationTitle("鏡頭")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Toggle(isOn: $clear) { Label("清晰", systemImage: clear ? "sparkles" : "leaf") }
+                    .toggleStyle(.button)
+                    .accessibilityIdentifier("camera-clear")
+                    .accessibilityHint("關著是省流量，打開是清晰")
+            }
+        }
         // Restarted whenever the scene phase changes: in the background nothing is asked for,
         // and the PC closes the camera on its own.
         .task(id: scenePhase) {
@@ -53,8 +64,10 @@ struct DeskCameraView: View {
     }
 
     private var note: String {
-        guard let frameAt, frames > 0 else { return "鏡頭只在這一頁開著時開啟，離開這頁就關掉。" }
-        return "每秒約 \(perSecond.formatted(.number.precision(.fractionLength(1)))) 張，最新畫面 \(frameAt.formatted(date: .omitted, time: .standard))；離開這頁鏡頭就關。"
+        let mode = clear ? "清晰" : "省流量"
+        guard let frameAt, frames > 0 else { return "\(mode)模式。鏡頭只在這一頁開著時開啟，離開這頁就關掉。" }
+        let kb = (Double(lastBytes) / 1024).formatted(.number.precision(.fractionLength(0)))
+        return "\(mode)：每秒約 \(perSecond.formatted(.number.precision(.fractionLength(1)))) 張、每張約 \(kb) KB，最新畫面 \(frameAt.formatted(date: .omitted, time: .standard))；離開這頁鏡頭就關。"
     }
 
     private func stream() async {
@@ -65,7 +78,7 @@ struct DeskCameraView: View {
         var recent: [Date] = []
         while !Task.isCancelled {
             do {
-                let data = try await client.cameraFrame()
+                let data = try await client.cameraFrame(clear: clear)
                 guard let picture = UIImage(data: data) else {
                     failure = DeskText.failure(.badResponse)
                     try? await Task.sleep(for: .seconds(2))
@@ -76,6 +89,7 @@ struct DeskCameraView: View {
                 failure = nil
                 frames += 1
                 frameAt = now
+                lastBytes = data.count
                 recent.append(now)
                 recent.removeAll { now.timeIntervalSince($0) > 3 }
                 perSecond = Double(recent.count) / 3
