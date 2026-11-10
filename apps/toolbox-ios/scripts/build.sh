@@ -15,9 +15,9 @@ EXPECTED_THERMO_GATEWAY_TESTS="${EXPECTED_THERMO_GATEWAY_TESTS:-38}"
 if [[ -n "${SIM_MATCH:-}" ]]; then EXPECTED_TOOLBOX_UI_TESTS="${EXPECTED_TOOLBOX_UI_TESTS:-12}"; fi
 EXPECTED_TOOLBOX_UI_TESTS="${EXPECTED_TOOLBOX_UI_TESTS:-7}"
 EXPECTED_ALBUM_UI_TESTS="${EXPECTED_ALBUM_UI_TESTS:-6}"
-EXPECTED_DESK_UI_TESTS="${EXPECTED_DESK_UI_TESTS:-42}"
+EXPECTED_DESK_UI_TESTS="${EXPECTED_DESK_UI_TESTS:-43}"
 # Includes 3 Windows-only tests, skipped (and counted) on macOS.
-EXPECTED_DESK_HELPER_TESTS="${EXPECTED_DESK_HELPER_TESTS:-178}"
+EXPECTED_DESK_HELPER_TESTS="${EXPECTED_DESK_HELPER_TESTS:-184}"
 # The desk remote's fake helpers, as its own scripts/build.sh runs them: the first on the port in
 # its fake-config.json, then one with someone at the keyboard, one with Codex closed to the tray
 # and newer Codex limits, one with a window popped up and an update pending.
