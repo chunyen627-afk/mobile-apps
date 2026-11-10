@@ -74,11 +74,32 @@ final class IPadLayoutShots: XCTestCase {
         return condition()
     }
 
+    /// Launches the album and lets it come up before anything is asked of it: the very first
+    /// query after the launch timed out on a loaded runner ("Timed out while evaluating UI
+    /// query" on the start button, iPad run 42766832721, after the desk suite had run 28
+    /// minutes), and a query that times out fails the test outright.
+    private func launchAlbum() {
+        app.launchEnvironment["LIGHTBOX_UI_TEST"] = "1"
+        app.launch()
+        _ = app.wait(for: .runningForeground, timeout: 60)
+        settle(3)
+    }
+
+    /// Launches the album and lets it come up before anything is asked of it: the very first
+    /// query after the launch timed out on a loaded runner ("Timed out while evaluating UI
+    /// query" on the start button, iPad run 42766832721, after the desk suite had run 28
+    /// minutes), and a query that times out fails the test outright.
+    private func launchAlbum() {
+        app.launchEnvironment["LIGHTBOX_UI_TEST"] = "1"
+        app.launch()
+        _ = app.wait(for: .runningForeground, timeout: 60)
+        settle(3)
+    }
+
     // MARK: - Album: folders, the scanned list, a photo, a video
 
     func test1Album() throws {
-        app.launchEnvironment["LIGHTBOX_UI_TEST"] = "1"
-        app.launch()
+        launchAlbum()
         let start = app.buttons["開始播放"]
         guard require(start, 60, "album-start") else { return }
         bothOrientations("1a-album-folders")
@@ -100,8 +121,7 @@ final class IPadLayoutShots: XCTestCase {
     }
 
     func test1bAlbumVideo() throws {
-        app.launchEnvironment["LIGHTBOX_UI_TEST"] = "1"
-        app.launch()
+        launchAlbum()
         let start = app.buttons["開始播放"]
         guard require(start, 60, "album-start") else { return }
         // Video only: the photo fixture unticked.
