@@ -133,10 +133,16 @@ struct DeskLightPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Label(headline, systemImage: light.on == true && light.watching ? "lightbulb.fill" : "lightbulb")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(light.on == true && light.watching ? Color.orange : Color.primary)
-                .accessibilityIdentifier("camera-light")
+            // A Label would put the identifier on its image (CI 11/11: the test found an Image whose
+            // label is the symbol name); the text carries it.
+            HStack(spacing: 6) {
+                Image(systemName: light.on == true && light.watching ? "lightbulb.fill" : "lightbulb")
+                    .accessibilityHidden(true)
+                Text(headline)
+                    .accessibilityIdentifier("camera-light")
+            }
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(light.on == true && light.watching ? Color.orange : Color.primary)
             Text(today)
                 .font(.caption)
                 .foregroundStyle(.secondary)
