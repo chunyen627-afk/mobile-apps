@@ -172,19 +172,18 @@ final class AlbumUITests: XCTestCase {
             capture("avi-landscape-fit-\(pass)")
             XCUIDevice.shared.orientation = .portrait
             // The end of the clip: one video on its own starts over (PlayerModel: ended → show the
-            // next, which is itself), and must not sit on its last frame.
-            tapOverlay("暫停", until: app.buttons["繼續"])
-            app.sliders["影片進度"].adjust(toNormalizedSliderPosition: 0.9)
-            let nearEnd = XCTNSPredicateExpectation(predicate: NSPredicate { [self] _, _ in
-                videoSeconds().map { (24...29).contains($0) } ?? false
-            }, object: nil)
-            XCTAssertEqual(XCTWaiter.wait(for: [nearEnd], timeout: 10), .completed, "player: \(playerDebug)")
-            app.buttons["繼續"].tap()
+            // next, which is itself), and must not sit on its last frame ("vlc=0@30", run
+            // 42996973051). Let it play there rather than drag the slider: on the iPad a drag to
+            // 0.9 asked for 19 s (run 43004013825). Seen at 20 s or later, then back under 10 s;
+            // 45 s covers a whole 30 s clip from wherever it is now.
+            var furthest = 0
             let looped = XCTNSPredicateExpectation(predicate: NSPredicate { [self] _, _ in
-                playerSeconds().map { $0 < 10 } ?? false
+                guard let now = playerSeconds() else { return false }
+                furthest = max(furthest, now)
+                return furthest >= 20 && now < 10
             }, object: nil)
-            XCTAssertEqual(XCTWaiter.wait(for: [looped], timeout: 20), .completed,
-                           "the clip did not start over after its end; player: \(playerDebug)")
+            XCTAssertEqual(XCTWaiter.wait(for: [looped], timeout: 45), .completed,
+                           "the clip did not start over after its end (furthest \(furthest) s); player: \(playerDebug)")
             capture("avi-started-over-\(pass)")
             tapOverlay("leavePlayer", until: app.buttons["開始播放"])
         }
