@@ -1030,6 +1030,9 @@ final class DeskRemoteUITests: XCTestCase {
         row.tap()
         XCTAssertTrue(element("camera-image").waitForExistence(timeout: 15), "the camera picture did not load")
         XCTAssertTrue(waitFor(element("camera-note"), labelContains: "省流量：每秒約", timeout: 10), "frames did not keep coming")
+        // The light the fake helper watches in this picture (helper 0.5.45): its state and today's changes.
+        XCTAssertTrue(waitFor(element("camera-light"), labelContains: "玻璃門：亮著", timeout: 15), "the watched light is missing")
+        XCTAssertTrue(waitFor(element("camera-light-today"), labelContains: "08:05 亮、12:01 暗", timeout: 5), "today's changes are missing")
         snapshot("43-camera")
         app.buttons["camera-clear"].tap()
         XCTAssertTrue(waitFor(element("camera-note"), labelContains: "清晰：每秒約", timeout: 10), "the clear picture did not take over")

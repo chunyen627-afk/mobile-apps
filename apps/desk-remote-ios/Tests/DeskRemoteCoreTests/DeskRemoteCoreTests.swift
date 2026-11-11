@@ -782,6 +782,37 @@ final class TextTests: XCTestCase {
         XCTAssertFalse(HelperClient(endpoint: other, token: token, lan: lan, routes: book).viaLAN)
     }
 
+    /// Helper 0.5.45 watches a light in its camera picture: the state carries it, `/v1/light` adds the days.
+    func testLightReportDecodesWithTodayFirst() throws {
+        let report = try HelperClient.decode(LightReport.self, status: 200, data: Data("""
+        {"ok": true, "name": "玻璃門", "on": true, "level": 183.0, "since": "2026-11-11T09:02:00+08:00", "error": null,
+         "watching": true, "hours": [8, 18], "weekdaysOnly": true, "intervalSeconds": 30, "region": [0.75, 0.4, 0.05, 0.18],
+         "days": [{"date": "2026-11-11", "changes": [{"time": "08:05:17", "on": true, "level": 179.6, "start": true},
+                                                     {"time": "09:02:00", "on": false, "level": 72.3, "start": false}]},
+                  {"date": "2026-11-10", "changes": []}],
+         "samples": [{"at": "2026-11-11T09:02:00+08:00", "level": 183.0}]}
+        """.utf8))
+        XCTAssertEqual(report.days.map(\.date), ["2026-11-11", "2026-11-10"])
+        XCTAssertEqual(report.days[0].changes.map(\.on), [true, false])
+        XCTAssertTrue(report.days[0].changes[0].start)
+        XCTAssertEqual(report.summary.sinceTime, "09:02")
+        XCTAssertEqual(report.summary.hours, [8, 18])
+        let state = try HelperClient.decode(HelperState.self, status: 200, data: Data("""
+        {"ok": true, "pc": {"name": "辦公室", "helperVersion": "0.5.45"}, "capabilities": ["read", "camera", "light"],
+         "apps": {}, "presence": {"idleSeconds": 3, "locked": false}, "warnings": [],
+         "light": {"name": "玻璃門", "on": null, "level": null, "since": null, "error": null, "watching": false,
+                   "hours": [8, 18], "weekdaysOnly": true}}
+        """.utf8))
+        XCTAssertEqual(state.light?.watching, false)
+        XCTAssertNil(state.light?.on)
+        XCTAssertTrue(state.can("light"))
+        let older = try HelperClient.decode(HelperState.self, status: 200, data: Data("""
+        {"ok": true, "pc": {"name": "辦公室", "helperVersion": "0.5.44"}, "capabilities": ["read"], "apps": {},
+         "presence": {"idleSeconds": 3, "locked": false}, "warnings": []}
+        """.utf8))
+        XCTAssertNil(older.light)
+    }
+
     func testPCFormProblems() {
         let token = String(repeating: "x", count: 32)
         XCTAssertNil(DeskPC.problem(name: "辦公室", host: "10.1.2.3", port: "18790", token: token, tokenRequired: true))

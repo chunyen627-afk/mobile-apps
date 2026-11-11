@@ -2817,6 +2817,201 @@ class CameraFeedTests(unittest.TestCase):
         self.assertTrue(camera.closed)
 
 
+class NotifierTests(unittest.TestCase):
+    """ntfy as before, and (0.5.46) LINE Messaging API pushes beside it, only for the tags asked."""
+
+    def test_line_gets_the_tagged_notifications_beside_ntfy(self):
+        sent = []
+
+        class Answer:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self, n=-1):
+                return b'{}'
+
+        def urlopen(request, timeout=10):
+            sent.append((request.full_url, request.get_header('Authorization'), json.loads(request.data.decode('utf-8'))))
+            return Answer()
+        cfg = {'notify': {'server': 'https://ntfy.example/', 'topic': 'topic-1',
+                          'line': {'channel_access_token': 'line-token', 'to': 'Uabc', 'tags': ['bulb']}}}
+        notifier = h.Notifier(cfg, urlopen=urlopen)
+        notifier.post('示範電腦：玻璃門亮了', '09:02 亮度 175', tags=['bulb'])
+        notifier.post('示範電腦：權限詢問', '要不要允許', tags=['question'])
+        self.assertEqual([url for url, _, _ in sent], ['https://ntfy.example/', h.Notifier.LINE_PUSH, 'https://ntfy.example/'])
+        self.assertEqual(sent[1][1], 'Bearer line-token')
+        self.assertEqual(sent[1][2], {'to': 'Uabc', 'messages': [{'type': 'text', 'text': '示範電腦：玻璃門亮了\n09:02 亮度 175'}]})
+        self.assertEqual(sent[0][2]['topic'], 'topic-1')
+        # Without tags every notification goes to LINE; without ntfy settings only LINE is used.
+        notifier = h.Notifier({'notify': {'line': {'channel_access_token': 't', 'to': 'U1'}}}, urlopen=urlopen)
+        notifier.post('標題', '內容')
+        self.assertEqual(sent[-1][0], h.Notifier.LINE_PUSH)
+        self.assertEqual(len(sent), 4)
+
+        def refuse(request, timeout=10):
+            raise urllib.error.HTTPError(request.full_url, 401, 'Unauthorized', {}, __import__('io').BytesIO(b'{"message":"invalid token"}'))
+        with self.assertRaisesRegex(OSError, 'LINE answered 401'):
+            h.Notifier({'notify': {'line': {'channel_access_token': 'bad', 'to': 'U1'}}}, urlopen=refuse).post('a', 'b')
+
+
+class LightWatchTests(unittest.TestCase):
+    """A region of the camera picture watched for a light (0.5.45; the user 11/11): on above one
+    threshold, off below another, a change needs two samples in a row, every change goes to the
+    log and turning on to ntfy; the watch runs only on workdays 08-18 when so configured."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix='light-'))
+        self.addCleanup(shutil.rmtree, self.root, True)
+        self.levels = []
+        self.notes = []
+        self.now = [time.mktime((2026, 11, 11, 9, 0, 0, 2, 315, -1))]  # Wednesday 09:00
+        self.feed = h.CameraFeed(CountingCamera, idle=0.3)
+        self.watch = h.LightWatch(self.feed, (0.75, 0.4, 0.05, 0.18), self.root / 'light_log.csv',
+                                  notify=lambda title, message, **kw: self.notes.append((title, message, kw)),
+                                  pc_name='示範電腦', name='玻璃門', interval=30, on_above=130, off_below=90, settle=0,
+                                  hours=(8, 18), weekdays_only=True,
+                                  measure=lambda jpeg: self.levels.pop(0), clock=lambda: self.now[0], sleep=lambda s: None)
+
+    def tick(self, level, minutes=0.5):
+        self.levels.append(level)
+        self.now[0] += minutes * 60
+        return self.watch.sample()
+
+    def test_changes_need_two_samples_go_to_the_log_and_turning_on_is_notified(self):
+        self.assertEqual(self.tick(55), 55)
+        self.assertEqual((self.watch.on, self.notes), (False, []), 'a dark first look was not recorded as off')
+        self.tick(170)
+        self.assertFalse(self.watch.on, 'one bright sample flipped the light')
+        self.tick(100)  # between the thresholds: the flicker is forgotten
+        self.tick(170)
+        self.assertFalse(self.watch.on)
+        self.tick(175)
+        self.assertTrue(self.watch.on, 'two bright samples in a row did not turn it on')
+        self.assertEqual(len(self.notes), 1)
+        self.assertEqual(self.notes[0][0], '示範電腦：玻璃門亮了')
+        self.assertIn('亮度 175', self.notes[0][1])
+        self.tick(60)
+        self.tick(58)
+        self.assertFalse(self.watch.on)
+        self.assertEqual(len(self.notes), 1, 'turning off was notified')
+        lines = (self.root / 'light_log.csv').read_text(encoding='utf-8').splitlines()
+        self.assertEqual(lines[0], 'date,time,state,level,note')
+        self.assertEqual([l.split(',')[2:] for l in lines[1:]], [['off', '55.0', 'start'], ['on', '175.0'], ['off', '58.0']])
+        self.assertTrue(all(l.startswith('2026-11-11,') for l in lines[1:]))
+        snap = self.watch.snapshot()
+        self.assertEqual((snap['name'], snap['on'], snap['level'], snap['watching'], snap['hours'], snap['weekdaysOnly']),
+                         ('玻璃門', False, 58.0, True, [8, 18], True))
+        self.assertTrue(snap['since'].startswith('2026-11-11T09:0'))
+        days = self.watch.history(2)
+        self.assertEqual([d['date'] for d in days], ['2026-11-11', '2026-11-10'])
+        self.assertEqual([(c['time'][:5], c['on'], c['start']) for c in days[0]['changes']],
+                         [('09:00', False, True), ('09:02', True, False), ('09:03', False, False)])
+        self.assertEqual(days[1]['changes'], [])
+        self.assertEqual(len(self.watch.recent()), 7)
+        self.assertEqual(self.feed.opened, 1, 'every sample reopened the camera although the feed was still open')
+
+    def test_outside_workdays_and_hours_nothing_is_watched_and_the_window_starts_afresh(self):
+        self.assertTrue(self.watch.active())
+        self.now[0] += 9 * 3600  # 18:00
+        self.assertFalse(self.watch.active())
+        self.now[0] += 14 * 3600  # Thursday 08:00
+        self.assertTrue(self.watch.active())
+        self.now[0] += 2 * 24 * 3600  # Saturday
+        self.assertFalse(self.watch.active())
+        self.watch.weekdays_only = False
+        self.assertTrue(self.watch.active())
+        # A bright start inside the window is recorded as 'start' and notified once.
+        self.tick(180)
+        self.assertTrue(self.watch.on)
+        self.assertEqual(self.notes[-1][0], '示範電腦：玻璃門亮了（小幫手啟動時已亮）')
+        # A picture that cannot be read keeps the state and says why.
+        self.watch.measure = lambda jpeg: 1 / 0
+        self.assertIsNone(self.watch.sample())
+        self.assertTrue(self.watch.on)
+        self.assertIn('畫面讀不出來', self.watch.snapshot()['error'])
+
+    def test_config_builds_the_watch_only_with_a_camera_and_checks_the_region(self):
+        self.assertIsNone(h.light_watch_from_config({}, self.feed, None, 'PC', self.root))
+        self.assertIsNone(h.light_watch_from_config({'light_watch': {'region': [0.7, 0.4, 0.05, 0.2]}}, None, None, 'PC', self.root))
+        watch = h.light_watch_from_config({'light_watch': {'region': [0.7, 0.4, 0.05, 0.2], 'name': '會議室', 'hours': [8, 18],
+                                                           'weekdays_only': True, 'interval_seconds': 20,
+                                                           'on_above': 140, 'off_below': 100}}, self.feed, None, 'PC', self.root)
+        self.assertEqual((watch.name, watch.hours, watch.weekdays_only, watch.interval, watch.on_above, watch.off_below),
+                         ('會議室', (8, 18), True, 20.0, 140.0, 100.0))
+        self.assertEqual(watch.log_path, self.root / 'light_log.csv')
+        for bad in ({'region': [0.9, 0.4, 0.2, 0.2]}, {'region': 'x'}, {'region': [0.1, 0.1, 0.1, 0.1], 'hours': [9, 9]},
+                    {'region': [0.1, 0.1, 0.1, 0.1], 'on_above': 100, 'off_below': 100}):
+            with self.assertRaises(ValueError, msg=bad):
+                h.light_watch_from_config({'light_watch': bad}, self.feed, None, 'PC', self.root)
+
+    def test_the_region_follows_the_door_frame_when_the_picture_shifts(self):
+        try:
+            import cv2
+            import numpy
+        except ImportError:
+            self.skipTest('OpenCV is not installed')
+        rng = numpy.random.default_rng(7)
+        scene = rng.integers(0, 256, (120, 200), dtype=numpy.uint8)   # a textured wall
+        scene[40:90, 100:130] = 30                                    # the dark doorway (the region)
+        scene[40:90, 96:100] = 240                                    # its white frame
+        scene[40:90, 130:134] = 240
+
+        def jpeg(picture):
+            return cv2.imencode('.jpg', picture, [cv2.IMWRITE_JPEG_QUALITY, 95])[1].tobytes()
+        region = (0.5, 1 / 3, 0.15, 5 / 12)                           # x 100-130, y 40-90
+        anchor = (0.45, 0.3, 0.25, 0.5)                               # the frame and some wall: x 90-140, y 36-96
+        aim = h.RegionAim(jpeg(scene), anchor, region, min_score=0.6)
+        level, used = aim.measure(jpeg(scene))
+        self.assertLess(level, 60)
+        self.assertEqual(aim.offset, (0, 0))
+        # The camera is nudged: the scene moves 12 px right and 6 px down. A fixed region would now
+        # see the bright frame; the aim moves with it.
+        shifted = numpy.roll(numpy.roll(scene, 12, axis=1), 6, axis=0)
+        self.assertGreater(h.gray_region_mean(shifted, region), 60, 'the test scene did not move enough')
+        level, used = aim.measure(jpeg(shifted))
+        self.assertEqual(aim.offset, (12, 6))
+        self.assertLess(level, 60, 'the region did not follow the frame')
+        self.assertAlmostEqual(used[0], 0.5 + 12 / 200, places=3)
+        self.assertFalse(aim.lost)
+        # The room light comes on (the doorway turns bright): the frame is still found, the level rises.
+        lit = shifted.copy()
+        lit[46:96, 112:142] = 230
+        level, _ = aim.measure(jpeg(lit))
+        self.assertEqual(aim.offset, (12, 6))
+        self.assertGreater(level, 200)
+        # Nothing like the frame in the picture: the last position is kept and `lost` is set.
+        aim.measure(jpeg(rng.integers(0, 256, (120, 200), dtype=numpy.uint8)))
+        self.assertTrue(aim.lost)
+        self.assertEqual(aim.offset, (12, 6))
+        # From config: the reference picture next to the log, a bad anchor refused.
+        (self.root / 'ref.jpg').write_bytes(jpeg(scene))
+        watch = h.light_watch_from_config({'light_watch': {'region': list(region), 'reference': 'ref.jpg', 'anchor': list(anchor)}},
+                                          self.feed, None, 'PC', self.root)
+        self.assertIsNotNone(watch.aim)
+        self.assertIn('aim', watch.snapshot())
+        with self.assertRaises(ValueError):
+            h.light_watch_from_config({'light_watch': {'region': list(region), 'reference': 'missing.jpg', 'anchor': list(anchor)}},
+                                      self.feed, None, 'PC', self.root)
+
+    def test_region_brightness_reads_the_part_of_the_picture(self):
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest('Pillow is not installed')
+        import io
+        picture = Image.new('L', (100, 50), 20)
+        picture.paste(220, (50, 0, 100, 50))  # the right half is bright
+        buffer = io.BytesIO()
+        picture.save(buffer, 'JPEG', quality=95)
+        jpeg = buffer.getvalue()
+        self.assertLess(h.region_brightness(jpeg, (0.0, 0.0, 0.5, 1.0)), 40)
+        self.assertGreater(h.region_brightness(jpeg, (0.5, 0.0, 0.5, 1.0)), 200)
+        self.assertGreater(h.region_brightness(jpeg, (0.99, 0.99, 0.01, 0.01)), 200)
+
+
 class CameraHttpTests(FakeEnvironment):
     def fetch(self, server, path, token=TOKEN):
         request = urllib.request.Request(f'http://127.0.0.1:{server.server_address[1]}{path}',
@@ -2848,6 +3043,21 @@ class CameraHttpTests(FakeEnvironment):
         self.assertEqual((code, media, first[:3]), (200, 'image/jpeg', b'\xff\xd8\xff'))
         second = self.fetch(server, '/v1/camera/frame')[2]
         self.assertGreater(frame_number(second), frame_number(first))
+        self.assertEqual(self.fetch(server, '/v1/light')[0], 404, 'no light watch, yet not 404')
+        self.assertNotIn('light', state['capabilities'])
+        hub.light = self.fake.light_watch(hub.camera)
+        hub.light.sample()
+        state = json.loads(self.fetch(server, '/v1/state')[2])
+        self.assertIn('light', state['capabilities'])
+        self.assertEqual((state['light']['name'], state['light']['on'], state['light']['level']), ('玻璃門', True, 183.0))
+        code, media, body = self.fetch(server, '/v1/light?days=2')
+        light = json.loads(body)
+        self.assertEqual((code, light['ok'], light['on'], len(light['days'])), (200, True, True, 2))
+        self.assertEqual([c['time'] for c in light['days'][0]['changes']], ['08:05:17', '12:01:48'] + [c['time'] for c in light['days'][0]['changes']][2:])
+        self.assertEqual(light['days'][0]['changes'][-1]['start'], True)
+        self.assertEqual(len(light['days'][1]['changes']), 4)
+        self.assertEqual(light['samples'][-1]['level'], 183.0)
+        self.assertEqual(self.fetch(server, '/v1/light', token='wrong')[0], 401)
         clear = self.fetch(server, '/v1/camera/frame?clear=1')[2]
         self.assertGreater(frame_number(clear), frame_number(second))
         self.fetch(server, '/v1/camera/frame?clear=1')

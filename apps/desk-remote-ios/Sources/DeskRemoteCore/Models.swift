@@ -13,6 +13,63 @@ public enum DeskApp: String, CaseIterable, Codable, Hashable, Sendable {
 }
 
 /// `GET /v1/state`.
+/// A region of the PC's camera picture watched for a light being on (helper 0.5.45): the state
+/// in `/v1/state`, and with each day's changes in `/v1/light` (LightReport). The long record
+/// (light_log.csv) stays on the PC; the phone only shows the recent days.
+public struct LightSummary: Decodable, Equatable, Sendable {
+    public let name: String
+    /// nil before the first readable picture, or outside the watch window.
+    public let on: Bool?
+    /// The region's mean brightness, 0-255, from the last picture.
+    public let level: Double?
+    /// When the light last changed (ISO 8601 with the PC's offset).
+    public let since: String?
+    public let error: String?
+    /// Inside the watch window (hours, and weekdays when weekdaysOnly).
+    public let watching: Bool
+    public let hours: [Int]
+    public let weekdaysOnly: Bool
+
+    /// "HH:MM" of `since`, from the PC's own clock.
+    public var sinceTime: String? {
+        guard let since, since.count >= 16 else { return nil }
+        let start = since.index(since.startIndex, offsetBy: 11)
+        return String(since[start..<since.index(start, offsetBy: 5)])
+    }
+}
+
+public struct LightReport: Decodable, Equatable, Sendable {
+    public struct Change: Decodable, Equatable, Sendable {
+        /// "HH:MM:SS" on the PC's clock.
+        public let time: String
+        public let on: Bool
+        public let level: Double
+        /// The first look of a watch window (the helper started, or 08:00 came): a state, not a change.
+        public let start: Bool
+    }
+
+    public struct Day: Decodable, Equatable, Sendable {
+        public let date: String
+        public let changes: [Change]
+    }
+
+    public let name: String
+    public let on: Bool?
+    public let level: Double?
+    public let since: String?
+    public let error: String?
+    public let watching: Bool
+    public let hours: [Int]
+    public let weekdaysOnly: Bool
+    /// Today first.
+    public let days: [Day]
+
+    public var summary: LightSummary {
+        LightSummary(name: name, on: on, level: level, since: since, error: error, watching: watching, hours: hours,
+                     weekdaysOnly: weekdaysOnly)
+    }
+}
+
 public struct HelperState: Decodable, Equatable, Sendable {
     public struct PC: Decodable, Equatable, Sendable {
         public let name: String
@@ -95,6 +152,8 @@ public struct HelperState: Decodable, Equatable, Sendable {
     public let versions: [String: AppVersion]?
     /// nil from older helpers.
     public let memory: Memory?
+    /// The light the helper watches in its camera picture (helper 0.5.45); nil without `light_watch`.
+    public let light: LightSummary?
 
     public struct AppVersion: Decodable, Equatable, Sendable {
         public let installed: String?

@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.44'
+VERSION = '0.5.46'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -1639,28 +1639,46 @@ class FixedPresence:
 
 
 class Notifier:
-    """ntfy, like the miner aggregator: titles carry the PC name and the action, never addresses."""
+    """ntfy, like the miner aggregator: titles carry the PC name and the action, never addresses.
+    Optionally LINE as well (0.5.46; the user 11/11 asked for the light on LINE): `notify.line`
+    = {"channel_access_token": "<Messaging API long-lived token>", "to": "<the user's U… id>",
+    "tags": ["bulb"]} pushes the same title and message through the LINE Messaging API (LINE
+    Notify ended in March 2025; an official account's free plan allows 200 pushes a month). With
+    `tags` only notifications carrying one of them go to LINE; without it, all of them do."""
 
-    def __init__(self, cfg):
+    LINE_PUSH = 'https://api.line.me/v2/bot/message/push'
+
+    def __init__(self, cfg, urlopen=urllib.request.urlopen):
         self.cfg = cfg.get('notify') or {}
+        self.urlopen = urlopen
 
     def post(self, title, message, priority=3, tags=None, click=None):
         """`click` is the phone app's link (open_link): tapping the notification opens it there."""
-        if not self.cfg.get('topic') or not self.cfg.get('server'):
-            return
-        payload = {'topic': self.cfg['topic'], 'title': title, 'message': message, 'priority': priority,
-                   'tags': tags or []}
-        if click:
-            payload['click'] = click
+        if self.cfg.get('topic') and self.cfg.get('server'):
+            payload = {'topic': self.cfg['topic'], 'title': title, 'message': message, 'priority': priority,
+                       'tags': tags or []}
+            if click:
+                payload['click'] = click
+            self.send(self.cfg['server'], payload, {}, 'ntfy')
+        line = self.cfg.get('line') or {}
+        if line.get('channel_access_token') and line.get('to'):
+            wanted = line.get('tags')
+            if wanted and not set(wanted) & set(tags or []):
+                return
+            payload = {'to': line['to'], 'messages': [{'type': 'text', 'text': f'{title}\n{message}'[:5000]}]}
+            self.send(line.get('url') or self.LINE_PUSH, payload,
+                      {'Authorization': f"Bearer {line['channel_access_token']}"}, 'LINE')
+
+    def send(self, url, payload, headers, service):
         body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
-        request = urllib.request.Request(self.cfg['server'], data=body, method='POST',
-                                         headers={'Content-Type': 'application/json'})
+        request = urllib.request.Request(url, data=body, method='POST',
+                                         headers=dict(headers, **{'Content-Type': 'application/json'}))
         try:
-            with urllib.request.urlopen(request, timeout=10) as response:
+            with self.urlopen(request, timeout=10) as response:
                 response.read(4096)
-        except urllib.error.HTTPError as e:  # ntfy says why in its body (a 413 on 10/30)
+        except urllib.error.HTTPError as e:  # the service says why in its body (ntfy 413 on 10/30)
             reason = e.read(300).decode('utf-8', 'replace')
-            raise OSError(f'ntfy answered {e.code}: {reason}') from None
+            raise OSError(f'{service} answered {e.code}: {reason}') from None
 
 
 class AuthGate:
@@ -1763,6 +1781,7 @@ class Hub:
         self.clipboard = None             # ClipboardSync when a shared clipboard folder is configured (0.5.40)
         self.camera = None                # CameraFeed: the webcam, open only while the phone's 看鏡頭 page is (0.5.41)
         self.lan = None                   # (ip, port) where the helper also listens on the local network (0.5.44)
+        self.light = None                 # LightWatch: a region of the camera picture watched for a light (0.5.45)
         self.alerts = {'usage_percent': 80, 'context_percent': 80}
         self.chosen_modes = {}            # (app, id) -> (mode, when): a Codex pick its rollout shows only next turn
         self.page_names = {}              # (app, id) -> the page title last seen for it, when its files say otherwise
@@ -1790,7 +1809,8 @@ class Hub:
         extra = ((['elevate'] if self.elevate is not None else []) + (['screen'] if self.screen is not None else [])
                  + (['restart'] if self.restart is not None else [])
                  + (['clipboard'] if self.clipboard is not None else [])
-                 + (['camera'] if self.camera is not None else []))
+                 + (['camera'] if self.camera is not None else [])
+                 + (['light'] if self.light is not None else []))
         disk = self.disk_version()
         newer = disk if disk and version_key(disk) > version_key(VERSION) else None
         lan_host, lan_port = self.lan or (None, None)
@@ -1803,7 +1823,8 @@ class Hub:
                 'efforts': choices('effort', 'efforts'), 'modes': choices('mode', 'modes'), 'stop': stop,
                 'popups': self.popups(), 'recent': self.recent(), 'fast': fast, 'versions': self.versions(),
                 'memory': self.ram.snapshot() if self.ram is not None else None,
-                'camera': {'on': self.camera.on()} if self.camera is not None else None}
+                'camera': {'on': self.camera.on()} if self.camera is not None else None,
+                'light': self.light.snapshot() if self.light is not None else None}
 
     def recent(self, per_app=3):
         """Each app's few most recently written conversations, newest first, for the phone's PC
@@ -4864,6 +4885,307 @@ class FakeCamera:
         self.closed = True
 
 
+def region_brightness(jpeg, region):
+    """Mean brightness (0-255) of `region` = (x, y, w, h) as fractions of the picture, decoded
+    with OpenCV when it is installed, else Pillow."""
+    x, y, w, h = region
+    try:
+        import cv2
+        import numpy
+        picture = cv2.imdecode(numpy.frombuffer(jpeg, numpy.uint8), cv2.IMREAD_GRAYSCALE)
+        if picture is None:
+            raise ValueError('not a picture')
+        return gray_region_mean(picture, region)
+    except ImportError:
+        pass
+    import io
+    from PIL import Image, ImageStat
+    picture = Image.open(io.BytesIO(jpeg)).convert('L')
+    width, height = picture.size
+    box = picture.crop((int(x * width), int(y * height),
+                        max(int(x * width) + 1, int((x + w) * width)), max(int(y * height) + 1, int((y + h) * height))))
+    return float(ImageStat.Stat(box).mean[0])
+
+
+def gray_region_mean(picture, region):
+    """Mean of a grayscale OpenCV picture inside `region` (fractions)."""
+    x, y, w, h = region
+    height, width = picture.shape[:2]
+    box = picture[int(y * height):max(int(y * height) + 1, int((y + h) * height)),
+                  int(x * width):max(int(x * width) + 1, int((x + w) * width))]
+    return float(box.mean())
+
+
+class RegionAim:
+    """Finds the watched region again when the camera has been nudged (the user 11/11: 「那個門框
+    的圖案你已經記下來了 如果哪天鏡頭碰歪 你要自己找的」). A reference picture (light_reference.jpg
+    next to config.json, saved when the region was chosen) and an `anchor` box in it (the door
+    frame and wall around the region: structure that does not change with the light) are kept;
+    every look, the anchor is searched for in the new picture (OpenCV matchTemplate) and the
+    region moves by the same offset. A match below `min_score` keeps the last offset and says so,
+    so the phone's camera page shows 「找不到門框」. Needs OpenCV; without it nothing moves."""
+
+    def __init__(self, reference_jpeg, anchor, region, min_score=0.6):
+        import cv2
+        import numpy
+        self.cv2, self.numpy = cv2, numpy
+        picture = cv2.imdecode(numpy.frombuffer(reference_jpeg, numpy.uint8), cv2.IMREAD_GRAYSCALE)
+        if picture is None:
+            raise ValueError('the reference picture cannot be read')
+        self.size = (picture.shape[1], picture.shape[0])  # (width, height)
+        ax, ay, aw, ah = anchor
+        self.origin = (int(ax * self.size[0]), int(ay * self.size[1]))
+        self.template = picture[self.origin[1]:int((ay + ah) * self.size[1]), self.origin[0]:int((ax + aw) * self.size[0])]
+        if self.template.size < 64:
+            raise ValueError('the anchor box is too small')
+        self.region, self.min_score = tuple(region), float(min_score)
+        self.offset = (0, 0)   # pixels the picture has moved by, in the reference's size
+        self.score = None
+        self.lost = False
+
+    def measure(self, jpeg):
+        """(level, region used) of the region after finding the anchor in `jpeg`."""
+        cv2, numpy = self.cv2, self.numpy
+        picture = cv2.imdecode(numpy.frombuffer(jpeg, numpy.uint8), cv2.IMREAD_GRAYSCALE)
+        if picture is None:
+            raise ValueError('not a picture')
+        if (picture.shape[1], picture.shape[0]) != self.size:
+            picture = cv2.resize(picture, self.size, interpolation=cv2.INTER_AREA)
+        result = cv2.matchTemplate(picture, self.template, cv2.TM_CCOEFF_NORMED)
+        _, score, _, where = cv2.minMaxLoc(result)
+        self.score = float(score)
+        if score >= self.min_score:
+            offset = (where[0] - self.origin[0], where[1] - self.origin[1])
+            if offset != self.offset:
+                logging.info('light watch: the picture moved by %+d, %+d px (match %.2f); region re-aimed', offset[0], offset[1], score)
+            self.offset, self.lost = offset, False
+        elif not self.lost:
+            logging.warning('light watch: the anchor was not found (best match %.2f); keeping the last position', score)
+            self.lost = True
+        x, y, w, h = self.region
+        region = (min(max(x + self.offset[0] / self.size[0], 0.0), 1 - w), min(max(y + self.offset[1] / self.size[1], 0.0), 1 - h), w, h)
+        return gray_region_mean(picture, region), region
+
+
+def region_aim_from_config(settings, folder):
+    """A RegionAim when `light_watch` names a reference picture and an anchor box, else None."""
+    name = settings.get('reference')
+    anchor = settings.get('anchor')
+    if not name or not anchor:
+        return None
+    try:
+        ax, ay, aw, ah = (float(v) for v in anchor)
+    except (TypeError, ValueError):
+        raise ValueError('light_watch.anchor must be [x, y, w, h] as fractions of the picture') from None
+    if not (0 <= ax < 1 and 0 <= ay < 1 and 0 < aw <= 1 - ax and 0 < ah <= 1 - ay):
+        raise ValueError('light_watch.anchor must be [x, y, w, h] as fractions of the picture')
+    path = Path(folder) / name
+    try:
+        reference = path.read_bytes()
+    except OSError as exc:
+        raise ValueError(f'light_watch.reference cannot be read: {exc}') from None
+    try:
+        return RegionAim(reference, (ax, ay, aw, ah), tuple(float(v) for v in settings['region']),
+                         min_score=float(settings.get('min_score', 0.6)))
+    except ImportError:
+        logging.warning('light watch: OpenCV is not installed, so the region cannot follow a nudged camera')
+        return None
+class LightWatch:
+    """One region of the webcam picture watched for a light being on (0.5.45; the user 11/11:
+    「判斷這區域每天記錄亮白燈和關燈的時間 如果亮燈要通知我」). Every `interval` seconds the camera is
+    asked for a picture through CameraFeed (the phone's 看鏡頭 page and this share the one camera;
+    the camera is on for a few seconds each time), the region's mean brightness is measured and
+    the light counts as on above `on_above`, off below `off_below`, once two samples in a row
+    agree (someone walking past, or the exposure settling, does not flip it). Every change is
+    appended to light_log.csv next to config.json (date, time, on/off, level): the long record
+    stays on the PC (the user: 「長時間紀錄統計的資料存在電腦就好」), and the phone's camera page
+    shows today's changes from `/v1/light`. Turning on is sent to ntfy; turning off is only
+    recorded."""
+
+    KEEP = 30  # recent samples kept for /v1/light (to pick the thresholds)
+
+    def __init__(self, feed, region, log_path, notify=None, pc_name='', name='', interval=30.0,
+                 on_above=160.0, off_below=120.0, settle=1.0, hours=(0, 24), weekdays_only=False,
+                 measure=None, aim=None, clock=time.time, sleep=time.sleep):
+        self.feed, self.region, self.log_path = feed, tuple(float(v) for v in region), Path(log_path)
+        self.notify, self.pc_name, self.name = notify, pc_name, name or '燈'
+        self.interval, self.on_above, self.off_below = float(interval), float(on_above), float(off_below)
+        self.settle = float(settle)
+        self.hours, self.weekdays_only = (int(hours[0]), int(hours[1])), bool(weekdays_only)
+        self.aim = aim  # RegionAim: follows the door frame when the camera is nudged (None: fixed region)
+        self.measure = measure or (lambda jpeg: self.aim.measure(jpeg)[0] if self.aim is not None else region_brightness(jpeg, self.region))
+        self.clock, self.sleep = clock, sleep
+        self.lock = threading.Lock()
+        self.on = None        # True/False once decided, None before the first readable picture
+        self.since = None     # when the light last changed (clock())
+        self.level = None     # the last measured brightness
+        self.pending = None   # a state seen once that the next sample has to confirm
+        self.error = None
+        self.samples = []     # the last (when, level)
+
+    def active(self, when=None):
+        """Whether this moment is inside the watch window (hours, and Monday-Friday when
+        weekdays_only); outside it the camera is left alone and nothing is recorded."""
+        stamp = datetime.fromtimestamp(self.clock() if when is None else when)
+        if self.weekdays_only and stamp.weekday() >= 5:
+            return False
+        return self.hours[0] <= stamp.hour < self.hours[1]
+
+    def sample(self):
+        """One look: the measured level (None when the camera gave nothing), with the change
+        applied when a second sample agrees."""
+        data, why = self.feed.frame_bytes(wait=8.0)
+        if data is not None and self.settle:
+            self.sleep(self.settle)  # the exposure settles over the first frames after opening
+            data, why = self.feed.frame_bytes(wait=8.0)
+        if data is None:
+            with self.lock:
+                self.error = why
+            return None
+        try:
+            level = float(self.measure(data))
+        except Exception as exc:
+            logging.warning('light watch could not read the picture: %s', exc)
+            with self.lock:
+                self.error = f'畫面讀不出來（{exc}）'
+            return None
+        now = self.clock()
+        change = None
+        with self.lock:
+            self.error = '找不到門框的圖案，用上次的位置量' if self.aim is not None and self.aim.lost else None
+            self.level = level
+            self.samples = (self.samples + [(now, level)])[-self.KEEP:]
+            if self.on is None:
+                self.on, self.since = level >= (self.on_above + self.off_below) / 2, now
+                change = (self.on, True)
+            else:
+                if self.on and level < self.off_below:
+                    state = False
+                elif not self.on and level >= self.on_above:
+                    state = True
+                else:
+                    state = None
+                if state is None:
+                    self.pending = None
+                elif self.pending == state:
+                    self.pending = None
+                    self.on, self.since = state, now
+                    change = (state, False)
+                else:
+                    self.pending = state
+        if change is not None:
+            self.record(now, change[0], level, first=change[1])
+        return level
+
+    def record(self, when, on, level, first=False):
+        stamp = datetime.fromtimestamp(when)
+        line = f"{stamp:%Y-%m-%d},{stamp:%H:%M:%S},{'on' if on else 'off'},{level:.1f}"
+        if first:
+            line += ',start'
+        try:
+            new = not self.log_path.exists()
+            with self.log_path.open('a', encoding='utf-8') as out:
+                if new:
+                    out.write('date,time,state,level,note\n')
+                out.write(line + '\n')
+        except OSError as exc:
+            logging.warning('light log could not be written: %s', exc)
+        logging.info('light %s: %s (level %.0f%s)', self.name, 'on' if on else 'off', level, ', at start' if first else '')
+        if on and self.notify is not None:
+            title = f'{self.pc_name}：{self.name}亮了' + ('（小幫手啟動時已亮）' if first else '')
+            try:
+                self.notify(title, f'{stamp:%H:%M} 亮度 {level:.0f}', tags=['bulb'])
+            except OSError as exc:
+                logging.warning('light notification failed: %s', exc)
+
+    def snapshot(self):
+        with self.lock:
+            since = datetime.fromtimestamp(self.since).astimezone().isoformat(timespec='seconds') if self.since else None
+            return {'name': self.name, 'on': self.on, 'level': round(self.level, 1) if self.level is not None else None,
+                    'since': since, 'error': self.error, 'onAbove': self.on_above, 'offBelow': self.off_below,
+                    'intervalSeconds': self.interval, 'region': list(self.region), 'watching': self.active(),
+                    'hours': list(self.hours), 'weekdaysOnly': self.weekdays_only,
+                    'aim': {'moved': list(self.aim.offset), 'score': round(self.aim.score, 3) if self.aim.score is not None else None,
+                            'lost': self.aim.lost} if self.aim is not None else None}
+
+    def history(self, days=1):
+        """[{date, changes: [{time, on, level, start}]}] for the last `days` days (today first)
+        from the log; a day without changes is listed empty."""
+        wanted = [f'{datetime.fromtimestamp(self.clock()) - timedelta(days=i):%Y-%m-%d}' for i in range(max(1, min(int(days), 366)))]
+        found = {day: [] for day in wanted}
+        try:
+            lines = self.log_path.read_text(encoding='utf-8').splitlines()
+        except OSError:
+            lines = []
+        for line in lines[1:]:
+            cells = line.split(',')
+            if len(cells) < 4 or cells[0] not in found:
+                continue
+            try:
+                level = float(cells[3])
+            except ValueError:
+                continue
+            found[cells[0]].append({'time': cells[1], 'on': cells[2] == 'on', 'level': level,
+                                    'start': len(cells) > 4 and cells[4] == 'start'})
+        return [{'date': day, 'changes': found[day]} for day in wanted]
+
+    def recent(self):
+        with self.lock:
+            return [{'at': datetime.fromtimestamp(when).astimezone().isoformat(timespec='seconds'), 'level': round(level, 1)}
+                    for when, level in self.samples]
+
+    def run_forever(self):
+        logging.info('light watch: %s, region %s, every %.0f s, on above %.0f / off below %.0f',
+                     self.name, [round(v, 3) for v in self.region], self.interval, self.on_above, self.off_below)
+        while True:
+            if not self.active():
+                with self.lock:  # the next window starts afresh (its first sample is recorded as 'start')
+                    self.on = self.since = self.pending = None
+                self.sleep(self.interval)
+                continue
+            try:
+                self.sample()
+            except Exception:
+                logging.exception('light watch failed')
+            self.sleep(self.interval)
+
+
+def light_watch_from_config(cfg, feed, notify, pc_name, folder):
+    """A LightWatch when config.json has `light_watch` and the PC has a camera: {"region":
+    [x, y, w, h] as fractions of the picture, "name": "玻璃門", "interval_seconds": 30,
+    "on_above": 160, "off_below": 120, "hours": [8, 18], "weekdays_only": true, "reference":
+    "light_reference.jpg", "anchor": [x, y, w, h]}; else None. `reference` + `anchor` let the
+    region follow a nudged camera (RegionAim)."""
+    settings = cfg.get('light_watch')
+    if not settings:
+        return None
+    if feed is None:
+        logging.info('light watch: no camera on this PC, nothing watched')
+        return None
+    region = settings.get('region')
+    try:
+        x, y, w, h = (float(v) for v in region)
+    except (TypeError, ValueError):
+        raise ValueError('light_watch.region must be [x, y, w, h] as fractions of the picture') from None
+    if not (0 <= x < 1 and 0 <= y < 1 and 0 < w <= 1 - x and 0 < h <= 1 - y):
+        raise ValueError('light_watch.region must be [x, y, w, h] as fractions of the picture')
+    on_above = float(settings.get('on_above', 160))
+    off_below = float(settings.get('off_below', 120))
+    if off_below >= on_above:
+        raise ValueError('light_watch.off_below must be below on_above')
+    hours = settings.get('hours') or [0, 24]
+    try:
+        first, last = (int(v) for v in hours)
+    except (TypeError, ValueError):
+        raise ValueError('light_watch.hours must be [start, end] hours of the day') from None
+    if not (0 <= first < last <= 24):
+        raise ValueError('light_watch.hours must be [start, end] hours of the day')
+    return LightWatch(feed, (x, y, w, h), Path(folder) / 'light_log.csv', notify, pc_name,
+                      name=str(settings.get('name') or '燈'), interval=float(settings.get('interval_seconds', 30)),
+                      on_above=on_above, off_below=off_below, hours=(first, last),
+                      weekdays_only=bool(settings.get('weekdays_only', False)), aim=region_aim_from_config(settings, folder))
+
+
 def cameras_on_this_pc(timeout=30):
     """Names of the cameras Windows lists (asked without opening any, so no camera light); []
     elsewhere or when the question fails."""
@@ -5102,6 +5424,15 @@ def handler_for(hub, gate, networks, runner=None):
                         return self.send_json(503, error('camera-failed', why))
                     return self.send_jpeg(data)
                 return self.send_json(404, error('not-found', '沒有這個路徑'))
+            if parts == ['light']:
+                if hub.light is None:
+                    return self.send_json(404, error('not-found', '這台電腦沒有設定燈光監看'))
+                try:
+                    days = int(query.get('days', ['1'])[0])
+                except ValueError:
+                    days = 1
+                return self.send_json(200, dict(hub.light.snapshot(), ok=True, days=hub.light.history(days),
+                                                samples=hub.light.recent()))
             if parts and parts[0] == 'clipboard':
                 sync = hub.clipboard
                 if sync is None:
@@ -5345,6 +5676,19 @@ class FakeSetup:
         folder = self.root / 'clipboard'
         shutil.copytree(self.fixtures / 'clipboard', folder)
         return ClipboardSync(ClipboardStore(folder, self.cfg['pc_name']), FakeClipboard(), self.cfg['pc_name'])
+
+    def light_watch(self, feed):
+        """The simulator's light watch (0.5.45): a fixed bright reading over the fake camera, with a
+        log that already holds yesterday's and today's changes."""
+        log = self.root / 'light_log.csv'
+        today = datetime.now()
+        yesterday = today - timedelta(days=1)
+        log.write_text('date,time,state,level,note\n'
+                       f'{yesterday:%Y-%m-%d},08:12:30,on,178.4\n{yesterday:%Y-%m-%d},12:03:05,off,74.2\n'
+                       f'{yesterday:%Y-%m-%d},13:10:41,on,181.0\n{yesterday:%Y-%m-%d},18:32:12,off,70.9\n'
+                       f'{today:%Y-%m-%d},08:05:17,on,179.6\n{today:%Y-%m-%d},12:01:48,off,72.3\n', encoding='utf-8')
+        return LightWatch(feed, (0.75, 0.4, 0.05, 0.18), log, name='玻璃門', interval=5, settle=0,
+                          measure=lambda jpeg: 183.0)
 
     def elevate_relay(self):
         """The companion's Python twin with a test key and one waiting request (fixture data)."""
@@ -5916,6 +6260,8 @@ def main(argv=None):
         hub.elevate = fake.elevate_relay()
         hub.screen = lambda: (fake.fixtures / 'screen.jpg').read_bytes()
         hub.camera = CameraFeed(lambda: FakeCamera(fake.fixtures / 'camera.jpg'), idle=3)
+        hub.light = fake.light_watch(hub.camera)
+        threading.Thread(target=hub.light.run_forever, daemon=True, name='light-watch').start()
         hub.clipboard = fake.clipboard_sync()
         gate = AuthGate(cfg['token'])
         return serve(hub, gate, cfg, networks, runner)
@@ -5935,6 +6281,9 @@ def main(argv=None):
     if cfg.get('screen', True):
         hub.screen = capture_screen
     hub.camera = camera_from_config(cfg)
+    hub.light = light_watch_from_config(cfg, hub.camera, notify, pc_name, path.parent)
+    if hub.light is not None:
+        threading.Thread(target=hub.light.run_forever, daemon=True, name='light-watch').start()
     runner = None
     if cfg.get('drive_windows', True):
         driver = WindowsDriver(load_strings())
