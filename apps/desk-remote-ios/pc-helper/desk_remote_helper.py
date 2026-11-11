@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.46'
+VERSION = '0.5.47'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -4999,8 +4999,9 @@ class LightWatch:
     agree (someone walking past, or the exposure settling, does not flip it). Every change is
     appended to light_log.csv next to config.json (date, time, on/off, level): the long record
     stays on the PC (the user: 「長時間紀錄統計的資料存在電腦就好」), and the phone's camera page
-    shows today's changes from `/v1/light`. Turning on is sent to ntfy; turning off is only
-    recorded."""
+    shows today's changes from `/v1/light`. Every change (on and off) is sent to ntfy (and LINE
+    when configured; the user 11/11: 「目前先加入亮燈和暗燈的通知就好」); the first look of a
+    watch window is notified only when the light is already on."""
 
     KEEP = 30  # recent samples kept for /v1/light (to pick the thresholds)
 
@@ -5091,8 +5092,8 @@ class LightWatch:
         except OSError as exc:
             logging.warning('light log could not be written: %s', exc)
         logging.info('light %s: %s (level %.0f%s)', self.name, 'on' if on else 'off', level, ', at start' if first else '')
-        if on and self.notify is not None:
-            title = f'{self.pc_name}：{self.name}亮了' + ('（小幫手啟動時已亮）' if first else '')
+        if self.notify is not None and (on or not first):
+            title = f'{self.pc_name}：{self.name}' + ('亮了' if on else '暗了') + ('（小幫手啟動時已亮）' if first else '')
             try:
                 self.notify(title, f'{stamp:%H:%M} 亮度 {level:.0f}', tags=['bulb'])
             except OSError as exc:
