@@ -42,6 +42,10 @@
       "description": "OPTIONAL extension (feature `cumulative`): each machine's estimated earnings added up since `since`, for checking against the pool account at the end of the month. An estimate, not money received. Null before anything has been added up.",
       "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/cumulative" }]
     },
+    "today": {
+      "description": "OPTIONAL extension (feature `today`): what each machine actually mined since 00:00 Taipei time on `date`, including machines switched off now: estimated NT$ earned, and for every hour (0–23) it mined, the seconds mining and the GPU watt-hours, so the app prices electricity with its own tariff and extra watts. Null when the publisher keeps no record.",
+      "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/today" }]
+    },
     "poolBalance": {
       "description": "OPTIONAL extension (feature `balance`): the pool account's balance as its dashboard showed it at observedAt (read from the logged-in page every 2 hours; the pool has no API for it), with TWD at the current BTC price. A balance amount only, never an address or account name. Null before the first reading.",
       "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/poolBalance" }]
@@ -278,6 +282,42 @@
               "coin": { "type": "string", "pattern": "^[A-Z0-9]{2,10}$" },
               "amount": { "type": "number", "minimum": 0 },
               "twd": { "type": "number", "minimum": 0 }
+            }
+          }
+        }
+      }
+    },
+    "today": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["date", "observedAt", "machines"],
+      "properties": {
+        "date": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "observedAt": { "$ref": "#/$defs/timestampOrNull" },
+        "machines": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["machineId", "twd", "hours"],
+            "properties": {
+              "machineId": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._-]+$" },
+              "twd": { "type": "number", "minimum": 0 },
+              "hours": {
+                "type": "array",
+                "maxItems": 24,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["hour", "miningSeconds", "gpuWh"],
+                  "properties": {
+                    "hour": { "type": "integer", "minimum": 0, "maximum": 23 },
+                    "miningSeconds": { "type": "number", "minimum": 0, "maximum": 7200 },
+                    "gpuWh": { "type": "number", "minimum": 0 }
+                  }
+                }
+              }
             }
           }
         }

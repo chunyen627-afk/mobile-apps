@@ -36,11 +36,13 @@ public struct MinerStatusFeed: Codable, Hashable, Sendable {
     public let cumulative: CumulativeReport?
     /// Optional extension: the pool account's balance as last read from its dashboard; nil when absent or null.
     public let poolBalance: PoolBalanceReport?
+    /// Optional extension: what each machine actually mined today; nil when absent or null.
+    public let today: TodayReport?
 
     public var isDemo: Bool { dataOrigin == .demo }
 
     enum CodingKeys: String, CodingKey, CaseIterable {
-        case schemaVersion, dataOrigin, demoNotice, publishedAt, machines, market, tariff, advice, cumulative, poolBalance
+        case schemaVersion, dataOrigin, demoNotice, publishedAt, machines, market, tariff, advice, cumulative, poolBalance, today
     }
 
     public init(from decoder: Decoder) throws {
@@ -81,6 +83,7 @@ public struct MinerStatusFeed: Codable, Hashable, Sendable {
         }
         cumulative = c.contains(.cumulative) ? try c.decodeNullable(CumulativeReport.self, forKey: .cumulative) : nil
         poolBalance = c.contains(.poolBalance) ? try c.decodeNullable(PoolBalanceReport.self, forKey: .poolBalance) : nil
+        today = c.contains(.today) ? try c.decodeNullable(TodayReport.self, forKey: .today) : nil
 
         // Stricter than the schema: duplicate ids would let samples from different
         // machines be compared against each other.
@@ -104,6 +107,7 @@ public struct MinerStatusFeed: Codable, Hashable, Sendable {
         try c.encodeIfPresent(advice, forKey: .advice)
         try c.encodeIfPresent(cumulative, forKey: .cumulative)
         try c.encodeIfPresent(poolBalance, forKey: .poolBalance)
+        try c.encodeIfPresent(today, forKey: .today)
     }
 }
 
@@ -462,6 +466,127 @@ public struct PoolBalanceReport: Codable, Hashable, Sendable {
         try c.encode(balanceBtc, forKey: .balanceBtc)
         try c.encode(twd, forKey: .twd)
         try c.encode(observedAt, forKey: .observedAt)
+    }
+}
+
+/// What each machine actually mined since 00:00 Taipei time on `date`, including machines that are
+/// switched off now. The app prices the electricity from each hour's GPU watt-hours and mining
+/// seconds with its own tariff and extra watts.
+public struct TodayReport: Codable, Hashable, Sendable {
+    /// "YYYY-MM-DD", Taipei time.
+    public let date: String
+    public let observedAt: Timestamp?
+    public let machines: [TodayMachine]
+
+    enum CodingKeys: String, CodingKey, CaseIterable {
+        case date, observedAt, machines
+    }
+
+    public init(date: String, observedAt: Timestamp?, machines: [TodayMachine]) {
+        self.date = date
+        self.observedAt = observedAt
+        self.machines = machines
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownKeys(decoder, allowed: CodingKeys.self)
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        date = try c.decode(String.self, forKey: .date)
+        guard date.range(of: #"^\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) != nil else {
+            throw DecodingError.dataCorruptedError(forKey: .date, in: c, debugDescription: "date must be YYYY-MM-DD")
+        }
+        observedAt = try c.decodeNullable(Timestamp.self, forKey: .observedAt)
+        machines = try c.decode([TodayMachine].self, forKey: .machines)
+        guard machines.count <= 8 else {
+            throw DecodingError.dataCorruptedError(forKey: .machines, in: c, debugDescription: "at most 8 machines")
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(date, forKey: .date)
+        try c.encode(observedAt, forKey: .observedAt)
+        try c.encode(machines, forKey: .machines)
+    }
+}
+
+public struct TodayMachine: Codable, Hashable, Sendable {
+    public let machineId: String
+    /// Estimated NT$ earned today.
+    public let twd: Double
+    public let hours: [TodayHour]
+
+    enum CodingKeys: String, CodingKey, CaseIterable {
+        case machineId, twd, hours
+    }
+
+    public init(machineId: String, twd: Double, hours: [TodayHour]) {
+        self.machineId = machineId
+        self.twd = twd
+        self.hours = hours
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownKeys(decoder, allowed: CodingKeys.self)
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        machineId = try c.decode(String.self, forKey: .machineId)
+        guard !machineId.isEmpty else {
+            throw DecodingError.dataCorruptedError(forKey: .machineId, in: c, debugDescription: "machineId must not be empty")
+        }
+        twd = try c.decode(Double.self, forKey: .twd)
+        guard twd.isFinite, twd >= 0 else {
+            throw DecodingError.dataCorruptedError(forKey: .twd, in: c, debugDescription: "twd must be >= 0")
+        }
+        hours = try c.decode([TodayHour].self, forKey: .hours)
+        guard hours.count <= 24 else {
+            throw DecodingError.dataCorruptedError(forKey: .hours, in: c, debugDescription: "at most 24 hours")
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(machineId, forKey: .machineId)
+        try c.encode(twd, forKey: .twd)
+        try c.encode(hours, forKey: .hours)
+    }
+}
+
+public struct TodayHour: Codable, Hashable, Sendable {
+    /// 0–23, Taipei time.
+    public let hour: Int
+    public let miningSeconds: Double
+    public let gpuWh: Double
+
+    enum CodingKeys: String, CodingKey, CaseIterable {
+        case hour, miningSeconds, gpuWh
+    }
+
+    public init(hour: Int, miningSeconds: Double, gpuWh: Double) {
+        self.hour = hour
+        self.miningSeconds = miningSeconds
+        self.gpuWh = gpuWh
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownKeys(decoder, allowed: CodingKeys.self)
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        hour = try c.decode(Int.self, forKey: .hour)
+        guard (0 ... 23).contains(hour) else {
+            throw DecodingError.dataCorruptedError(forKey: .hour, in: c, debugDescription: "hour must be 0-23")
+        }
+        miningSeconds = try c.decode(Double.self, forKey: .miningSeconds)
+        gpuWh = try c.decode(Double.self, forKey: .gpuWh)
+        guard miningSeconds.isFinite, (0 ... 7200).contains(miningSeconds), gpuWh.isFinite, gpuWh >= 0 else {
+            throw DecodingError.dataCorruptedError(forKey: .miningSeconds, in: c,
+                                                   debugDescription: "miningSeconds must be 0-7200 and gpuWh >= 0")
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(hour, forKey: .hour)
+        try c.encode(miningSeconds, forKey: .miningSeconds)
+        try c.encode(gpuWh, forKey: .gpuWh)
     }
 }
 

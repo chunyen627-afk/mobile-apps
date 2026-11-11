@@ -106,6 +106,62 @@ final class EarningsTests: XCTestCase {
         XCTAssertThrowsError(try feed(poolBalance: balance.filter { $0.key != "observedAt" }))
     }
 
+    private let todayJSON: [String: Any] = [
+        "date": "2026-11-12", "observedAt": "2026-11-12T07:25:00.000+08:00",
+        "machines": [["machineId": "rig-laptop", "twd": 5.0,
+                      "hours": (0 ..< 6).map { ["hour": $0, "miningSeconds": 3600.0, "gpuWh": 61.0] as [String: Any] }]],
+    ]
+
+    private func feed(today: Any) throws -> MinerStatusFeed {
+        var object = feedJSON([SampleSpec(sequence: 1, at: Date(timeIntervalSince1970: 1_792_800_000), accepted: 1).json])
+        object["today"] = today
+        return try decodeFeed(object)
+    }
+
+    func testTodayDecodesAndIsOptional() throws {
+        XCTAssertNil(try feed().today)
+        XCTAssertNil(try feed(today: NSNull()).today)
+        let decoded = try XCTUnwrap(try feed(today: todayJSON).today)
+        XCTAssertEqual(decoded.date, "2026-11-12")
+        XCTAssertEqual(decoded.machines.first?.hours.count, 6)
+        let again = try JSONDecoder().decode(MinerStatusFeed.self, from: JSONEncoder().encode(try feed(today: todayJSON)))
+        XCTAssertEqual(again.today, decoded)
+    }
+
+    func testTodayRejectsUnknownKeysAndBadValues() {
+        let row = (todayJSON["machines"] as! [[String: Any]])[0]
+        let hour: [String: Any] = ["hour": 0, "miningSeconds": 3600.0, "gpuWh": 61.0]
+        func with(_ hours: [[String: Any]]) -> [String: Any] {
+            todayJSON.merging(["machines": [row.merging(["hours": hours]) { $1 }]]) { $1 }
+        }
+        XCTAssertThrowsError(try feed(today: todayJSON.merging(["account": "x"]) { $1 }))
+        XCTAssertThrowsError(try feed(today: todayJSON.merging(["date": "11/12"]) { $1 }))
+        XCTAssertThrowsError(try feed(today: todayJSON.merging(["machines": [row.merging(["twd": -1]) { $1 }]]) { $1 }))
+        XCTAssertThrowsError(try feed(today: with([hour.merging(["hour": 24]) { $1 }])))
+        XCTAssertThrowsError(try feed(today: with([hour.merging(["gpuWh": -1]) { $1 }])))
+        XCTAssertThrowsError(try feed(today: with([hour.merging(["watts": 1]) { $1 }])))
+        XCTAssertThrowsError(try feed(today: with(Array(repeating: hour, count: 25))))
+        XCTAssertThrowsError(try feed(today: todayJSON.merging(["machines": Array(repeating: row, count: 9)]) { $1 }))
+    }
+
+    func testTodayPricesEachHourItMinedNotAWholeDay() throws {
+        // The laptop mined 00:00–06:00 on a weekday (Thursday): every hour off-peak at 1.99.
+        let machine = try XCTUnwrap(try feed(today: todayJSON).today?.machines.first)
+        let billed = EarningsCalculator.today(machine, date: "2026-11-12", billed: true, extraWatts: 10,
+                                              tariff: TouTariff(), calendar: calendar)
+        XCTAssertEqual(billed.revenue, 5)
+        XCTAssertEqual(billed.electricity, 6 * 0.071 * 1.99, accuracy: 1e-9)  // 61 W GPU + 10 W extra, 6 h
+        XCTAssertEqual(billed.net, 5 - 6 * 0.071 * 1.99, accuracy: 1e-9)
+        let free = EarningsCalculator.today(machine, date: "2026-11-12", billed: false, extraWatts: 10,
+                                            tariff: TouTariff(), calendar: calendar)
+        XCTAssertEqual(free.electricity, 0)
+        // The same hours after 06:00 are peak: 4.93.
+        let late = TodayMachine(machineId: "x", twd: 0, hours: [TodayHour(hour: 7, miningSeconds: 1800, gpuWh: 50)])
+        let peak = EarningsCalculator.today(late, date: "2026-11-12", billed: true, extraWatts: 20,
+                                            tariff: TouTariff(), calendar: calendar)
+        XCTAssertEqual(peak.electricity, (50 + 20 * 0.5) / 1000 * 4.93, accuracy: 1e-9)
+    }
+
     func testTimeOfUseRates() {
         let tariff = TouTariff()
         XCTAssertEqual(tariff.rate(at: date(2026, 7, 15, 10), calendar: calendar), 5.16)  // summer Wednesday, peak

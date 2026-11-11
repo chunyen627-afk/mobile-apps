@@ -134,6 +134,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var market: MarketReport?
     /// The source's running total of estimated earnings; nil when it sends none.
     @Published private(set) var cumulative: CumulativeReport?
+    /// What each machine actually mined today; nil when the source sends none (older sources).
+    @Published private(set) var today: TodayReport?
     /// The pool account's balance as the source last read it; nil when it sends none.
     @Published private(set) var poolBalance: PoolBalanceReport?
     @Published private(set) var sourceTariff: TariffReport? = SourceTariffStore.load()
@@ -174,6 +176,7 @@ final class AppModel: ObservableObject {
         self.scenario = scenario
         advice = []
         cumulative = nil
+        today = nil
         poolBalance = nil
         guard let demo else {
             snapshots = []
@@ -190,6 +193,7 @@ final class AppModel: ObservableObject {
             demoClock = result.clock
             market = result.market
             cumulative = result.cumulative
+            today = result.today
             poolBalance = result.poolBalance
             demoError = nil
         } catch {
@@ -220,6 +224,7 @@ final class AppModel: ObservableObject {
         sourceSentDemoData = false
         market = nil
         cumulative = nil
+        today = nil
         poolBalance = nil
         advice = []
         LiveResume.enabled = true
@@ -297,6 +302,26 @@ final class AppModel: ObservableObject {
 
     var earningsTotal: (revenue: Double?, electricity: Double?, net: Double?) {
         EarningsCalculator.total(snapshots.map(earnings(for:)))
+    }
+
+    /// Whether a machine's electricity counts, also for one switched off now and so absent from the
+    /// list (the laptop after its night run): the user's switch, else the source's flag, else whether
+    /// the source gives it mine-or-rest advice (it only does for billed machines).
+    func isBilled(machineId: String) -> Bool {
+        if let snapshot = snapshots.first(where: { $0.machineId == machineId }) { return isBilled(snapshot) }
+        return earningsSettings.billed[machineId] ?? advice.contains { $0.machineId == machineId }
+    }
+
+    /// Today's actual NT$ since 00:00, all machines, from the source's record; nil when it sends none.
+    var todayTotal: (revenue: Double, electricity: Double, net: Double)? {
+        guard let today else { return nil }
+        let rows = today.machines.map {
+            EarningsCalculator.today($0, date: today.date, billed: isBilled(machineId: $0.machineId),
+                                     extraWatts: extraWatts($0.machineId), tariff: effectiveTariff)
+        }
+        let revenue = rows.reduce(0) { $0 + $1.revenue }
+        let electricity = rows.reduce(0) { $0 + $1.electricity }
+        return (revenue, electricity, revenue - electricity)
     }
 
     /// The clock the screen should reason about: the frozen demo clock, or now.
@@ -388,6 +413,7 @@ final class AppModel: ObservableObject {
             sourceSentDemoData = feed.isDemo
             market = feed.market
             cumulative = feed.cumulative
+            today = feed.today
             poolBalance = feed.poolBalance
             advice = feed.advice ?? []
             if let tariff = feed.tariff, tariff != sourceTariff {

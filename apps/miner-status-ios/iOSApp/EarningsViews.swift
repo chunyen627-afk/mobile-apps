@@ -45,11 +45,21 @@ struct EarningsSummarySection: View {
 
     var body: some View {
         let total = model.earningsTotal
+        let actual = model.todayTotal
         Section {
             VStack(alignment: .leading, spacing: 4) {
-                LabeledContent("收益（估算）", value: "\(EarningsText.twd(total.revenue))/天")
-                LabeledContent("電費（有勾選的機器）", value: "\(EarningsText.twd(total.electricity))/天")
-                LabeledContent("淨收益", value: "\(EarningsText.twd(total.net))/天").font(.headline)
+                if let actual {
+                    // What was actually mined since 00:00, including machines switched off now.
+                    LabeledContent("收益（估算）", value: EarningsText.twd(actual.revenue))
+                    LabeledContent("電費（有勾選的機器）", value: EarningsText.twd(actual.electricity))
+                    LabeledContent("淨收益", value: EarningsText.twd(actual.net)).font(.headline)
+                    LabeledContent("照目前狀態挖滿一天", value: "淨 \(EarningsText.twd(total.net))/天")
+                        .font(.caption)
+                } else {
+                    LabeledContent("收益（估算）", value: "\(EarningsText.twd(total.revenue))/天")
+                    LabeledContent("電費（有勾選的機器）", value: "\(EarningsText.twd(total.electricity))/天")
+                    LabeledContent("淨收益", value: "\(EarningsText.twd(total.net))/天").font(.headline)
+                }
                 let now = model.currentElectricity
                 LabeledContent("目前電價", value: "\(now.period) \(now.rate.formatted(.number.precision(.fractionLength(2)))) 元／度")
                     .font(.caption)
@@ -89,7 +99,7 @@ struct EarningsSummarySection: View {
         } header: {
             // In the header so it stays put however tall the summary grows.
             HStack {
-                Text("今日估算")
+                Text(model.todayTotal == nil ? "今日估算" : "今日（00:00 到現在）")
                 Spacer()
                 Button("收益與電費設定", action: showSettings)
                     .font(.subheadline)
@@ -97,7 +107,11 @@ struct EarningsSummarySection: View {
             }
             .textCase(nil)
         } footer: {
-            Text("依礦池近 30 分鐘平均算力、礦池公布的每單位收益與目前幣價估算（與礦池網頁的算法相同），不是實際入帳金額；電費依台電簡易型二段式與目前耗電推算一整天。")
+            if model.todayTotal != nil {
+                Text("電腦端每 5 分鐘記一次今天實際挖礦的時間與耗電（已關機的機器也算），電費照每小時的台電簡易型二段式電價；收益依當時礦池公布的每單位收益與幣價估算，不是實際入帳金額。")
+            } else {
+                Text("依礦池近 30 分鐘平均算力、礦池公布的每單位收益與目前幣價估算（與礦池網頁的算法相同），不是實際入帳金額；電費依台電簡易型二段式與目前耗電推算一整天。")
+            }
         }
     }
 }

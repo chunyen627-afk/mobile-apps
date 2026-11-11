@@ -125,6 +125,7 @@ struct DemoResult {
     let clock: ClockReading
     let market: MarketReport?
     let cumulative: CumulativeReport?
+    let today: TodayReport?
     let poolBalance: PoolBalanceReport?
 }
 
@@ -154,6 +155,7 @@ struct DemoPlayer {
         var engine = StatusEngine()
         var market: MarketReport?
         var cumulative: CumulativeReport?
+        var today: TodayReport?
         var poolBalance: PoolBalanceReport?
         for step in scenario.steps {
             switch step {
@@ -168,6 +170,7 @@ struct DemoPlayer {
                 let feed = try decodeFeed(machines, at: time)
                 market = feed.market
                 cumulative = feed.cumulative
+                today = feed.today
                 poolBalance = feed.poolBalance
                 engine.ingest(feed, at: reading(offset))
             case let .requestFailure(offset):
@@ -176,7 +179,7 @@ struct DemoPlayer {
         }
         let now = reading(scenario.evaluateAt)
         return DemoResult(snapshots: engine.snapshots(at: now), feedProblem: engine.feedProblem, clock: now, market: market,
-                          cumulative: cumulative, poolBalance: poolBalance)
+                          cumulative: cumulative, today: today, poolBalance: poolBalance)
     }
 
     /// Re-stamps the template machine for one step. Index 1 is a second, equally fictional machine.
@@ -240,6 +243,16 @@ struct DemoPlayer {
                 "machines": [
                     ["machineId": "demo-rig-a", "coin": "PRL", "amount": 4.8, "twd": 289.0],
                     ["machineId": "demo-rig-b", "coin": "QTC", "amount": 0.025, "twd": 60.0],
+                ],
+            ] as [String: Any],
+            // Fictional record of today: A mined the first three hours, B the first two.
+            "today": [
+                "date": TouTariff.dayKey(time), "observedAt": demoTimestamp(time),
+                "machines": [
+                    ["machineId": "demo-rig-a", "twd": 12.0, "hours": (0 ..< 3).map {
+                        ["hour": $0, "miningSeconds": 3600.0, "gpuWh": 120.0] as [String: Any] }],
+                    ["machineId": "demo-rig-b", "twd": 5.0, "hours": (0 ..< 2).map {
+                        ["hour": $0, "miningSeconds": 3600.0, "gpuWh": 45.0] as [String: Any] }],
                 ],
             ] as [String: Any],
             // Fictional pool balance, read an hour before this step.

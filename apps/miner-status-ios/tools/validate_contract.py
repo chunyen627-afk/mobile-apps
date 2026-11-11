@@ -419,6 +419,26 @@ def build_cases(base: dict) -> tuple[list, list]:
         ("cumulative row negative amount", [(("cumulative",), dict(cumulative, machines=[dict(row, amount=-1)]))]),
         ("cumulative too many machines", [(("cumulative",), dict(cumulative, machines=[row] * 9))]),
     ]
+
+    # Optional today extension (feature `today`).
+    hour = {"hour": 0, "miningSeconds": 3600.0, "gpuWh": 61.0}
+    day_row = {"machineId": "rig-a", "twd": 5.0, "hours": [hour, dict(hour, hour=1)]}
+    today = {"date": "2026-11-12", "observedAt": "2026-11-12T07:25:00.000+08:00", "machines": [day_row]}
+    positive += [
+        ("today present", [(("today",), today)]),
+        ("today null", [(("today",), None)]),
+        ("today nothing mined yet", [(("today",), dict(today, machines=[], observedAt=None))]),
+    ]
+    negative += [
+        ("today extra key", [(("today",), dict(today, account="x"))]),
+        ("today bad date", [(("today",), dict(today, date="11/12"))]),
+        ("today row negative twd", [(("today",), dict(today, machines=[dict(day_row, twd=-1)]))]),
+        ("today row extra key", [(("today",), dict(today, machines=[dict(day_row, wallet="x")]))]),
+        ("today hour out of range", [(("today",), dict(today, machines=[dict(day_row, hours=[dict(hour, hour=24)])]))]),
+        ("today negative watt-hours", [(("today",), dict(today, machines=[dict(day_row, hours=[dict(hour, gpuWh=-1)])]))]),
+        ("today too many hours", [(("today",), dict(today, machines=[dict(day_row, hours=[hour] * 25)]))]),
+        ("today too many machines", [(("today",), dict(today, machines=[day_row] * 9))]),
+    ]
     return negative, positive
 
 

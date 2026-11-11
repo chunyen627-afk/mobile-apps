@@ -184,6 +184,28 @@ public enum EarningsCalculator {
                                netTwdPerDay: net)
     }
 
+    /// What one machine actually earned and spent today. Electricity is each hour's GPU watt-hours
+    /// plus the extra watts for the seconds it mined, at that hour's rate; 0 when not billed.
+    public static func today(_ machine: TodayMachine, date: String, billed: Bool, extraWatts: Double,
+                             tariff: TouTariff, calendar: Calendar = .taipei) -> (revenue: Double, electricity: Double, net: Double) {
+        var electricity = 0.0
+        if billed, let start = day(date, calendar: calendar) {
+            for hour in machine.hours {
+                let moment = calendar.date(byAdding: .hour, value: hour.hour, to: start) ?? start
+                let wh = hour.gpuWh + max(0, extraWatts) * hour.miningSeconds / 3600
+                electricity += wh / 1000 * tariff.rate(at: moment, calendar: calendar)
+            }
+        }
+        return (machine.twd, electricity, machine.twd - electricity)
+    }
+
+    /// Start of a "YYYY-MM-DD" day in the calendar's time zone.
+    static func day(_ text: String, calendar: Calendar) -> Date? {
+        let parts = text.split(separator: "-").compactMap { Int($0) }
+        guard parts.count == 3 else { return nil }
+        return calendar.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2]))
+    }
+
     /// Sums of the machines that have a value; nil when none has one.
     public static func total(_ machines: [MachineEarnings]) -> (revenue: Double?, electricity: Double?, net: Double?) {
         func sum(_ values: [Double?]) -> Double? {

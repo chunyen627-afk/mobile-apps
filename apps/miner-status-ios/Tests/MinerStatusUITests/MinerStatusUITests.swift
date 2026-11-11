@@ -105,6 +105,9 @@ final class MinerStatusUITests: XCTestCase {
         let summary = element("earnings-summary")
         XCTAssertTrue(reveal(summary), "earnings summary missing")
         XCTAssertTrue(waitFor(summary, labelContains: "NT$", timeout: 3), "summary says \(summary.label)")
+        // Today's actual record (A NT$12 + B NT$5), not the current rate stretched over a day.
+        XCTAssertTrue(summary.label.contains("NT$17"), "summary is not today's actual: \(summary.label)")
+        XCTAssertTrue(summary.label.contains("照目前狀態挖滿一天"), "summary lost the full-day rate: \(summary.label)")
         snapshot("13-earnings-summary")
     }
 
