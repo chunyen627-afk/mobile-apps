@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.46'
+VERSION = '0.5.48'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -1644,7 +1644,11 @@ class Notifier:
     = {"channel_access_token": "<Messaging API long-lived token>", "to": "<the user's U… id>",
     "tags": ["bulb"]} pushes the same title and message through the LINE Messaging API (LINE
     Notify ended in March 2025; an official account's free plan allows 200 pushes a month). With
-    `tags` only notifications carrying one of them go to LINE; without it, all of them do."""
+    `tags` only notifications carrying one of them go to LINE; without it, all of them do.
+    A notification may carry a `picture` (JPEG bytes; 0.5.48, the light watch's camera frame, the
+    user 11/11): it is published to ntfy as the attachment (PUT, headers RFC 2047 encoded), and
+    the attachment's URL (ntfy.sh keeps it about three hours) goes into the same LINE push as an
+    image message, since LINE only takes a public HTTPS URL. No ntfy, no picture on LINE."""
 
     LINE_PUSH = 'https://api.line.me/v2/bot/message/push'
 
@@ -1652,22 +1656,59 @@ class Notifier:
         self.cfg = cfg.get('notify') or {}
         self.urlopen = urlopen
 
-    def post(self, title, message, priority=3, tags=None, click=None):
+    def post(self, title, message, priority=3, tags=None, click=None, picture=None, picture_name='camera.jpg'):
         """`click` is the phone app's link (open_link): tapping the notification opens it there."""
+        picture_url = None
         if self.cfg.get('topic') and self.cfg.get('server'):
-            payload = {'topic': self.cfg['topic'], 'title': title, 'message': message, 'priority': priority,
-                       'tags': tags or []}
-            if click:
-                payload['click'] = click
-            self.send(self.cfg['server'], payload, {}, 'ntfy')
+            if picture:
+                picture_url = self.attach(title, message, priority, tags, click, picture, picture_name)
+            else:
+                payload = {'topic': self.cfg['topic'], 'title': title, 'message': message, 'priority': priority,
+                           'tags': tags or []}
+                if click:
+                    payload['click'] = click
+                self.send(self.cfg['server'], payload, {}, 'ntfy')
         line = self.cfg.get('line') or {}
         if line.get('channel_access_token') and line.get('to'):
             wanted = line.get('tags')
             if wanted and not set(wanted) & set(tags or []):
                 return
-            payload = {'to': line['to'], 'messages': [{'type': 'text', 'text': f'{title}\n{message}'[:5000]}]}
-            self.send(line.get('url') or self.LINE_PUSH, payload,
+            messages = [{'type': 'text', 'text': f'{title}\n{message}'[:5000]}]
+            if picture_url:
+                messages.append({'type': 'image', 'originalContentUrl': picture_url, 'previewImageUrl': picture_url})
+            self.send(line.get('url') or self.LINE_PUSH, {'to': line['to'], 'messages': messages},
                       {'Authorization': f"Bearer {line['channel_access_token']}"}, 'LINE')
+
+    @staticmethod
+    def header(text):
+        """A header value for ntfy: ASCII as is, anything else RFC 2047 (UTF-8, base64)."""
+        text = str(text)
+        if text.isascii():
+            return text
+        return '=?UTF-8?B?' + base64.b64encode(text.encode('utf-8')).decode('ascii') + '?='
+
+    def attach(self, title, message, priority, tags, click, picture, name):
+        """Publishes the notification with `picture` as its attachment (ntfy: PUT the file to the
+        topic, the words in headers) and returns the attachment's URL from ntfy's answer, or None
+        when the answer has none."""
+        url = self.cfg['server'].rstrip('/') + '/' + self.cfg['topic']
+        headers = {'Title': self.header(title), 'Message': self.header(message), 'Priority': str(priority),
+                   'Filename': name, 'Content-Type': 'image/jpeg'}
+        if tags:
+            headers['Tags'] = ','.join(tags)
+        if click:
+            headers['Click'] = click
+        request = urllib.request.Request(url, data=picture, method='PUT', headers=headers)
+        try:
+            with self.urlopen(request, timeout=30) as response:
+                answer = response.read(65536)
+        except urllib.error.HTTPError as e:
+            reason = e.read(300).decode('utf-8', 'replace')
+            raise OSError(f'ntfy answered {e.code}: {reason}') from None
+        try:
+            return (json.loads(answer.decode('utf-8')).get('attachment') or {}).get('url')
+        except (ValueError, AttributeError):
+            return None
 
     def send(self, url, payload, headers, service):
         body = json.dumps(payload, ensure_ascii=False).encode('utf-8')
@@ -4999,8 +5040,9 @@ class LightWatch:
     agree (someone walking past, or the exposure settling, does not flip it). Every change is
     appended to light_log.csv next to config.json (date, time, on/off, level): the long record
     stays on the PC (the user: 「長時間紀錄統計的資料存在電腦就好」), and the phone's camera page
-    shows today's changes from `/v1/light`. Turning on is sent to ntfy; turning off is only
-    recorded."""
+    shows today's changes from `/v1/light`. Every change (on and off) is sent to ntfy (and LINE
+    when configured; the user 11/11: 「目前先加入亮燈和暗燈的通知就好」); the first look of a
+    watch window is notified only when the light is already on."""
 
     KEEP = 30  # recent samples kept for /v1/light (to pick the thresholds)
 
@@ -5022,6 +5064,7 @@ class LightWatch:
         self.pending = None   # a state seen once that the next sample has to confirm
         self.error = None
         self.samples = []     # the last (when, level)
+        self.picture = None   # the JPEG the last level was measured on (sent with a change's notification)
 
     def active(self, when=None):
         """Whether this moment is inside the watch window (hours, and Monday-Friday when
@@ -5052,6 +5095,7 @@ class LightWatch:
         now = self.clock()
         change = None
         with self.lock:
+            self.picture = data
             self.error = '找不到門框的圖案，用上次的位置量' if self.aim is not None and self.aim.lost else None
             self.level = level
             self.samples = (self.samples + [(now, level)])[-self.KEEP:]
@@ -5091,10 +5135,10 @@ class LightWatch:
         except OSError as exc:
             logging.warning('light log could not be written: %s', exc)
         logging.info('light %s: %s (level %.0f%s)', self.name, 'on' if on else 'off', level, ', at start' if first else '')
-        if on and self.notify is not None:
-            title = f'{self.pc_name}：{self.name}亮了' + ('（小幫手啟動時已亮）' if first else '')
+        if self.notify is not None and (on or not first):
+            title = f'{self.pc_name}：{self.name}' + ('亮了' if on else '暗了') + ('（小幫手啟動時已亮）' if first else '')
             try:
-                self.notify(title, f'{stamp:%H:%M} 亮度 {level:.0f}', tags=['bulb'])
+                self.notify(title, f'{stamp:%H:%M} 亮度 {level:.0f}', tags=['bulb'], picture=self.picture, picture_name='light.jpg')
             except OSError as exc:
                 logging.warning('light notification failed: %s', exc)
 
