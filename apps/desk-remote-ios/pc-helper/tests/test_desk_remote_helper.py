@@ -2851,6 +2851,30 @@ class NotifierTests(unittest.TestCase):
         self.assertEqual(sent[-1][0], h.Notifier.LINE_PUSH)
         self.assertEqual(len(sent), 4)
 
+        # A picture rides along (0.5.48): PUT to the topic as the ntfy attachment, its URL as a
+        # LINE image message in the same push.
+        class Attached(Answer):
+            def read(self, n=-1):
+                return b'{"id":"x","attachment":{"name":"light.jpg","url":"https://ntfy.example/file/abc.jpg"}}'
+
+        def urlopen_attach(request, timeout=10):
+            sent.append((request.full_url, request.get_method(), dict(request.header_items()), request.data))
+            return Attached()
+        sent.clear()
+        notifier = h.Notifier(cfg, urlopen=urlopen_attach)
+        notifier.post('示範電腦：玻璃門亮了', '09:02 亮度 175', tags=['bulb'], picture=b'\xff\xd8\xffjpeg', picture_name='light.jpg')
+        self.assertEqual([(url, method) for url, method, _, _ in sent],
+                         [('https://ntfy.example/topic-1', 'PUT'), (h.Notifier.LINE_PUSH, 'POST')])
+        headers = sent[0][2]
+        self.assertEqual(sent[0][3], b'\xff\xd8\xffjpeg')
+        self.assertEqual((headers['Filename'], headers['Tags'], headers['Priority']), ('light.jpg', 'bulb', '3'))
+        self.assertTrue(headers['Title'].startswith('=?UTF-8?B?') and headers['Title'].endswith('?='))
+        self.assertEqual(h.Notifier.header('plain'), 'plain')
+        line = json.loads(sent[1][3].decode('utf-8'))
+        self.assertEqual(line['messages'][1], {'type': 'image', 'originalContentUrl': 'https://ntfy.example/file/abc.jpg',
+                                               'previewImageUrl': 'https://ntfy.example/file/abc.jpg'})
+        self.assertEqual(line['messages'][0]['type'], 'text')
+
         def refuse(request, timeout=10):
             raise urllib.error.HTTPError(request.full_url, 401, 'Unauthorized', {}, __import__('io').BytesIO(b'{"message":"invalid token"}'))
         with self.assertRaisesRegex(OSError, 'LINE answered 401'):
@@ -2899,6 +2923,8 @@ class LightWatchTests(unittest.TestCase):
         self.assertEqual(len(self.notes), 2, 'turning off was not notified')
         self.assertEqual(self.notes[1][0], '示範電腦：玻璃門暗了')
         self.assertEqual(self.notes[1][2].get('tags'), ['bulb'])
+        self.assertTrue(self.notes[1][2].get('picture', b'').startswith(b'\xff\xd8\xff'), 'the camera frame did not ride along')
+        self.assertEqual(self.notes[1][2].get('picture_name'), 'light.jpg')
         lines = (self.root / 'light_log.csv').read_text(encoding='utf-8').splitlines()
         self.assertEqual(lines[0], 'date,time,state,level,note')
         self.assertEqual([l.split(',')[2:] for l in lines[1:]], [['off', '55.0', 'start'], ['on', '175.0'], ['off', '58.0']])
