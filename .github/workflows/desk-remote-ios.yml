@@ -99,7 +99,8 @@ jobs:
             echo "Reports exceed 1 MB; refusing to upload."
             exit 1
           fi
-      # Replaces the branch each run (no history kept). Only fixture-data simulator screens; 5 MB cap.
+      # Replaces the branch each run (no history kept). Only fixture-data simulator screens; 10 MB cap
+      # (the set passed 5 MB on 11/10 once the camera row and the local-address field added screens).
       - name: Publish simulator screenshots
         if: always()
         working-directory: ${{ env.APP_DIR }}/build
@@ -113,8 +114,8 @@ jobs:
           fi
           total=$(find screenshots-ui -type f -exec stat -f %z {} + | awk '{s+=$1} END {print s+0}')
           echo "screenshots total: $total bytes"
-          if [ "$total" -gt 5242880 ]; then
-            echo "Screenshots exceed 5 MB; refusing to publish."
+          if [ "$total" -gt 10485760 ]; then
+            echo "Screenshots exceed 10 MB; refusing to publish."
             exit 1
           fi
           cd screenshots-ui
