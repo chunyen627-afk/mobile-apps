@@ -8,7 +8,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 EXPECTED_ALBUM_TESTS="${EXPECTED_ALBUM_TESTS:-52}"
 EXPECTED_MINER_TESTS="${EXPECTED_MINER_TESTS:-126}"
-EXPECTED_DESK_TESTS="${EXPECTED_DESK_TESTS:-47}"
+EXPECTED_DESK_TESTS="${EXPECTED_DESK_TESTS:-48}"
 EXPECTED_THERMO_TESTS="${EXPECTED_THERMO_TESTS:-32}"
 EXPECTED_THERMO_GATEWAY_TESTS="${EXPECTED_THERMO_GATEWAY_TESTS:-38}"
 # Plus the 5 iPad layout shots on an iPad (SIM_MATCH).
@@ -17,7 +17,7 @@ EXPECTED_TOOLBOX_UI_TESTS="${EXPECTED_TOOLBOX_UI_TESTS:-7}"
 EXPECTED_ALBUM_UI_TESTS="${EXPECTED_ALBUM_UI_TESTS:-6}"
 EXPECTED_DESK_UI_TESTS="${EXPECTED_DESK_UI_TESTS:-43}"
 # Includes 3 Windows-only tests, skipped (and counted) on macOS.
-EXPECTED_DESK_HELPER_TESTS="${EXPECTED_DESK_HELPER_TESTS:-186}"
+EXPECTED_DESK_HELPER_TESTS="${EXPECTED_DESK_HELPER_TESTS:-192}"
 # The desk remote's fake helpers, as its own scripts/build.sh runs them: the first on the port in
 # its fake-config.json, then one with someone at the keyboard, one with Codex closed to the tray
 # and newer Codex limits, one with a window popped up and an update pending.
