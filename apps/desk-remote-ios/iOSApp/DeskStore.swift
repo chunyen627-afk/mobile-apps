@@ -134,6 +134,7 @@ final class DeskStore: ObservableObject {
 
     /// Remembers the plan limits a PC reported (every place that reads a PC's state calls this).
     func note(_ state: HelperState, pcID: UUID) {
+        learnLAN(state, pcID: pcID)
         let links = state.recentLinks
         if recent[pcID] != links { recent[pcID] = links }
         for app in DeskApp.allCases {
@@ -187,7 +188,18 @@ final class DeskStore: ObservableObject {
 
     func client(_ id: UUID) -> HelperClient? {
         guard let pc = pc(id), let endpoint = pc.endpoint, let token = DeskSecret.load(id) else { return nil }
-        return HelperClient(endpoint: endpoint, token: token)
+        return HelperClient(endpoint: endpoint, token: token, lan: pc.lanEndpoint)
+    }
+
+    /// Keeps the local-network address the PC reports (helper 0.5.44), so the next look can try
+    /// it at once; a PC that reports none keeps whatever the form holds.
+    private func learnLAN(_ state: HelperState, pcID: UUID) {
+        guard let reported = state.pc.lanHost?.trimmingCharacters(in: .whitespaces), !reported.isEmpty,
+              let index = pcs.firstIndex(where: { $0.id == pcID }), pcs[index].lanHost != reported,
+              HelperEndpoint(host: reported, port: pcs[index].port) != nil
+        else { return }
+        pcs[index].lanHost = reported
+        persist()
     }
 }
 

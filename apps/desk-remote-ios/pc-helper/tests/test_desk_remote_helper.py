@@ -7,6 +7,7 @@ import ipaddress
 import json
 import os
 import shutil
+import socket
 import sys
 import tempfile
 import threading
@@ -828,6 +829,40 @@ class DrivingTests(FakeEnvironment):
         self.assertEqual(watcher.turns[('claude', A)], 'idle')
         self.assertEqual(sent, before)
         self.assertFalse([s for s in sent if '一輪' in s[0]])
+
+
+class LanTests(FakeEnvironment):
+    def test_lan_binding_from_config_or_the_default_route(self):
+        base = {'bind_ip': '10.1.2.3', 'port': 18790}
+        self.assertIsNone(h.lan_binding(base))
+        self.assertIsNone(h.lan_binding(dict(base, lan={'enabled': False, 'bind_ip': '192.168.1.5'})))
+        self.assertEqual(h.lan_binding(dict(base, lan={'enabled': True, 'bind_ip': '192.168.1.5'})),
+                         ('192.168.1.5', ipaddress.ip_network('192.168.1.0/24')))
+        self.assertEqual(h.lan_binding(dict(base, lan={'enabled': True, 'bind_ip': '192.168.1.5', 'prefix': 16})),
+                         ('192.168.1.5', ipaddress.ip_network('192.168.0.0/16')))
+        self.assertEqual(h.lan_binding(dict(base, lan={'enabled': True}), lan_address=lambda: '192.168.1.7'),
+                         ('192.168.1.7', ipaddress.ip_network('192.168.1.0/24')))
+        # No default route, the ZeroTier address itself, loopback, 0.0.0.0 and junk: nothing to add.
+        for bad in (None, '10.1.2.3', '127.0.0.1', '0.0.0.0', 'nope'):
+            with self.subTest(bad=bad):
+                self.assertIsNone(h.lan_binding(dict(base, lan={'enabled': True}), lan_address=lambda: bad))
+
+    def test_lan_listener_accepts_that_network_and_state_reports_it(self):
+        hub = h.Hub('示範電腦', self.sources, h.FixedPresence(self.fake.cfg['presence']))
+        self.assertEqual(hub.state()['pc']['lanHost'], None)
+        probe = socket.socket(); probe.bind(('127.0.0.1', 0)); port = probe.getsockname()[1]; probe.close()
+        cfg = {'bind_ip': '10.1.2.3', 'port': port, 'lan': {'enabled': True}}
+        # Only the ZeroTier network is allowed on its own; the listener adds the LAN one it sits in.
+        thread = h.serve_lan(hub, h.AuthGate(TOKEN), cfg, [ipaddress.ip_network('10.1.0.0/16')], None,
+                             ('127.0.0.1', ipaddress.ip_network('127.0.0.0/8')))
+        self.assertTrue(thread.ready.wait(5))
+        self.assertEqual(hub.lan, ('127.0.0.1', port))
+        request = urllib.request.Request(f'http://127.0.0.1:{port}/v1/state', headers={'Authorization': f'Bearer {TOKEN}'})
+        with urllib.request.urlopen(request, timeout=10) as response:
+            body = json.loads(response.read())
+        self.assertEqual((body['pc']['lanHost'], body['pc']['lanPort']), ('127.0.0.1', port))
+        with urllib.request.urlopen(f'http://127.0.0.1:{port}/health', timeout=10) as response:
+            self.assertEqual(json.loads(response.read()), {'ok': True})
 
 
 class HttpTests(FakeEnvironment):

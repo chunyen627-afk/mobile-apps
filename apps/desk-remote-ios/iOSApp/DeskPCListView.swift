@@ -108,7 +108,7 @@ struct DeskPCRow: View {
         do {
             let state = try await client.state()
             store.note(state, pcID: pc.id)
-            line = "連線正常・\(DeskText.presence(state.presence))"
+            line = (client.viaLAN ? "連線正常（區網）・" : "連線正常・") + DeskText.presence(state.presence)
             if let waiting = state.elevate?.pending, waiting > 0 {
                 line += "・\(waiting) 個管理員權限請求"
             }
@@ -177,6 +177,7 @@ struct DeskPCEditView: View {
     @State private var name = ""
     @State private var host = ""
     @State private var port = String(DeskPC.defaultPort)
+    @State private var lanHost = ""
     @State private var token = ""
     @State private var elevateKey = ""
     @State private var removeElevateKey = false
@@ -190,7 +191,8 @@ struct DeskPCEditView: View {
     private var existingKey: Bool { existing.map { store.hasElevateKey($0.id) } ?? false }
 
     private var problem: String? {
-        if let problem = DeskPC.problem(name: name, host: host, port: port, token: token, tokenRequired: existing == nil) {
+        if let problem = DeskPC.problem(name: name, host: host, port: port, token: token, tokenRequired: existing == nil,
+                                        lanHost: lanHost) {
             return problem
         }
         if !elevateKey.filter({ !$0.isWhitespace }).isEmpty && ElevateSigner.key(fromHex: elevateKey) == nil {
@@ -213,10 +215,15 @@ struct DeskPCEditView: View {
                     TextField("埠", text: $port)
                         .keyboardType(.numberPad)
                         .accessibilityIdentifier("pc-port")
+                    TextField("區網位址（同一個 Wi-Fi 時直連，選填）", text: $lanHost)
+                        .keyboardType(.numbersAndPunctuation)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .accessibilityIdentifier("pc-lan-host")
                 } header: {
                     Text("電腦")
                 } footer: {
-                    Text("只在私人網路（ZeroTier）裡連線，位址只存在這支手機。")
+                    Text("平常走私人網路（ZeroTier）；手機和電腦在同一個 Wi-Fi 時改走區網位址，兩個同時試、誰先回就用誰。電腦端開了 lan 會自動填上，不用自己打。位址只存在這支手機。")
                 }
                 Section {
                     // Not a login password: without this, two secure fields made iOS offer a
@@ -275,6 +282,7 @@ struct DeskPCEditView: View {
                     name = existing.name
                     host = existing.host
                     port = String(existing.port)
+                    lanHost = existing.lanHost ?? ""
                 }
             }
         }
@@ -282,8 +290,9 @@ struct DeskPCEditView: View {
 
     private func save() {
         guard problem == nil, let number = Int(port.trimmingCharacters(in: .whitespaces)) else { return }
+        let lan = lanHost.trimmingCharacters(in: .whitespaces)
         let pc = DeskPC(id: existing?.id ?? UUID(), name: name.trimmingCharacters(in: .whitespaces),
-                        host: host.trimmingCharacters(in: .whitespaces), port: number)
+                        host: host.trimmingCharacters(in: .whitespaces), port: number, lanHost: lan.isEmpty ? nil : lan)
         guard store.save(pc, token: token) else {
             saveFailed = true
             return

@@ -22,6 +22,7 @@ import os
 import re
 import secrets
 import shutil
+import socket
 import sqlite3
 import sys
 import tempfile
@@ -38,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.43'
+VERSION = '0.5.44'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -1761,6 +1762,7 @@ class Hub:
         self.restart = None               # () -> None: start the helper again (it exits), from the phone
         self.clipboard = None             # ClipboardSync when a shared clipboard folder is configured (0.5.40)
         self.camera = None                # CameraFeed: the webcam, open only while the phone's 看鏡頭 page is (0.5.41)
+        self.lan = None                   # (ip, port) where the helper also listens on the local network (0.5.44)
         self.alerts = {'usage_percent': 80, 'context_percent': 80}
         self.chosen_modes = {}            # (app, id) -> (mode, when): a Codex pick its rollout shows only next turn
         self.page_names = {}              # (app, id) -> the page title last seen for it, when its files say otherwise
@@ -1791,7 +1793,9 @@ class Hub:
                  + (['camera'] if self.camera is not None else []))
         disk = self.disk_version()
         newer = disk if disk and version_key(disk) > version_key(VERSION) else None
-        return {'ok': True, 'pc': {'name': self.pc_name, 'helperVersion': VERSION, 'helperUpdate': newer},
+        lan_host, lan_port = self.lan or (None, None)
+        return {'ok': True, 'pc': {'name': self.pc_name, 'helperVersion': VERSION, 'helperUpdate': newer,
+                                   'lanHost': lan_host, 'lanPort': lan_port},
                 'capabilities': self.capabilities + extra,
                 'apps': apps, 'presence': {'idleSeconds': presence.get('idleSeconds'), 'locked': presence.get('locked'),
                                            'uac': bool(presence.get('uac'))},
@@ -5177,6 +5181,76 @@ def default_config_path():
     return Path(os.environ.get('LOCALAPPDATA', Path.home())) / 'DeskRemote' / 'config.json'
 
 
+def lan_address():
+    """This PC's address on the network the default route uses (the Wi-Fi or Ethernet adapter;
+    not ZeroTier, WSL or Hyper-V, which have no default route). A UDP socket "connected" to an
+    unroutable test address makes Windows pick the interface without sending anything."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.connect(('192.0.2.1', 9))
+            return probe.getsockname()[0]
+    except OSError:
+        return None
+
+
+def lan_binding(cfg, lan_address=lan_address):
+    """Where the helper also listens on the local network, or None: `lan.bind_ip`, or the address
+    of the adapter the default route uses, with `lan.prefix` (24) as the network the phone may come
+    from. Off unless `lan.enabled`. Never the ZeroTier address, loopback or 0.0.0.0.
+
+    The phone on the same Wi-Fi reaches this address directly: when the phone and the PC sit
+    behind the same NAT, ZeroTier takes minutes to find the direct path and the relayed path in
+    between times out (2026-11-11, the office Wi-Fi). App 0.6.10 learns the address from
+    `/v1/state` and tries both, keeping whichever answers first."""
+    lan = cfg.get('lan') or {}
+    if not lan.get('enabled'):
+        return None
+    ip = lan.get('bind_ip') or lan_address()
+    if not ip:
+        return None
+    try:
+        address = ipaddress.ip_address(ip)
+    except ValueError:
+        return None
+    if address.is_unspecified or address.is_loopback or str(address) == cfg.get('bind_ip'):
+        return None
+    network = ipaddress.ip_network(f'{address}/{int(lan.get("prefix", 24))}', strict=False)
+    return str(address), network
+
+
+def serve_lan(hub, gate, cfg, networks, runner, binding, port=None, retry_seconds=10):
+    """Starts the second listener on the local network address in `binding` ((ip, network)) and
+    returns its thread; the handler accepts the ZeroTier networks and that network. The adapter
+    may not be up yet at logon: a bind that fails because the address is not here yet is retried
+    every `retry_seconds` on the thread, any other error is logged once and gives up."""
+    ip, network = binding
+    port = port or cfg['port']
+    handler = handler_for(hub, gate, list(networks) + [network], runner)
+    ready = threading.Event()
+
+    def run():
+        while True:
+            try:
+                server = ThreadingHTTPServer((ip, port), handler)
+                break
+            except OSError as exc:
+                if getattr(exc, 'winerror', None) != 10049:
+                    logging.warning('lan: cannot listen on %s:%s (%s); ZeroTier only', ip, port, exc)
+                    ready.set()
+                    return
+                time.sleep(retry_seconds)
+        server.daemon_threads = True
+        hub.lan = (ip, port)
+        logging.info('lan: also listening on %s:%s for a phone on the same network', ip, port)
+        ready.set()
+        server.serve_forever(poll_interval=1)
+
+    thread = threading.Thread(target=run, daemon=True, name='lan-listener')
+    thread.ready = ready
+    thread.start()
+    return thread
+
+
 def real_sources(cfg):
     home = Path.home()
     local = Path(os.environ.get('LOCALAPPDATA', home / 'AppData' / 'Local'))
@@ -5705,6 +5779,9 @@ def serve(hub, gate, cfg, networks, runner=None):
     logging.info('listening on the configured address')
     if sys.stdout:
         print(f"Listening on {cfg['bind_ip']}:{cfg['port']}.", flush=True)
+    binding = lan_binding(cfg)
+    if binding:
+        serve_lan(hub, gate, cfg, networks, runner, binding)
     server.serve_forever(poll_interval=1)
 
 

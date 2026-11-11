@@ -739,6 +739,49 @@ final class TextTests: XCTestCase {
         XCTAssertEqual(DeskText.blocks("#標籤不是標題"), [.prose("#標籤不是標題")])
     }
 
+    func testPCKeepsItsLocalAddressAndReadsOlderSavesWithoutOne() throws {
+        let saved = try JSONDecoder().decode([DeskPC].self, from: Data(
+            #"[{"id":"6E0A1C2B-3D4E-4F50-8A6B-7C8D9E0F1A2B","name":"辦公室","host":"10.1.2.3","port":18790}]"#.utf8))
+        XCTAssertNil(saved[0].lanHost)
+        XCTAssertNil(saved[0].lanEndpoint)
+        var pc = saved[0]
+        pc.lanHost = "192.168.1.5"
+        let again = try JSONDecoder().decode(DeskPC.self, from: JSONEncoder().encode(pc))
+        XCTAssertEqual(again.lanEndpoint, HelperEndpoint(host: "192.168.1.5", port: 18790))
+        XCTAssertNotNil(DeskPC.problem(name: "a", host: "10.1.2.3", port: "18790", token: "", tokenRequired: false,
+                                       lanHost: "http://192.168.1.5"))
+        XCTAssertNil(DeskPC.problem(name: "a", host: "10.1.2.3", port: "18790", token: "", tokenRequired: false, lanHost: " "))
+        // Helper 0.5.44 reports it in its state; older helpers do not.
+        let reported = try JSONDecoder().decode(HelperState.PC.self, from: Data(
+            #"{"name":"辦公室","helperVersion":"0.5.44","helperUpdate":null,"lanHost":"192.168.1.5","lanPort":18790}"#.utf8))
+        XCTAssertEqual(reported.lanHost, "192.168.1.5")
+        XCTAssertEqual(reported.lanPort, 18790)
+        let older = try JSONDecoder().decode(HelperState.PC.self, from: Data(#"{"name":"辦公室","helperVersion":"0.5.43"}"#.utf8))
+        XCTAssertNil(older.lanHost)
+    }
+
+    func testRequestsFollowTheAddressThatAnsweredLast() throws {
+        let book = RouteBook()
+        let zt = try XCTUnwrap(HelperEndpoint(host: "10.1.2.3", port: 18790))
+        let lan = try XCTUnwrap(HelperEndpoint(host: "192.168.1.5", port: 18790))
+        let token = String(repeating: "x", count: 32)
+        let client = HelperClient(endpoint: zt, token: token, lan: lan, routes: book)
+        XCTAssertEqual(client.active, zt)
+        XCTAssertFalse(client.viaLAN)
+        book.note("10.1.2.3:18790", lanWon: true)
+        XCTAssertEqual(client.active, lan)
+        XCTAssertTrue(client.viaLAN)
+        book.forget("10.1.2.3:18790")
+        XCTAssertEqual(client.active, zt)
+        // Without a local address the book changes nothing, and another PC's win is not this one's.
+        book.note("10.1.2.3:18790", lanWon: true)
+        let plain = HelperClient(endpoint: zt, token: token, routes: book)
+        XCTAssertEqual(plain.active, zt)
+        XCTAssertFalse(plain.viaLAN)
+        let other = try XCTUnwrap(HelperEndpoint(host: "10.1.2.4", port: 18790))
+        XCTAssertFalse(HelperClient(endpoint: other, token: token, lan: lan, routes: book).viaLAN)
+    }
+
     func testPCFormProblems() {
         let token = String(repeating: "x", count: 32)
         XCTAssertNil(DeskPC.problem(name: "辦公室", host: "10.1.2.3", port: "18790", token: token, tokenRequired: true))

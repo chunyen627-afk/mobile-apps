@@ -59,19 +59,95 @@ public enum HelperFailure: Error, Equatable, Sendable {
     case cancelled
 }
 
+/// Which of a PC's two addresses answered last: its ZeroTier address, or the local-network one
+/// the helper reported (0.5.44) for a phone on the same Wi-Fi. `HelperClient.state()` sends to
+/// both at once and keeps the winner for the other requests; a request that cannot reach the kept
+/// address forgets it, so the next `state()` races again. Keyed by the PC's ZeroTier address.
+///
+/// Why: with the phone and the PC on the same office Wi-Fi, ZeroTier takes minutes to find the
+/// direct path (both sit behind one NAT) and the relayed path in between times out, while the
+/// local address answers at once (2026-11-11).
+public final class RouteBook: @unchecked Sendable {
+    public static let shared = RouteBook()
+    private let lock = NSLock()
+    private var lanWins: Set<String> = []
+
+    public init() {}
+
+    public func prefersLAN(_ key: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return lanWins.contains(key)
+    }
+
+    public func note(_ key: String, lanWon: Bool) {
+        lock.lock()
+        defer { lock.unlock() }
+        if lanWon { lanWins.insert(key) } else { lanWins.remove(key) }
+    }
+
+    public func forget(_ key: String) { note(key, lanWon: false) }
+}
+
 /// Reads one PC's helper. Every request carries `Authorization: Bearer <token>`, uses an
 /// ephemeral session (no cookies, cache or stored credentials), never follows a redirect and
 /// accepts at most 4 MB of JSON.
 public struct HelperClient: Sendable {
     public let endpoint: HelperEndpoint
+    /// The helper's address on the PC's local network, when the PC reported one (helper 0.5.44).
+    public let lan: HelperEndpoint?
     private let token: String
     private let session: URLSession
+    private let routes: RouteBook
     static let maxBytes = 4 * 1024 * 1024
 
-    public init(endpoint: HelperEndpoint, token: String, session: URLSession? = nil) {
+    public init(endpoint: HelperEndpoint, token: String, session: URLSession? = nil, lan: HelperEndpoint? = nil,
+                routes: RouteBook = .shared) {
         self.endpoint = endpoint
+        self.lan = lan
         self.token = token
         self.session = session ?? Self.sharedSession
+        self.routes = routes
+    }
+
+    /// The address the requests go to now: the local one while it is the one that answered last.
+    public var active: HelperEndpoint { viaLAN ? (lan ?? endpoint) : endpoint }
+
+    /// The local-network address is in use (shown as 「區網」 in the PC list).
+    public var viaLAN: Bool { lan != nil && routes.prefersLAN(routeKey) }
+
+    private var routeKey: String { "\(endpoint.host):\(endpoint.port)" }
+
+    /// Sends the same request to the ZeroTier and the local-network address at once and returns
+    /// the first answer, remembering which address gave it. Both failing throws the ZeroTier one's
+    /// error (the phone's own network problems show there).
+    private func racing<T: Sendable>(_ lan: HelperEndpoint,
+                                     _ send: @escaping @Sendable (HelperEndpoint) async throws -> T) async throws -> T {
+        let routes = routes, key = routeKey, primary = endpoint
+        return try await withThrowingTaskGroup(of: (Bool, Result<T, any Error>).self) { group in
+            for (isLAN, target) in [(false, primary), (true, lan)] {
+                group.addTask {
+                    do {
+                        let value = try await send(target)
+                        return (isLAN, .success(value))
+                    } catch {
+                        return (isLAN, .failure(error))
+                    }
+                }
+            }
+            var errors: [Bool: any Error] = [:]
+            for try await (isLAN, result) in group {
+                switch result {
+                case .success(let value):
+                    routes.note(key, lanWon: isLAN)
+                    group.cancelAll()
+                    return value
+                case .failure(let error):
+                    errors[isLAN] = error
+                }
+            }
+            throw errors[false] ?? errors[true] ?? HelperFailure.unreachable
+        }
     }
 
     /// One ephemeral session for every PC, so views can create clients freely.
@@ -86,7 +162,8 @@ public struct HelperClient: Sendable {
     }()
 
     public func state() async throws -> HelperState {
-        try await get(["v1", "state"], timeout: 10)
+        guard let lan else { return try await get(["v1", "state"], timeout: 10) }
+        return try await racing(lan) { target -> HelperState in try await self.get(["v1", "state"], timeout: 10, at: target) }
     }
 
     public func sessions(_ app: DeskApp, limit: Int = 50) async throws -> SessionList {
@@ -186,7 +263,7 @@ public struct HelperClient: Sendable {
     }
 
     private func imageBytes(_ path: [String], query: [URLQueryItem] = []) async throws -> Data {
-        guard let url = endpoint.url(path, query: query) else { throw HelperFailure.badResponse }
+        guard let url = active.url(path, query: query) else { throw HelperFailure.badResponse }
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
         request.httpMethod = "GET"
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -195,7 +272,7 @@ public struct HelperClient: Sendable {
         do {
             (data, response) = try await session.data(for: request, delegate: NoRedirect.shared)
         } catch {
-            throw Self.failure(for: error)
+            throw unreached(Self.failure(for: error))
         }
         guard let http = response as? HTTPURLResponse, data.count <= Self.maxBytes else { throw HelperFailure.badResponse }
         if http.statusCode == 200, (http.value(forHTTPHeaderField: "Content-Type") ?? "").hasPrefix("image/") {
@@ -244,7 +321,7 @@ public struct HelperClient: Sendable {
     /// Approves with the phone's signature, or denies (no signature needed). Returns the new state.
     @discardableResult
     public func decideElevate(_ id: String, allow: Bool, signature: String?) async throws -> String? {
-        guard let url = endpoint.url(["v1", "elevate", id]) else { throw HelperFailure.badResponse }
+        guard let url = active.url(["v1", "elevate", id]) else { throw HelperFailure.badResponse }
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 20)
         request.httpMethod = "POST"
         request.httpBody = try JSONEncoder().encode(ElevateDecision(decision: allow ? "allow" : "deny", hmac: signature))
@@ -314,7 +391,7 @@ public struct HelperClient: Sendable {
     }
 
     private func post<B: Encodable, T: Decodable>(_ segments: [String], body: B, timeout: TimeInterval) async throws -> T {
-        guard let url = endpoint.url(segments) else { throw HelperFailure.badResponse }
+        guard let url = active.url(segments) else { throw HelperFailure.badResponse }
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: timeout)
         request.httpMethod = "POST"
         request.httpBody = try JSONEncoder().encode(body)
@@ -322,14 +399,23 @@ public struct HelperClient: Sendable {
         return try await perform(request)
     }
 
-    private func get<T: Decodable>(_ segments: [String], query: [URLQueryItem] = [], timeout: TimeInterval) async throws -> T {
-        guard let url = endpoint.url(segments, query: query) else { throw HelperFailure.badResponse }
+    /// `at` sends to that address instead of the active one (the race in `state()`).
+    private func get<T: Decodable>(_ segments: [String], query: [URLQueryItem] = [], timeout: TimeInterval,
+                                   at target: HelperEndpoint? = nil) async throws -> T {
+        guard let url = (target ?? active).url(segments, query: query) else { throw HelperFailure.badResponse }
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: timeout)
         request.httpMethod = "GET"
-        return try await perform(request)
+        return try await perform(request, forgetting: target == nil)
     }
 
-    private func perform<T: Decodable>(_ original: URLRequest) async throws -> T {
+    /// The active address did not answer: stop preferring the local one, so the next `state()`
+    /// races both again (the phone left that Wi-Fi).
+    private func unreached(_ failure: HelperFailure) -> HelperFailure {
+        if viaLAN, failure == .unreachable || failure == .timeout { routes.forget(routeKey) }
+        return failure
+    }
+
+    private func perform<T: Decodable>(_ original: URLRequest, forgetting: Bool = true) async throws -> T {
         var request = original
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -338,7 +424,7 @@ public struct HelperClient: Sendable {
         do {
             (data, response) = try await session.data(for: request, delegate: NoRedirect.shared)
         } catch {
-            throw Self.failure(for: error)
+            throw forgetting ? unreached(Self.failure(for: error)) : Self.failure(for: error)
         }
         guard let http = response as? HTTPURLResponse, data.count <= Self.maxBytes else { throw HelperFailure.badResponse }
         return try Self.decode(T.self, status: http.statusCode, data: data)
