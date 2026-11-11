@@ -82,6 +82,10 @@ final class VLCPlayback {
         seekDeadline = Date().addingTimeInterval(3)
         player.time = VLCTime(int: Int32(min(Double(Int32.max), max(0, seconds * 1000))))
     }
+    #if DEBUG && targetEnvironment(simulator)
+    /// UI tests only: VLC's own state and clock, next to the position the app shows.
+    var debugState: String { "\(player.state.rawValue)@\(player.time.intValue / 1000)" }
+    #endif
     func stop() {
         guard !stopped else { return }
         stopped = true

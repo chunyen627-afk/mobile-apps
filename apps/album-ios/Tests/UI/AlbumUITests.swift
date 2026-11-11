@@ -135,39 +135,35 @@ final class AlbumUITests: XCTestCase {
             XCTAssertTrue(app.buttons["播放 1 個項目"].waitForExistence(timeout: 10))
             app.buttons["播放 1 個項目"].tap()
             XCTAssertTrue(app.otherElements["vlcVideoSurface"].waitForExistence(timeout: 10))
-            // A slow accessibility snapshot can outlast the controls' hide timer.
-            // Reveal and pause like a user before inspecting the seek controls.
+            // The test clip is 30 s long. The seek check used to come after a played-and-hidden
+            // check, and on a busy runner those steps took the clip to its last frame (29.833 s)
+            // before the pause: the seek to 15 s then showed "0:15" over the last frame and playback
+            // never came back (toolbox runs 42511452483, 42970581456). Pause first, so the seek
+            // starts from the first seconds of the clip.
             tapOverlay("暫停", until: app.buttons["繼續"])
             XCTAssertTrue(app.sliders["影片進度"].waitForExistence(timeout: 15))
-            app.buttons["繼續"].tap()
-            waitUntilGone(app.buttons["leavePlayer"], timeout: 12)  // 4 s hide timer; 8 s was once short on the iPhone runner (11/08)
-            assertVideoFits(aspect: pass == 0 ? 16.0 / 9.0 : 4.0 / 3.0)
-            capture("avi-fit-playing-\(pass)")
-            tapOverlay("暫停", until: app.buttons["繼續"])
             app.sliders["影片進度"].adjust(toNormalizedSliderPosition: 0.5)
             let reached = XCTNSPredicateExpectation(predicate: NSPredicate { [self] _, _ in
-                let parts = app.staticTexts["videoTime"].label.split(separator: ":").compactMap { Int($0) }
-                return parts.count == 2 && (12...18).contains(parts[0] * 60 + parts[1])
+                videoSeconds().map { (12...18).contains($0) } ?? false
             }, object: nil)
-            XCTAssertEqual(XCTWaiter.wait(for: [reached], timeout: 10), .completed)
+            XCTAssertEqual(XCTWaiter.wait(for: [reached], timeout: 10), .completed, "player: \(playerDebug)")
             capture("avi-paused-seek-\(pass)")
             assertPausedVideoCanHideControls(aspect: pass == 0 ? 16.0 / 9.0 : 4.0 / 3.0, name: "avi-paused-hidden-\(pass)")
             let start = try XCTUnwrap(videoSeconds(), "no paused position; player: \(playerDebug)")
             app.buttons["繼續"].tap()
             let resumedAt = Date()
-            // Wait past the temporary seek display. This must be the decoder's
-            // advancing clock, not merely the slider's requested position.
-            Thread.sleep(forTimeInterval: 3.5)
-            centerTap()
-            // Measured against the time that has really gone by since 繼續: a fixed window (17–24 s)
-            // failed on a busy iPad runner whose controls came back late, the video rightly at 29 s
-            // (run 42511452483). Ahead of where it was paused, and not ahead of the clock.
+            // The decoder's advancing clock, not the slider's requested position (shown for up to
+            // 3 s after 繼續), read from the player's debug line, which does not hide itself.
+            // Ahead of where it was paused, and not ahead of the time really gone by.
             let resumed = XCTNSPredicateExpectation(predicate: NSPredicate { [self] _, _ in
-                guard let now = videoSeconds() else { return false }
+                guard let now = playerSeconds() else { return false }
                 return now >= start + 2 && Double(now) <= Double(start) + Date().timeIntervalSince(resumedAt) + 2
             }, object: nil)
-            XCTAssertEqual(XCTWaiter.wait(for: [resumed], timeout: 3), .completed,
+            XCTAssertEqual(XCTWaiter.wait(for: [resumed], timeout: 10), .completed,
                            "paused at \(start) s, \(Int(Date().timeIntervalSince(resumedAt))) s ago; player: \(playerDebug)")
+            waitUntilGone(app.buttons["leavePlayer"], timeout: 12)  // 4 s hide timer; 8 s was once short on the iPhone runner (11/08)
+            assertVideoFits(aspect: pass == 0 ? 16.0 / 9.0 : 4.0 / 3.0)
+            capture("avi-fit-playing-\(pass)")
             XCUIDevice.shared.orientation = .landscapeLeft
             centerTap()
             XCTAssertFalse(app.buttons["填滿螢幕（會裁切邊緣）"].exists)
@@ -175,6 +171,21 @@ final class AlbumUITests: XCTestCase {
             assertVideoFits(aspect: pass == 0 ? 16.0 / 9.0 : 4.0 / 3.0)
             capture("avi-landscape-fit-\(pass)")
             XCUIDevice.shared.orientation = .portrait
+            // The end of the clip: one video on its own starts over (PlayerModel: ended → show the
+            // next, which is itself), and must not sit on its last frame.
+            tapOverlay("暫停", until: app.buttons["繼續"])
+            app.sliders["影片進度"].adjust(toNormalizedSliderPosition: 0.9)
+            let nearEnd = XCTNSPredicateExpectation(predicate: NSPredicate { [self] _, _ in
+                videoSeconds().map { (24...29).contains($0) } ?? false
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [nearEnd], timeout: 10), .completed, "player: \(playerDebug)")
+            app.buttons["繼續"].tap()
+            let looped = XCTNSPredicateExpectation(predicate: NSPredicate { [self] _, _ in
+                playerSeconds().map { $0 < 10 } ?? false
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [looped], timeout: 20), .completed,
+                           "the clip did not start over after its end; player: \(playerDebug)")
+            capture("avi-started-over-\(pass)")
             tapOverlay("leavePlayer", until: app.buttons["開始播放"])
         }
     }
@@ -328,9 +339,9 @@ final class AlbumUITests: XCTestCase {
     private func tapOverlay(_ name: String, until done: XCUIElement, file: StaticString = #filePath, line: UInt = #line) {
         for _ in 0..<3 {
             centerTap()
-            let button = app.buttons[name]
-            guard button.exists else { continue }
-            let frame = button.frame
+            // One look: `exists` and then `frame` looked twice, and the overlay hid in between
+            // ("Failed to get matching snapshot" for 暫停, iPhone run 42970581456).
+            guard let frame = (try? app.buttons[name].firstMatch.snapshot())?.frame else { continue }
             app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: frame.midX, dy: frame.midY)).tap()
             if done.waitForExistence(timeout: 5) { return }
         }
@@ -342,6 +353,13 @@ final class AlbumUITests: XCTestCase {
         guard let label = (try? app.staticTexts["videoTime"].firstMatch.snapshot())?.label else { return nil }
         let parts = label.split(separator: ":").compactMap { Int($0) }
         return parts.count == 2 ? parts[0] * 60 + parts[1] : nil
+    }
+    /// The position from the player's debug line ("time=15"), there whether or not the
+    /// controls are shown.
+    private func playerSeconds() -> Int? {
+        guard let label = (try? app.staticTexts["playerDebug"].firstMatch.snapshot())?.label,
+              let range = label.range(of: #"time=(\d+)"#, options: .regularExpression) else { return nil }
+        return Int(label[range].dropFirst(5))
     }
     private func tapCanvas() { app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
     private func waitUntilGone(_ element: XCUIElement, timeout: TimeInterval, file: StaticString = #filePath, line: UInt = #line) {

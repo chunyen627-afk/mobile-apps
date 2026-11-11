@@ -223,8 +223,12 @@ final class PlayerModel: ObservableObject {
     }
 
     #if DEBUG && targetEnvironment(simulator)
-    /// UI tests only (see PlayerView): why a tap may not hide the controls.
-    var debugState: String { "interacting=\(interacting) paused=\(paused) controls=\(controlsVisible) message=\(message != nil)" }
+    /// UI tests only (see PlayerView): why a tap may not hide the controls, and the video's
+    /// position, which the auto-hiding controls do not always let a test read.
+    var debugState: String {
+        "interacting=\(interacting) paused=\(paused) controls=\(controlsVisible) message=\(message != nil) "
+            + "time=\(Int(videoPosition)) index=\(index) vlc=\(vlc?.debugState ?? "none")"
+    }
     #endif
 
     func setInteracting(_ active: Bool) {
