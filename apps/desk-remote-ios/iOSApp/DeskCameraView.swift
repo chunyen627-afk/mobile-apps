@@ -17,6 +17,8 @@ struct DeskCameraView: View {
     @State private var lastBytes = 0
     /// Off = data saver (the default, about 15 KB a frame); on = the clear picture (about 34 KB).
     @State private var clear = false
+    /// The light the PC watches in this picture (helper 0.5.45), read every half minute while here.
+    @State private var light: LightReport?
 
     var body: some View {
         VStack(spacing: 8) {
@@ -37,6 +39,9 @@ struct DeskCameraView: View {
                 ProgressView("正在打開鏡頭…").frame(maxHeight: .infinity)
             } else {
                 Spacer()
+            }
+            if let light {
+                DeskLightPanel(light: light)
             }
             Text(note)
                 .font(.caption)
@@ -61,6 +66,10 @@ struct DeskCameraView: View {
             guard scenePhase == .active else { return }
             await stream()
         }
+        .task(id: scenePhase) {
+            guard scenePhase == .active else { return }
+            await watchLight()
+        }
     }
 
     private var note: String {
@@ -68,6 +77,21 @@ struct DeskCameraView: View {
         guard let frameAt, frames > 0 else { return "\(mode)模式。鏡頭只在這一頁開著時開啟，離開這頁就關掉。" }
         let kb = (Double(lastBytes) / 1024).formatted(.number.precision(.fractionLength(0)))
         return "\(mode)：每秒約 \(perSecond.formatted(.number.precision(.fractionLength(1)))) 張、每張約 \(kb) KB，最新畫面 \(frameAt.formatted(date: .omitted, time: .standard))；離開這頁鏡頭就關。"
+    }
+
+    /// Today's changes of the watched light, refreshed every 30 seconds; a PC that watches no
+    /// light (404) is asked once more a minute later, in case the helper was just restarted.
+    private func watchLight() async {
+        guard let client = store.client(pcID) else { return }
+        while !Task.isCancelled {
+            do {
+                light = try await client.light(days: 1)
+                try? await Task.sleep(for: .seconds(30))
+            } catch {
+                if Task.isCancelled { return }
+                try? await Task.sleep(for: .seconds(60))
+            }
+        }
     }
 
     private func stream() async {
@@ -99,5 +123,58 @@ struct DeskCameraView: View {
                 try? await Task.sleep(for: .seconds(3))
             }
         }
+    }
+}
+
+/// What the PC's light watch says (helper 0.5.45): the light's state now and today's changes.
+/// The long record is light_log.csv on the PC (the user 11/11: 長時間紀錄統計的資料存在電腦就好).
+struct DeskLightPanel: View {
+    let light: LightReport
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Label(headline, systemImage: light.on == true && light.watching ? "lightbulb.fill" : "lightbulb")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(light.on == true && light.watching ? Color.orange : Color.primary)
+                .accessibilityIdentifier("camera-light")
+            Text(today)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("camera-light-today")
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal)
+    }
+
+    private var headline: String {
+        let state: String
+        if !light.watching {
+            state = "非監看時段"
+        } else if let on = light.on {
+            state = on ? "亮著" : "暗的"
+        } else {
+            state = light.error ?? "判斷中"
+        }
+        var line = "\(light.name)：\(state)"
+        if light.watching, let level = light.level {
+            line += "（亮度 \(Int(level.rounded()))）"
+        }
+        if light.watching, light.on != nil, let since = light.summary.sinceTime {
+            line += "，自 \(since)"
+        }
+        if light.on != nil, let error = light.error {
+            line += "（\(error)）"
+        }
+        return line
+    }
+
+    private var today: String {
+        let window = light.hours.count == 2 ? "\(light.weekdaysOnly ? "上班日 " : "")\(light.hours[0]):00–\(light.hours[1]):00 監看" : ""
+        guard let day = light.days.first else { return window }
+        if day.changes.isEmpty {
+            return "今天還沒有變化" + (window.isEmpty ? "" : "；" + window)
+        }
+        let changes = day.changes.map { "\($0.time.prefix(5)) \($0.on ? "亮" : "暗")" }.joined(separator: "、")
+        return "今天：" + changes + (window.isEmpty ? "" : "；" + window)
     }
 }

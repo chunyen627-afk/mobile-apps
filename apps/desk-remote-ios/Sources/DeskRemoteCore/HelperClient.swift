@@ -256,6 +256,12 @@ public struct HelperClient: Sendable {
         try await imageBytes(["v1", "camera", "frame"], query: clear ? [URLQueryItem(name: "clear", value: "1")] : [])
     }
 
+    /// The light the PC watches in its camera picture and its last `days` days of changes
+    /// (helper 0.5.45); `.notFound` when the PC watches none.
+    public func light(days: Int = 1) async throws -> LightReport {
+        try await get(["v1", "light"], query: [URLQueryItem(name: "days", value: String(days))], timeout: 15)
+    }
+
     /// A picture from a conversation (a photo sent from here, a screenshot a tool took), by the
     /// id an event carries in `images`.
     public func image(_ app: DeskApp, session id: String, image imageId: String) async throws -> Data {
