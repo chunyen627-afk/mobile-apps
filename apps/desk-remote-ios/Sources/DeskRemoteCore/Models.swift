@@ -19,6 +19,10 @@ public struct HelperState: Decodable, Equatable, Sendable {
         public let helperVersion: String
         /// A newer helper copied onto the PC but not started yet (helper 0.5.30).
         public let helperUpdate: String?
+        /// Where the helper also listens on the PC's local network, for a phone on the same
+        /// Wi-Fi (helper 0.5.44); nil from older helpers or when `lan` is off in its config.
+        public let lanHost: String?
+        public let lanPort: Int?
     }
 
     /// Windows' commit charge, and what the helper freed on its own when it neared the limit (0.5.30).

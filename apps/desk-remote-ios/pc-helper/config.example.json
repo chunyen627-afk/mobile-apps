@@ -12,6 +12,7 @@
   "alerts": {"usage_percent": 80, "context_percent": 80},
   "screen": true,
   "camera": {"low_long_side": 640, "low_quality": 50, "long_side": 960, "quality": 70, "idle_seconds": 5},
+  "lan": {"enabled": true, "prefix": 24, "bind_ip": "<optional: this PC's Wi-Fi/Ethernet address; found from the default route when left out>"},
   "drive_windows": true,
   "claude": {"context_windows": {"claude-opus-5": 1000000}}
 }

@@ -7,6 +7,7 @@ import ipaddress
 import json
 import os
 import shutil
+import socket
 import sys
 import tempfile
 import threading
@@ -441,6 +442,7 @@ def drive(fake, presence=None, driver_class=None, notify=None):
     hub.strings = h.load_strings()
     driver = (driver_class or h.FakeDriver)(fake, hub, reply_after=0.2)
     watcher = h.UiWatcher(hub, driver, notify, '示範電腦')
+    watcher.screen_in_use = lambda: False  # not what plays on the PC running the tests
     hub.prompts = watcher.prompt_for
     hub.ui = watcher.current
     hub.popups = watcher.popup_list
@@ -829,6 +831,40 @@ class DrivingTests(FakeEnvironment):
         self.assertFalse([s for s in sent if '一輪' in s[0]])
 
 
+class LanTests(FakeEnvironment):
+    def test_lan_binding_from_config_or_the_default_route(self):
+        base = {'bind_ip': '10.1.2.3', 'port': 18790}
+        self.assertIsNone(h.lan_binding(base))
+        self.assertIsNone(h.lan_binding(dict(base, lan={'enabled': False, 'bind_ip': '192.168.1.5'})))
+        self.assertEqual(h.lan_binding(dict(base, lan={'enabled': True, 'bind_ip': '192.168.1.5'})),
+                         ('192.168.1.5', ipaddress.ip_network('192.168.1.0/24')))
+        self.assertEqual(h.lan_binding(dict(base, lan={'enabled': True, 'bind_ip': '192.168.1.5', 'prefix': 16})),
+                         ('192.168.1.5', ipaddress.ip_network('192.168.0.0/16')))
+        self.assertEqual(h.lan_binding(dict(base, lan={'enabled': True}), lan_address=lambda: '192.168.1.7'),
+                         ('192.168.1.7', ipaddress.ip_network('192.168.1.0/24')))
+        # No default route, the ZeroTier address itself, loopback, 0.0.0.0 and junk: nothing to add.
+        for bad in (None, '10.1.2.3', '127.0.0.1', '0.0.0.0', 'nope'):
+            with self.subTest(bad=bad):
+                self.assertIsNone(h.lan_binding(dict(base, lan={'enabled': True}), lan_address=lambda: bad))
+
+    def test_lan_listener_accepts_that_network_and_state_reports_it(self):
+        hub = h.Hub('示範電腦', self.sources, h.FixedPresence(self.fake.cfg['presence']))
+        self.assertEqual(hub.state()['pc']['lanHost'], None)
+        probe = socket.socket(); probe.bind(('127.0.0.1', 0)); port = probe.getsockname()[1]; probe.close()
+        cfg = {'bind_ip': '10.1.2.3', 'port': port, 'lan': {'enabled': True}}
+        # Only the ZeroTier network is allowed on its own; the listener adds the LAN one it sits in.
+        thread = h.serve_lan(hub, h.AuthGate(TOKEN), cfg, [ipaddress.ip_network('10.1.0.0/16')], None,
+                             ('127.0.0.1', ipaddress.ip_network('127.0.0.0/8')))
+        self.assertTrue(thread.ready.wait(5))
+        self.assertEqual(hub.lan, ('127.0.0.1', port))
+        request = urllib.request.Request(f'http://127.0.0.1:{port}/v1/state', headers={'Authorization': f'Bearer {TOKEN}'})
+        with urllib.request.urlopen(request, timeout=10) as response:
+            body = json.loads(response.read())
+        self.assertEqual((body['pc']['lanHost'], body['pc']['lanPort']), ('127.0.0.1', port))
+        with urllib.request.urlopen(f'http://127.0.0.1:{port}/health', timeout=10) as response:
+            self.assertEqual(json.loads(response.read()), {'ok': True})
+
+
 class HttpTests(FakeEnvironment):
     def setUp(self):
         super().setUp()
@@ -1215,11 +1251,54 @@ for line in sys.stdin:
         presence['locked'] = True
         watcher.tick()
         self.assertEqual(reads, ['claude'])  # never on a locked PC
+        # Hands off the keyboard while a video plays (user 11/10: the card blinked over it): the
+        # card waits, and is read as soon as the video ends, not five minutes later.
+        presence['locked'] = False
+        watcher.screen_in_use = lambda: True
+        with self.assertLogs(level='INFO') as logs:
+            watcher.tick()
+            watcher.tick()
+        self.assertEqual(reads, ['claude'])
+        self.assertEqual(sum('usage card not read' in line for line in logs.output), 1)  # said once
+        watcher.screen_in_use = lambda: False
+        watcher.tick()
+        self.assertEqual(reads, ['claude', 'claude'])
+        # Two PCs on one account (asked 11/10): the one idle longest reads the card, the other
+        # leaves it, through notes in the shared clipboard folder. 家裡 idle 15 minutes: left to it.
+        shared = self.fake.root / 'shared'
+        watcher.board = h.IdleBoard(shared, '示範電腦')
+        home = h.IdleBoard(shared, '家裡')
+        home.note(900, False, False)
+        watcher.last_card_check -= 301
+        with self.assertLogs(level='INFO') as logs:
+            watcher.tick()
+        self.assertEqual(reads, ['claude', 'claude'])
+        self.assertTrue(any('家裡 is idle longer' in line for line in logs.output), logs.output)
+        mine = json.loads((shared / '_idle_示範電腦.json').read_text(encoding='utf-8'))
+        self.assertEqual((mine['pc'], mine['idleSeconds'], mine['locked'], mine['busy']), ('示範電腦', 420, False, False))
+        # 家裡 in use again (idle 30 s): this PC reads. A note from a PC that is busy with a video,
+        # or older than three minutes (off, or not syncing), does not count either.
+        home.noted = None
+        home.note(30, False, False)
+        watcher.tick()
+        self.assertEqual(reads, ['claude', 'claude', 'claude'])
+        home.noted = None
+        home.note(900, False, True)
+        watcher.last_card_check -= 301
+        watcher.tick()
+        self.assertEqual(reads, ['claude'] * 4)
+        home.clock = lambda: time.time() - 400
+        home.noted = None
+        home.note(9000, False, False)
+        watcher.last_card_check -= 301
+        watcher.tick()
+        self.assertEqual(reads, ['claude'] * 5)
 
     def test_the_last_usage_button_reading_survives_a_restart(self):
         hub, driver, _, _ = drive(self.fake)
         memory = self.fake.root / 'usage_seen.json'
         watcher = h.UiWatcher(hub, driver, memory=memory)
+        watcher.screen_in_use = lambda: False
         watcher.look('claude')
         watcher.check_card()
         saved = json.loads(memory.read_text(encoding='utf-8'))

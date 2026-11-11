@@ -22,6 +22,7 @@ import os
 import re
 import secrets
 import shutil
+import socket
 import sqlite3
 import sys
 import tempfile
@@ -38,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.42'
+VERSION = '0.5.44'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -142,6 +143,28 @@ def window_label(minutes):
     if isinstance(minutes, int) and minutes > 0:
         return f'{minutes // 1440} 天' if minutes % 1440 == 0 else f'{round(minutes / 60)} 小時'
     return '用量'
+
+
+def screen_in_use():
+    """True while something keeps the display on (a video playing in a browser or a player asks
+    Windows for ES_DISPLAY_REQUIRED) or a full-screen app, game or presentation is in front:
+    the usage card expanding over it would be seen (user 11/10: watching a video on the PC, the
+    screen blinked every few minutes). Neither call needs a window of its own."""
+    if sys.platform != 'win32':
+        return False
+    try:
+        state = ctypes.c_ulong()
+        # SystemExecutionState (16): the execution state every process has asked for, combined.
+        if ctypes.windll.powrprof.CallNtPowerInformation(16, None, 0, ctypes.byref(state), ctypes.sizeof(state)) == 0 \
+                and state.value & 0x2:  # ES_DISPLAY_REQUIRED
+            return True
+        quns = ctypes.c_int()
+        # QUNS_BUSY 2 (a full-screen window in front), QUNS_RUNNING_D3D_FULL_SCREEN 3, QUNS_PRESENTATION_MODE 4.
+        if ctypes.windll.shell32.SHQueryUserNotificationState(ctypes.byref(quns)) == 0 and quns.value in (2, 3, 4):
+            return True
+    except (AttributeError, OSError):
+        pass
+    return False
 
 
 def ui_usage(name, prefix):
@@ -1739,6 +1762,7 @@ class Hub:
         self.restart = None               # () -> None: start the helper again (it exits), from the phone
         self.clipboard = None             # ClipboardSync when a shared clipboard folder is configured (0.5.40)
         self.camera = None                # CameraFeed: the webcam, open only while the phone's 看鏡頭 page is (0.5.41)
+        self.lan = None                   # (ip, port) where the helper also listens on the local network (0.5.44)
         self.alerts = {'usage_percent': 80, 'context_percent': 80}
         self.chosen_modes = {}            # (app, id) -> (mode, when): a Codex pick its rollout shows only next turn
         self.page_names = {}              # (app, id) -> the page title last seen for it, when its files say otherwise
@@ -1769,7 +1793,9 @@ class Hub:
                  + (['camera'] if self.camera is not None else []))
         disk = self.disk_version()
         newer = disk if disk and version_key(disk) > version_key(VERSION) else None
-        return {'ok': True, 'pc': {'name': self.pc_name, 'helperVersion': VERSION, 'helperUpdate': newer},
+        lan_host, lan_port = self.lan or (None, None)
+        return {'ok': True, 'pc': {'name': self.pc_name, 'helperVersion': VERSION, 'helperUpdate': newer,
+                                   'lanHost': lan_host, 'lanPort': lan_port},
                 'capabilities': self.capabilities + extra,
                 'apps': apps, 'presence': {'idleSeconds': presence.get('idleSeconds'), 'locked': presence.get('locked'),
                                            'uac': bool(presence.get('uac'))},
@@ -2659,6 +2685,8 @@ class UiWatcher:
             if app in APPS and isinstance(seen, dict):
                 self.state[app] = {key: seen.get(key) for key in ('usage', 'usageAt', 'card', 'cardAt')}
         self.card_every, self.card_idle, self.last_card_check = 300, 60, None
+        self.screen_in_use, self.card_held = screen_in_use, False  # the card waits while a video plays
+        self.board = None       # IdleBoard: the PC idle longest reads the card (0.5.43)
         self.turns = {}         # (app, id) -> last parser status
         self.questions = {}     # (app, id) -> option question waiting at the last look
         self.checked_once = False
@@ -2720,15 +2748,30 @@ class UiWatcher:
     def check_card(self, app='claude'):
         """Every few minutes while nobody uses the PC: the usage card, the only place the session
         limit shows (the button expanded and closed again; the card shows for a moment, so not
-        while someone is at the PC, and never on a locked one)."""
+        while someone is at the PC, and never on a locked one). Hands off the keyboard are not
+        always away: a video playing or a full-screen app keeps the card closed too, and it is
+        read as soon as that ends (11/10: the card blinked every five minutes over a video)."""
         if not (self.hub.strings.get(app) or {}).get('usage_card') or not hasattr(self.driver, 'usage_card'):
             return
+        presence = self.hub.presence.snapshot()
+        idle, locked = presence.get('idleSeconds'), presence.get('locked')
+        if idle is None:
+            return
+        busy = not locked and idle >= self.card_idle and self.screen_in_use()
+        if self.board is not None:
+            self.board.note(idle, locked, busy)
         if self.last_card_check is not None and time.monotonic() - self.last_card_check < self.card_every:
             return
-        presence = self.hub.presence.snapshot()
-        idle = presence.get('idleSeconds')
-        if presence.get('locked') or idle is None or idle < self.card_idle:
+        if locked or idle < self.card_idle:
             return
+        if busy:
+            self.hold_card('a video plays or a full-screen app is in front')
+            return
+        other = self.board.idle_longer(idle) if self.board is not None else None
+        if other:
+            self.hold_card(f'{other} is idle longer and reads it')
+            return
+        self.card_held = False
         self.last_card_check = time.monotonic()
         try:
             rows = self.driver.usage_card(app)
@@ -2739,6 +2782,12 @@ class UiWatcher:
                 self.state.setdefault(app, {}).update(card=rows, cardAt=time.time())
                 if self.memory:
                     self.remember_usage()
+
+    def hold_card(self, why):
+        """Logs once per spell why the card is left closed."""
+        if not self.card_held:
+            logging.info('usage card not read: %s', why)
+        self.card_held = True
 
     def check_popups(self, notify=True):
         """A window that pops up and waits for an answer (a firewall question, found 10/29) keeps
@@ -4054,6 +4103,71 @@ def clipboard_tag(name):
     return re.sub(r'[\\/:*?"<>|\s\x00-\x1f]+', '_', name or '').strip('_')[:40] or 'pc'
 
 
+# Which PC reads the usage card (0.5.43; asked 11/10: "the one idle longest"). The PCs share one
+# Claude account, and the phone shows the newest reading from any of them, so one reading is
+# enough: each helper notes its own idle time in the shared clipboard folder (the cloud drive
+# carries it over in seconds), and reads the card only while no other PC is idle longer. The
+# notes are files in the folder itself, `_idle_<PC>.json` (the clipboard list only takes names
+# that start with 13 digits): a subfolder made by both PCs at once came out twice on the drive
+# ("_presence" and "_presence (1)", 11/10).
+IDLE_NOTE_EVERY = 30               # seconds between a PC's notes
+IDLE_NOTE_FRESH = 180              # seconds: an older note is a PC that is off, or not syncing
+IDLE_NOTE_PREFIX = '_idle_'
+
+
+class IdleBoard:
+    def __init__(self, folder, pc_name, clock=time.time):
+        self.folder = Path(folder)
+        self.name = pc_name
+        self.tag = clipboard_tag(pc_name)
+        self.clock = clock
+        self.noted = None
+
+    def note(self, idle, locked, busy):
+        """This PC's note (idle seconds, locked, busy with a video or a full-screen app), at most
+        every IDLE_NOTE_EVERY seconds; a folder that is not there is no error."""
+        now = time.monotonic()
+        if self.noted is not None and now - self.noted < IDLE_NOTE_EVERY:
+            return
+        self.noted = now
+        try:
+            self.folder.mkdir(parents=True, exist_ok=True)
+            tmp = self.folder / f'{IDLE_NOTE_PREFIX}{self.tag}.json.tmp'
+            tmp.write_text(json.dumps({'pc': self.name, 'idleSeconds': idle, 'locked': bool(locked),
+                                       'busy': bool(busy), 'at': self.clock()}, ensure_ascii=False), encoding='utf-8')
+            tmp.replace(self.folder / f'{IDLE_NOTE_PREFIX}{self.tag}.json')
+        except OSError as exc:
+            logging.debug('idle note not written: %s', exc)
+
+    def idle_longer(self, idle):
+        """The name of another PC whose fresh note says it is idle longer than `idle` seconds and
+        can read the card itself (not locked, nothing playing), or None."""
+        try:
+            files = list(self.folder.glob(f'{IDLE_NOTE_PREFIX}*.json'))
+        except OSError:
+            return None
+        now, best = self.clock(), None
+        for file in files:
+            if file.stem == f'{IDLE_NOTE_PREFIX}{self.tag}':
+                continue
+            try:
+                note = json.loads(file.read_text(encoding='utf-8'))
+            except (OSError, ValueError, UnicodeDecodeError):
+                continue
+            if not isinstance(note, dict) or note.get('locked') or note.get('busy') or note.get('idleSeconds') is None:
+                continue
+            try:
+                age = now - float(note.get('at') or 0)
+                theirs = float(note['idleSeconds']) + age  # idle since the note, if nobody came
+            except (TypeError, ValueError):
+                continue
+            if age < 0 or age > IDLE_NOTE_FRESH or theirs <= idle:
+                continue
+            if best is None or theirs > best[1]:
+                best = (str(note.get('pc') or file.stem), theirs)
+        return best[0] if best else None
+
+
 def dib_to_png(dib):
     """PNG bytes of a CF_DIB clipboard picture, or None when Pillow is missing or the DIB is odd."""
     if PIL_IMAGE is None or len(dib) < 40:
@@ -5067,6 +5181,76 @@ def default_config_path():
     return Path(os.environ.get('LOCALAPPDATA', Path.home())) / 'DeskRemote' / 'config.json'
 
 
+def lan_address():
+    """This PC's address on the network the default route uses (the Wi-Fi or Ethernet adapter;
+    not ZeroTier, WSL or Hyper-V, which have no default route). A UDP socket "connected" to an
+    unroutable test address makes Windows pick the interface without sending anything."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.connect(('192.0.2.1', 9))
+            return probe.getsockname()[0]
+    except OSError:
+        return None
+
+
+def lan_binding(cfg, lan_address=lan_address):
+    """Where the helper also listens on the local network, or None: `lan.bind_ip`, or the address
+    of the adapter the default route uses, with `lan.prefix` (24) as the network the phone may come
+    from. Off unless `lan.enabled`. Never the ZeroTier address, loopback or 0.0.0.0.
+
+    The phone on the same Wi-Fi reaches this address directly: when the phone and the PC sit
+    behind the same NAT, ZeroTier takes minutes to find the direct path and the relayed path in
+    between times out (2026-11-11, the office Wi-Fi). App 0.6.10 learns the address from
+    `/v1/state` and tries both, keeping whichever answers first."""
+    lan = cfg.get('lan') or {}
+    if not lan.get('enabled'):
+        return None
+    ip = lan.get('bind_ip') or lan_address()
+    if not ip:
+        return None
+    try:
+        address = ipaddress.ip_address(ip)
+    except ValueError:
+        return None
+    if address.is_unspecified or address.is_loopback or str(address) == cfg.get('bind_ip'):
+        return None
+    network = ipaddress.ip_network(f'{address}/{int(lan.get("prefix", 24))}', strict=False)
+    return str(address), network
+
+
+def serve_lan(hub, gate, cfg, networks, runner, binding, port=None, retry_seconds=10):
+    """Starts the second listener on the local network address in `binding` ((ip, network)) and
+    returns its thread; the handler accepts the ZeroTier networks and that network. The adapter
+    may not be up yet at logon: a bind that fails because the address is not here yet is retried
+    every `retry_seconds` on the thread, any other error is logged once and gives up."""
+    ip, network = binding
+    port = port or cfg['port']
+    handler = handler_for(hub, gate, list(networks) + [network], runner)
+    ready = threading.Event()
+
+    def run():
+        while True:
+            try:
+                server = ThreadingHTTPServer((ip, port), handler)
+                break
+            except OSError as exc:
+                if getattr(exc, 'winerror', None) != 10049:
+                    logging.warning('lan: cannot listen on %s:%s (%s); ZeroTier only', ip, port, exc)
+                    ready.set()
+                    return
+                time.sleep(retry_seconds)
+        server.daemon_threads = True
+        hub.lan = (ip, port)
+        logging.info('lan: also listening on %s:%s for a phone on the same network', ip, port)
+        ready.set()
+        server.serve_forever(poll_interval=1)
+
+    thread = threading.Thread(target=run, daemon=True, name='lan-listener')
+    thread.ready = ready
+    thread.start()
+    return thread
+
+
 def real_sources(cfg):
     home = Path.home()
     local = Path(os.environ.get('LOCALAPPDATA', home / 'AppData' / 'Local'))
@@ -5595,12 +5779,18 @@ def serve(hub, gate, cfg, networks, runner=None):
     logging.info('listening on the configured address')
     if sys.stdout:
         print(f"Listening on {cfg['bind_ip']}:{cfg['port']}.", flush=True)
+    binding = lan_binding(cfg)
+    if binding:
+        serve_lan(hub, gate, cfg, networks, runner, binding)
     server.serve_forever(poll_interval=1)
 
 
 def build_driving(hub, driver, notify, pc_name, cfg, interval, verify_seconds, memory=None):
     """Watcher and action runner over `driver`, both on their own threads."""
     watcher = UiWatcher(hub, driver, notify, pc_name, interval=interval, memory=memory)
+    folder = (cfg.get('clipboard') or {}).get('folder')
+    if folder:
+        watcher.board = IdleBoard(folder, pc_name)
     hub.prompts = watcher.prompt_for
     hub.ui = watcher.current
     hub.popups = watcher.popup_list
