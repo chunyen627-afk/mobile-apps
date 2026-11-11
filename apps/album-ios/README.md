@@ -139,6 +139,8 @@ GitHub workflow 僅允許公開 repository 執行，以使用標準 macOS runner
 
 AVI 模擬器素材為 FFmpeg 產生的 30 秒色彩測試圖與 440 Hz 音訊，包含 MPEG-4 Part 2／MP3（320×180）及 MJPEG／PCM u8（640×480），經同一個非同步範圍讀取介面播放。後者對應本機唯讀抽查到的相簿影片編碼；沒有複製或上傳私人影片，Release 排除兩份人工素材。這只能驗證指定編碼及串流介面，實際 SMB 延遲、其他編碼與 iPhone 17 效能仍須實機確認。
 
+VLC 播放的影片播到結尾時，VLCKit 可能直接回報「已停止」（不經過「播完」），以前 App 只認「播完」，於是停在最後一格、不跳下一個（單一影片不從頭重播）。2026-11-11 起「顯示過畫面後、不是 App 自己停的已停止」也當成播完；暫停在結尾時，按繼續才往下走。由工具箱的模擬器 UI 測試（片尾從頭重播）驗證，**尚未實機**。
+
 在 [Build Album iOS](https://github.com/chunyen627-afk/mobile-apps/actions/workflows/album-ios.yml) 選最新成功執行，下載 `Lightbox-unsigned-ipa` artifact 並解壓縮。產物保留 3 天；過期可按 Run workflow 重建。手機版原始碼、測試、腳本或 workflow 更新會自動編譯，單改 README 不會觸發。
 
 未簽署 IPA 不能直接點開安裝。下載後用 Windows Sideloadly，以自己的免費 Apple 帳號簽署。登入、雙重驗證、信任電腦及 iPhone 開發者模式由使用者操作。免費簽署 7 天有效；Sideloadly 可在電腦運行、手機 USB/Wi-Fi 可達時嘗試自動續簽，不能保證每次成功。

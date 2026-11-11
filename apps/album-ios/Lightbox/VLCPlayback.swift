@@ -60,13 +60,21 @@ final class VLCPlayback {
                    abs(clock - requested) < 1 || (!self.paused && Date() > self.seekDeadline) {
                     self.requestedPosition = nil
                 }
+                let visible = (media?.numberOfDisplayedPictures ?? 0) > 0
+                // At the end of the stream VLCKit can go straight to .stopped without an .ended
+                // the 250 ms poll sees (simulator UI test: "vlc=0@30", the clip left on its last
+                // frame and never followed by the next item). Stopped after showing a picture,
+                // without stop() from here, is the end too.
                 let value = Update(position: self.requestedPosition ?? clock,
                                    duration: max(0, Double(media?.length.intValue ?? 0) / 1000),
-                                   visible: (media?.numberOfDisplayedPictures ?? 0) > 0,
+                                   visible: visible,
                                    buffering: state == .opening || state == .buffering,
-                                   ended: state == .ended, failed: state == .error)
+                                   ended: state == .ended || (state == .stopped && visible),
+                                   failed: state == .error)
                 self.update(value)
-                if value.ended || value.failed { break }
+                // Keep polling at the end: paused there, the model moves on only once it is
+                // resumed, which this loop must still be running to report.
+                if value.failed { break }
             }
         }
     }
