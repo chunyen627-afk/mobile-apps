@@ -2850,6 +2850,13 @@ class NotifierTests(unittest.TestCase):
         notifier.post('標題', '內容')
         self.assertEqual(sent[-1][0], h.Notifier.LINE_PUSH)
         self.assertEqual(len(sent), 4)
+        # Several recipients (0.5.54, the user's friend): one multicast with the list.
+        notifier = h.Notifier({'notify': {'line': {'channel_access_token': 't', 'to': ['U1', 'U2']}}}, urlopen=urlopen)
+        notifier.post('標題', '內容')
+        self.assertEqual(sent[-1][0], h.Notifier.LINE_MULTICAST)
+        self.assertEqual(sent[-1][2]['to'], ['U1', 'U2'])
+        self.assertEqual(sent[-1][2]['messages'][0]['text'], '標題\n內容')
+        del sent[-1]
 
         # A picture rides along (0.5.48): PUT to the topic as the ntfy attachment, its URL as a
         # LINE image message in the same push.

@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.53'
+VERSION = '0.5.54'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -1652,9 +1652,13 @@ class Notifier:
     0.5.52: with a PictureStore (`notify.pictures`, served through a tunnel on this PC) the LINE
     picture is that store's URL instead: LINE's desktop client never showed ntfy's attachment
     (ntfy.sh answers HEAD without a Content-Type and has no Range), and the store keeps the
-    picture for days, not hours. ntfy still gets the attachment as before."""
+    picture for days, not hours. ntfy still gets the attachment as before.
+    0.5.54 (the user 11/12 wants a friend to get the light notifications too): `to` may be a
+    list of user IDs, sent in one multicast (LINE counts one message per recipient); every
+    recipient must have added the official account."""
 
     LINE_PUSH = 'https://api.line.me/v2/bot/message/push'
+    LINE_MULTICAST = 'https://api.line.me/v2/bot/message/multicast'
 
     def __init__(self, cfg, urlopen=urllib.request.urlopen, pictures=None):
         self.cfg = cfg.get('notify') or {}
@@ -1686,7 +1690,12 @@ class Notifier:
             messages = [{'type': 'text', 'text': f'{title}\n{message}'[:5000]}]
             if picture_url:
                 messages.append({'type': 'image', 'originalContentUrl': picture_url, 'previewImageUrl': picture_url})
-            self.send(line.get('url') or self.LINE_PUSH, {'to': line['to'], 'messages': messages},
+            to = line['to']
+            if isinstance(to, (list, tuple)):
+                to, url = [str(v) for v in to], line.get('url') or self.LINE_MULTICAST
+            else:
+                url = line.get('url') or self.LINE_PUSH
+            self.send(url, {'to': to, 'messages': messages},
                       {'Authorization': f"Bearer {line['channel_access_token']}"}, 'LINE')
 
     @staticmethod
