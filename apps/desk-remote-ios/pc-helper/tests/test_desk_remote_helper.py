@@ -3356,6 +3356,103 @@ class PictureStoreTests(unittest.TestCase):
         self.assertEqual((gone.current(), gone.starts), (None, 3))
 
 
+class GitPicturesTests(unittest.TestCase):
+    """0.5.53: pictures for LINE committed to a branch of a public repository (a local bare
+    repository stands in for GitHub); expired ones are dropped and the branch rewritten."""
+
+    JPEG = b'\xff\xd8\xff\xe0' + bytes(range(256)) + b'\xff\xd9'
+
+    def setUp(self):
+        import subprocess
+        if shutil.which('git') is None:
+            self.skipTest('git is not installed')
+        self.root = Path(tempfile.mkdtemp(prefix='gitpictures-'))
+        self.addCleanup(shutil.rmtree, self.root, True)
+        self.bare = self.root / 'origin.git'
+        git = lambda *args, cwd=self.root: subprocess.run(['git', '-c', 'user.name=t', '-c', 'user.email=t@x', *args], cwd=str(cwd), check=True, capture_output=True)
+        git('init', '-q', '--bare', str(self.bare))
+        seed = self.root / 'seed'
+        git('init', '-q', str(seed))
+        git('checkout', '-q', '--orphan', 'pictures', cwd=seed)
+        (seed / 'README.md').write_text('pictures\n')
+        git('add', 'README.md', cwd=seed)
+        git('commit', '-q', '-m', 'seed', cwd=seed)
+        git('push', '-q', str(self.bare), 'pictures:pictures', cwd=seed)
+        self.git = git
+        self.now = [1_762_900_000.0]  # 2025-11-11T...Z
+        self.store = h.GitPictures(self.root / 'clone', str(self.bare), branch='pictures', raw_base='https://raw.example/o/r/pictures/',
+                                   keep_days=7, clock=lambda: self.now[0])
+
+    def on_origin(self, *args):
+        return self.git(*args, cwd=self.bare).stdout.decode('utf-8', 'replace')
+
+    def test_pictures_are_pushed_under_random_names_and_old_ones_drop_off_with_their_history(self):
+        url = self.store.put(self.JPEG)
+        self.assertRegex(url, r'^https://raw\.example/o/r/pictures/\d{8}T\d{6}Z-[A-Za-z0-9_-]{16}\.jpg$')
+        first = url.rsplit('/', 1)[1]
+        self.assertTrue(first.startswith('20251111T'))
+        self.assertEqual(self.git('show', f'pictures:{first}', cwd=self.bare).stdout, self.JPEG, 'the picture did not reach origin')
+        self.assertNotEqual(self.store.put(self.JPEG).rsplit('/', 1)[1], first)
+        self.assertEqual(self.on_origin('rev-list', '--count', 'pictures').strip(), '3')
+        # Someone else pushed to the branch meanwhile: the next picture still goes up.
+        seed = self.root / 'seed'
+        self.git('pull', '-q', str(self.bare), 'pictures', cwd=seed)
+        (seed / 'NOTE.md').write_text('elsewhere\n')
+        self.git('add', 'NOTE.md', cwd=seed)
+        self.git('commit', '-q', '-m', 'elsewhere', cwd=seed)
+        self.git('push', '-q', str(self.bare), 'pictures:pictures', cwd=seed)
+        self.store.put(self.JPEG)
+        self.assertIn('NOTE.md', self.on_origin('ls-tree', '--name-only', 'pictures').split())
+        self.assertEqual(self.on_origin('rev-list', '--count', 'pictures').strip(), '5')
+        self.assertEqual(self.store.sweep(force=True), 0, 'a fresh picture was swept')
+        # Eight days on: the two old pictures go, the branch starts over with what is left.
+        self.now[0] += 8 * 86400
+        third = self.store.put(self.JPEG).rsplit('/', 1)[1]
+        files = sorted(self.on_origin('ls-tree', '--name-only', 'pictures').split())
+        self.assertEqual(files, sorted(['NOTE.md', 'README.md', third]))
+        self.assertEqual(self.on_origin('rev-list', '--count', 'pictures').strip(), '1', 'the history still holds the old pictures')
+        self.assertEqual(self.store.sweep(force=True), 0)
+        # The next day's put does not sweep again until a day has passed.
+        self.store.swept = self.now[0]
+        self.now[0] += 3600
+        self.store.put(self.JPEG)
+        self.assertEqual(self.on_origin('rev-list', '--count', 'pictures').strip(), '2')
+
+    def test_failures_leave_line_with_the_ntfy_picture(self):
+        calls = []
+
+        class Answer:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                pass
+
+            def read(self, n=-1):
+                return b'{"attachment": {"url": "https://ntfy.sh/file/abc.jpg"}}'
+
+        def urlopen(request, timeout=None):
+            calls.append(json.loads(request.data) if request.method == 'POST' else None)
+            return Answer()
+        broken = h.GitPictures(self.root / 'clone2', str(self.root / 'nowhere.git'), raw_base='https://raw.example/x', clock=lambda: self.now[0])
+        with self.assertRaises(OSError):
+            broken.ensure()
+        cfg = {'notify': {'server': 'https://ntfy.sh', 'topic': 't', 'line': {'channel_access_token': 'tok', 'to': 'U1', 'url': 'https://line.example/push'}}}
+        with self.assertLogs(level='WARNING'):
+            h.Notifier(cfg, urlopen, pictures=broken).post('燈', '亮', picture=self.JPEG)
+        self.assertEqual(calls[-1]['messages'][1]['originalContentUrl'], 'https://ntfy.sh/file/abc.jpg')
+        # github.com addresses give raw.githubusercontent.com; others need raw_base.
+        self.assertEqual(h.GitPictures.github_raw('https://github.com/me/repo.git', 'pictures'), 'https://raw.githubusercontent.com/me/repo/pictures')
+        self.assertEqual(h.GitPictures.github_raw('https://github.com/me/repo', 'p'), 'https://raw.githubusercontent.com/me/repo/p')
+        with self.assertRaises(ValueError):
+            h.GitPictures.github_raw('https://gitlab.com/me/repo.git', 'pictures')
+        store, tunnel = h.pictures_from_config({'notify': {'pictures': {'git': {'url': 'https://github.com/me/repo.git'}, 'keep_days': 3}}}, self.root)
+        self.assertEqual((type(store), tunnel, store.folder, store.raw_base, store.keep, store.branch),
+                         (h.GitPictures, None, self.root / 'pictures-git', 'https://raw.githubusercontent.com/me/repo/pictures', 3 * 86400, 'pictures'))
+        with self.assertRaises(ValueError):
+            h.pictures_from_config({'notify': {'pictures': {'git': {'branch': 'x'}}}}, self.root)
+
+
 if __name__ == '__main__':
     unittest.main()
 
