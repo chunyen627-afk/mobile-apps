@@ -2970,6 +2970,21 @@ class LightWatchTests(unittest.TestCase):
         self.tick(182)
         self.assertTrue(self.watch.on)
         self.assertEqual(self.notes[-1][0], '示範電腦：玻璃門亮了（小幫手啟動時已亮）')
+        # Restarted the same day with the light still on (0.5.51): the log already ends 'on', so
+        # nothing is logged or sent again; a new day is a fresh start.
+        sent = len(self.notes)
+        rows = len((self.root / 'light_log.csv').read_text(encoding='utf-8').splitlines())
+        self.watch.on = self.watch.pending = None
+        self.tick(180)
+        self.tick(181)
+        self.assertTrue(self.watch.on)
+        self.assertEqual((len(self.notes), len((self.root / 'light_log.csv').read_text(encoding='utf-8').splitlines())),
+                         (sent, rows), 'a restart in the same state was announced again')
+        self.watch.on = self.watch.pending = None
+        self.now[0] += 24 * 3600
+        self.tick(180)
+        self.tick(181)
+        self.assertEqual(len(self.notes), sent + 1, 'the next day\'s bright start was not announced')
         # The exposure after opening: frames are taken until the whole picture holds still.
         self.watch.settle = 1
         means = [250, 190, 141, 139]

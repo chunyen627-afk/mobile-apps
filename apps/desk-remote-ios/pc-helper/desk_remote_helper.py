@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.50'
+VERSION = '0.5.51'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -5053,7 +5053,12 @@ class LightWatch:
     0.5.50 (the user 11/12 「多紀錄多校正」, after closing the glass door took a lit reading from
     158 to 104, inside the thresholds' gap): every sample's level and door-frame match score also
     go to light_samples.csv next to the log (date,time,level,score), so the thresholds can be
-    set from what the door looks like open, closed, lit and dark."""
+    set from what the door looks like open, closed, lit and dark.
+
+    0.5.51 (the user 11/12 08:58 got a second 「亮了」 when the helper was restarted for a config
+    change): a window's first state is a restart, not news, when today's log already ends in the
+    same state: nothing is logged or sent then. A new day (or a different state) is still
+    recorded as 'start' and, when lit, sent."""
 
     SETTLED = 4.0       # whole-picture mean change (0-255) under which the exposure counts as settled
     SETTLE_FRAMES = 6   # frames waited for at most (settle seconds apart) before measuring anyway
@@ -5185,8 +5190,23 @@ class LightWatch:
                         self.SETTLE_FRAMES + 1, before)
         return data, None
 
+    def last_logged(self, date):
+        """The state ('on'/'off') of the log's last row when it is from `date` (YYYY-MM-DD),
+        else None."""
+        try:
+            rows = [l for l in self.log_path.read_text(encoding='utf-8').splitlines() if l and not l.startswith('date,')]
+        except OSError:
+            return None
+        if not rows:
+            return None
+        parts = rows[-1].split(',')
+        return parts[2] if len(parts) >= 3 and parts[0] == date else None
+
     def record(self, when, on, level, first=False):
         stamp = datetime.fromtimestamp(when)
+        if first and self.last_logged(f'{stamp:%Y-%m-%d}') == ('on' if on else 'off'):
+            logging.info('light %s: %s (level %.0f) at start, as the log already says: a restart', self.name, 'on' if on else 'off', level)
+            return
         line = f"{stamp:%Y-%m-%d},{stamp:%H:%M:%S},{'on' if on else 'off'},{level:.1f}"
         if first:
             line += ',start'
