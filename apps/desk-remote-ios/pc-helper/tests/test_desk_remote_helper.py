@@ -2850,6 +2850,28 @@ class NotifierTests(unittest.TestCase):
         notifier.post('標題', '內容')
         self.assertEqual(sent[-1][0], h.Notifier.LINE_PUSH)
         self.assertEqual(len(sent), 4)
+        # Several recipients (0.5.54, the user's friend): one multicast with the list.
+        notifier = h.Notifier({'notify': {'line': {'channel_access_token': 't', 'to': ['U1', 'U2']}}}, urlopen=urlopen)
+        notifier.post('標題', '內容')
+        self.assertEqual(sent[-1][0], h.Notifier.LINE_MULTICAST)
+        self.assertEqual(sent[-1][2]['to'], ['U1', 'U2'])
+        self.assertEqual(sent[-1][2]['messages'][0]['text'], '標題\n內容')
+        del sent[-1]
+        # Several official accounts (0.5.55, the friend's own quota): a list of settings, each
+        # with its own token, recipient and tags.
+        notifier = h.Notifier({'notify': {'line': [{'name': '我', 'owner': True, 'channel_access_token': 'mine', 'to': 'U1', 'tags': ['bulb', 'question']},
+                                                   {'name': 'Jupiter', 'channel_access_token': 'friends', 'to': 'U9', 'tags': ['bulb']},
+                                                   {'channel_access_token': 'other', 'to': 'U5', 'tags': ['question']}]}},
+                              urlopen=urlopen)
+        notifier.post('亮了', '09:00', tags=['bulb'], shared=True)
+        self.assertEqual([(auth, body['to']) for _, auth, body in sent[-2:]], [('Bearer mine', 'U1'), ('Bearer friends', 'U9')])
+        self.assertEqual(len(sent), 6)
+        # The desktop's own business (0.5.56: an approval, a question...) goes to the owner only,
+        # even when another account's tags would take it.
+        notifier.post('權限詢問', '要不要允許', tags=['question'])
+        self.assertEqual(len(sent), 7, 'a private notification reached a non-owner account')
+        self.assertEqual(sent[-1][1], 'Bearer mine')
+        del sent[-3:]
 
         # A picture rides along (0.5.48): PUT to the topic as the ntfy attachment, its URL as a
         # LINE image message in the same push.
@@ -2879,6 +2901,20 @@ class NotifierTests(unittest.TestCase):
             raise urllib.error.HTTPError(request.full_url, 401, 'Unauthorized', {}, __import__('io').BytesIO(b'{"message":"invalid token"}'))
         with self.assertRaisesRegex(OSError, 'LINE answered 401'):
             h.Notifier({'notify': {'line': {'channel_access_token': 'bad', 'to': 'U1'}}}, urlopen=refuse).post('a', 'b')
+        # One account refusing does not stop the next (0.5.55); the error is raised afterwards.
+        tried = []
+
+        def refuse_first(request, timeout=10):
+            tried.append(request.get_header('Authorization'))
+            if request.get_header('Authorization') == 'Bearer bad':
+                return refuse(request, timeout)
+            return Answer()
+        with self.assertRaises(OSError) as caught:
+            h.Notifier({'notify': {'line': [{'channel_access_token': 'bad', 'to': 'U1', 'owner': True},
+                                            {'channel_access_token': 'good', 'to': 'U2', 'owner': True}]}},
+                       urlopen=refuse_first).post('a', 'b')
+        self.assertEqual(tried, ['Bearer bad', 'Bearer good'])
+        self.assertNotIn('bad', str(caught.exception).replace('Bearer', ''), 'the token leaked into the error')
 
 
 class LightWatchTests(unittest.TestCase):
@@ -2927,6 +2963,7 @@ class LightWatchTests(unittest.TestCase):
         self.assertEqual(self.notes[1][2].get('tags'), ['bulb'])
         self.assertTrue(self.notes[1][2].get('picture', b'').startswith(b'\xff\xd8\xff'), 'the camera frame did not ride along')
         self.assertEqual(self.notes[1][2].get('picture_name'), 'light.jpg')
+        self.assertTrue(self.notes[1][2].get('shared'), 'the light is shared news (0.5.56), not the owner\'s alone')
         lines = (self.root / 'light_log.csv').read_text(encoding='utf-8').splitlines()
         self.assertEqual(lines[0], 'date,time,state,level,note')
         self.assertEqual([l.split(',')[2:] for l in lines[1:]], [['off', '54.0', 'start'], ['on', '175.0'], ['off', '58.0']])
@@ -3354,6 +3391,103 @@ class PictureStoreTests(unittest.TestCase):
         with self.assertLogs(level='WARNING'):
             gone.run_forever()
         self.assertEqual((gone.current(), gone.starts), (None, 3))
+
+
+class GitPicturesTests(unittest.TestCase):
+    """0.5.53: pictures for LINE committed to a branch of a public repository (a local bare
+    repository stands in for GitHub); expired ones are dropped and the branch rewritten."""
+
+    JPEG = b'\xff\xd8\xff\xe0' + bytes(range(256)) + b'\xff\xd9'
+
+    def setUp(self):
+        import subprocess
+        if shutil.which('git') is None:
+            self.skipTest('git is not installed')
+        self.root = Path(tempfile.mkdtemp(prefix='gitpictures-'))
+        self.addCleanup(shutil.rmtree, self.root, True)
+        self.bare = self.root / 'origin.git'
+        git = lambda *args, cwd=self.root: subprocess.run(['git', '-c', 'user.name=t', '-c', 'user.email=t@x', *args], cwd=str(cwd), check=True, capture_output=True)
+        git('init', '-q', '--bare', str(self.bare))
+        seed = self.root / 'seed'
+        git('init', '-q', str(seed))
+        git('checkout', '-q', '--orphan', 'pictures', cwd=seed)
+        (seed / 'README.md').write_text('pictures\n')
+        git('add', 'README.md', cwd=seed)
+        git('commit', '-q', '-m', 'seed', cwd=seed)
+        git('push', '-q', str(self.bare), 'pictures:pictures', cwd=seed)
+        self.git = git
+        self.now = [1_762_900_000.0]  # 2025-11-11T...Z
+        self.store = h.GitPictures(self.root / 'clone', str(self.bare), branch='pictures', raw_base='https://raw.example/o/r/pictures/',
+                                   keep_days=7, clock=lambda: self.now[0])
+
+    def on_origin(self, *args):
+        return self.git(*args, cwd=self.bare).stdout.decode('utf-8', 'replace')
+
+    def test_pictures_are_pushed_under_random_names_and_old_ones_drop_off_with_their_history(self):
+        url = self.store.put(self.JPEG)
+        self.assertRegex(url, r'^https://raw\.example/o/r/pictures/\d{8}T\d{6}Z-[A-Za-z0-9_-]{16}\.jpg$')
+        first = url.rsplit('/', 1)[1]
+        self.assertTrue(first.startswith('20251111T'))
+        self.assertEqual(self.git('show', f'pictures:{first}', cwd=self.bare).stdout, self.JPEG, 'the picture did not reach origin')
+        self.assertNotEqual(self.store.put(self.JPEG).rsplit('/', 1)[1], first)
+        self.assertEqual(self.on_origin('rev-list', '--count', 'pictures').strip(), '3')
+        # Someone else pushed to the branch meanwhile: the next picture still goes up.
+        seed = self.root / 'seed'
+        self.git('pull', '-q', str(self.bare), 'pictures', cwd=seed)
+        (seed / 'NOTE.md').write_text('elsewhere\n')
+        self.git('add', 'NOTE.md', cwd=seed)
+        self.git('commit', '-q', '-m', 'elsewhere', cwd=seed)
+        self.git('push', '-q', str(self.bare), 'pictures:pictures', cwd=seed)
+        self.store.put(self.JPEG)
+        self.assertIn('NOTE.md', self.on_origin('ls-tree', '--name-only', 'pictures').split())
+        self.assertEqual(self.on_origin('rev-list', '--count', 'pictures').strip(), '5')
+        self.assertEqual(self.store.sweep(force=True), 0, 'a fresh picture was swept')
+        # Eight days on: the two old pictures go, the branch starts over with what is left.
+        self.now[0] += 8 * 86400
+        third = self.store.put(self.JPEG).rsplit('/', 1)[1]
+        files = sorted(self.on_origin('ls-tree', '--name-only', 'pictures').split())
+        self.assertEqual(files, sorted(['NOTE.md', 'README.md', third]))
+        self.assertEqual(self.on_origin('rev-list', '--count', 'pictures').strip(), '1', 'the history still holds the old pictures')
+        self.assertEqual(self.store.sweep(force=True), 0)
+        # The next day's put does not sweep again until a day has passed.
+        self.store.swept = self.now[0]
+        self.now[0] += 3600
+        self.store.put(self.JPEG)
+        self.assertEqual(self.on_origin('rev-list', '--count', 'pictures').strip(), '2')
+
+    def test_failures_leave_line_with_the_ntfy_picture(self):
+        calls = []
+
+        class Answer:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                pass
+
+            def read(self, n=-1):
+                return b'{"attachment": {"url": "https://ntfy.sh/file/abc.jpg"}}'
+
+        def urlopen(request, timeout=None):
+            calls.append(json.loads(request.data) if request.method == 'POST' else None)
+            return Answer()
+        broken = h.GitPictures(self.root / 'clone2', str(self.root / 'nowhere.git'), raw_base='https://raw.example/x', clock=lambda: self.now[0])
+        with self.assertRaises(OSError):
+            broken.ensure()
+        cfg = {'notify': {'server': 'https://ntfy.sh', 'topic': 't', 'line': {'channel_access_token': 'tok', 'to': 'U1', 'url': 'https://line.example/push'}}}
+        with self.assertLogs(level='WARNING'):
+            h.Notifier(cfg, urlopen, pictures=broken).post('燈', '亮', picture=self.JPEG)
+        self.assertEqual(calls[-1]['messages'][1]['originalContentUrl'], 'https://ntfy.sh/file/abc.jpg')
+        # github.com addresses give raw.githubusercontent.com; others need raw_base.
+        self.assertEqual(h.GitPictures.github_raw('https://github.com/me/repo.git', 'pictures'), 'https://raw.githubusercontent.com/me/repo/pictures')
+        self.assertEqual(h.GitPictures.github_raw('https://github.com/me/repo', 'p'), 'https://raw.githubusercontent.com/me/repo/p')
+        with self.assertRaises(ValueError):
+            h.GitPictures.github_raw('https://gitlab.com/me/repo.git', 'pictures')
+        store, tunnel = h.pictures_from_config({'notify': {'pictures': {'git': {'url': 'https://github.com/me/repo.git'}, 'keep_days': 3}}}, self.root)
+        self.assertEqual((type(store), tunnel, store.folder, store.raw_base, store.keep, store.branch),
+                         (h.GitPictures, None, self.root / 'pictures-git', 'https://raw.githubusercontent.com/me/repo/pictures', 3 * 86400, 'pictures'))
+        with self.assertRaises(ValueError):
+            h.pictures_from_config({'notify': {'pictures': {'git': {'branch': 'x'}}}}, self.root)
 
 
 if __name__ == '__main__':

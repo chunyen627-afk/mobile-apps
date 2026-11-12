@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.52'
+VERSION = '0.5.56'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -1652,17 +1652,33 @@ class Notifier:
     0.5.52: with a PictureStore (`notify.pictures`, served through a tunnel on this PC) the LINE
     picture is that store's URL instead: LINE's desktop client never showed ntfy's attachment
     (ntfy.sh answers HEAD without a Content-Type and has no Range), and the store keeps the
-    picture for days, not hours. ntfy still gets the attachment as before."""
+    picture for days, not hours. ntfy still gets the attachment as before.
+    0.5.54 (the user 11/12 wants a friend to get the light notifications too): `to` may be a
+    list of user IDs, sent in one multicast (LINE counts one message per recipient); every
+    recipient must have added the official account.
+    0.5.55 (the user 11/12: 「要個別用個別的額度」): `notify.line` may also be a list of such
+    objects, one per official account (the friend's own token and user ID, so each account
+    spends its own 200 a month); each is sent on its own with its own `tags`, a failing one
+    does not stop the others (the first error is raised after all were tried), and no token is
+    ever logged.
+    0.5.56 (the user 11/12: some notifications are his alone): each account may carry "name"
+    (for the log) and "owner": true. A notification posted with `shared=True` (the light watch)
+    goes to every account whose tags allow it; everything else (approvals, questions, UAC,
+    admin requests, usage, clipboard: the desktop and the accounts) goes only to owner accounts.
+    A single object without "owner" is the owner."""
 
     LINE_PUSH = 'https://api.line.me/v2/bot/message/push'
+    LINE_MULTICAST = 'https://api.line.me/v2/bot/message/multicast'
 
     def __init__(self, cfg, urlopen=urllib.request.urlopen, pictures=None):
         self.cfg = cfg.get('notify') or {}
         self.urlopen = urlopen
         self.pictures = pictures  # PictureStore, or None: LINE gets ntfy's attachment URL
 
-    def post(self, title, message, priority=3, tags=None, click=None, picture=None, picture_name='camera.jpg'):
-        """`click` is the phone app's link (open_link): tapping the notification opens it there."""
+    def post(self, title, message, priority=3, tags=None, click=None, picture=None, picture_name='camera.jpg',
+             shared=False):
+        """`click` is the phone app's link (open_link): tapping the notification opens it there.
+        `shared`: may go to LINE accounts that are not the owner's (0.5.56)."""
         picture_url = None
         if self.cfg.get('topic') and self.cfg.get('server'):
             if picture:
@@ -1678,16 +1694,37 @@ class Notifier:
                 picture_url = self.pictures.put(picture) or picture_url  # None while the tunnel is down
             except OSError as exc:  # the disk; LINE gets ntfy's URL (the phone still shows it)
                 logging.warning('picture could not be kept for LINE: %s', exc)
-        line = self.cfg.get('line') or {}
-        if line.get('channel_access_token') and line.get('to'):
+        accounts = self.cfg.get('line') or []
+        single = isinstance(accounts, dict)
+        if single:
+            accounts = [accounts]
+        failed = None
+        for number, line in enumerate(accounts, 1):
+            if not (isinstance(line, dict) and line.get('channel_access_token') and line.get('to')):
+                continue
+            owner = bool(line.get('owner', single))
+            if not (shared or owner):
+                continue  # the desktop's own business stays with the owner
             wanted = line.get('tags')
             if wanted and not set(wanted) & set(tags or []):
-                return
+                continue
+            label = 'LINE' if single else f"LINE {line.get('name') or '#%d' % number}"
             messages = [{'type': 'text', 'text': f'{title}\n{message}'[:5000]}]
             if picture_url:
                 messages.append({'type': 'image', 'originalContentUrl': picture_url, 'previewImageUrl': picture_url})
-            self.send(line.get('url') or self.LINE_PUSH, {'to': line['to'], 'messages': messages},
-                      {'Authorization': f"Bearer {line['channel_access_token']}"}, 'LINE')
+            to = line['to']
+            if isinstance(to, (list, tuple)):
+                to, url = [str(v) for v in to], line.get('url') or self.LINE_MULTICAST
+            else:
+                url = line.get('url') or self.LINE_PUSH
+            try:
+                self.send(url, {'to': to, 'messages': messages},
+                          {'Authorization': f"Bearer {line['channel_access_token']}"}, label)
+            except OSError as exc:  # the service's answer only, never the token
+                logging.warning('%s refused the notification: %s', label, exc)
+                failed = failed or exc
+        if failed is not None:
+            raise failed
 
     @staticmethod
     def header(text):
@@ -1970,15 +2007,144 @@ def keep_child_with_us(process):
         return False
 
 
+class GitPictures:
+    """Pictures for LINE pushed to a branch of a public GitHub repository (0.5.53; the user
+    11/12, after the company PC's LINE turned out to fetch nothing through a tunnel, nor from
+    Wikimedia, while raw.githubusercontent.com is reachable there and GCS needs a billing
+    account): `notify.pictures.git` = {"url": "https://github.com/<owner>/<repo>.git", "branch":
+    "pictures", "name": "<committer>", "email": "<committer email>"}. The branch is cloned once
+    (shallow, that branch only) next to config.json; each picture is committed under a random
+    name and pushed, and LINE gets https://raw.githubusercontent.com/<owner>/<repo>/<branch>/<name>
+    (`raw_base` overrides that for another host). git uses this PC's stored GitHub credential
+    (Git Credential Manager), so no token lives in config.json. Once a day pictures older than
+    `keep_days` are removed, and since git keeps history, the branch is rewritten from scratch
+    (an orphan commit holding what is left, pushed with --force): nothing older than keep_days
+    stays reachable by branch. Anything that fails raises OSError: LINE then gets ntfy's URL."""
+
+    NAME = re.compile(r'(\d{8}T\d{6}Z)-[A-Za-z0-9_-]{16}\.jpg')
+
+    def __init__(self, folder, url, branch='pictures', raw_base=None, keep_days=7, name='desk-remote-helper',
+                 email='desk-remote-helper@localhost', git='git', clock=time.time, run=None):
+        self.folder, self.url, self.branch = Path(folder), str(url), str(branch)
+        self.keep = float(keep_days) * 86400
+        self.name, self.email, self.git, self.clock = name, email, git, clock
+        self.raw_base = (raw_base or self.github_raw(self.url, self.branch)).rstrip('/')
+        self.run = run or self.run_git
+        self.lock = threading.Lock()
+        self.swept = 0.0  # when sweep() last looked (at most once a day)
+
+    @staticmethod
+    def github_raw(url, branch):
+        found = re.fullmatch(r'https://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?', url.strip())
+        if not found:
+            raise ValueError('notify.pictures.git.raw_base is needed for a repository not on github.com')
+        return f'https://raw.githubusercontent.com/{found.group(1)}/{found.group(2)}/{branch}'
+
+    def run_git(self, args, cwd):
+        """Runs git with `args` in `cwd`; its stdout, or OSError with its stderr."""
+        import subprocess
+        try:
+            done = subprocess.run([self.git, '-c', f'user.name={self.name}', '-c', f'user.email={self.email}'] + list(args),
+                                  cwd=str(cwd), capture_output=True, timeout=120,
+                                  creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise OSError(f'git {args[0]}: {exc}') from None
+        if done.returncode != 0:
+            raise OSError(f'git {args[0]} failed ({done.returncode}): {done.stderr.decode("utf-8", "replace").strip()[-300:]}')
+        return done.stdout.decode('utf-8', 'replace')
+
+    def ensure(self):
+        """Clones the branch when the folder is not a clone yet."""
+        if (self.folder / '.git').exists():
+            return
+        self.folder.parent.mkdir(parents=True, exist_ok=True)
+        self.run(['clone', '-q', '--branch', self.branch, '--single-branch', '--depth', '1', self.url, str(self.folder)],
+                 self.folder.parent)
+        logging.info('pictures: cloned the %s branch', self.branch)
+
+    def put(self, data):
+        """Commits and pushes `data` (JPEG bytes) under a new random name; returns its raw URL."""
+        stamp = datetime.fromtimestamp(self.clock(), UTC).strftime('%Y%m%dT%H%M%SZ')
+        name = f'{stamp}-{secrets.token_urlsafe(12)}.jpg'
+        with self.lock:
+            self.ensure()
+            # Start from what origin has (another writer, or a rewrite from elsewhere, would
+            # otherwise make the push fail as non-fast-forward).
+            self.run(['fetch', '-q', '--depth', '1', 'origin', self.branch], self.folder)
+            self.run(['reset', '-q', '--hard', 'FETCH_HEAD'], self.folder)
+            (self.folder / name).write_bytes(data)
+            self.run(['add', '--', name], self.folder)
+            self.run(['commit', '-q', '-m', 'picture'], self.folder)
+            self.run(['push', '-q', 'origin', f'HEAD:{self.branch}'], self.folder)
+        self.sweep()
+        return f'{self.raw_base}/{name}'
+
+    def expired(self, now=None):
+        now = self.clock() if now is None else now
+        if not self.folder.is_dir():
+            return []
+        gone = []
+        for path in self.folder.iterdir():
+            found = self.NAME.fullmatch(path.name)
+            if not found:
+                continue
+            when = datetime.strptime(found.group(1), '%Y%m%dT%H%M%SZ').replace(tzinfo=UTC).timestamp()
+            if now - when > self.keep:
+                gone.append(path.name)
+        return sorted(gone)
+
+    def sweep(self, now=None, force=False):
+        """Once a day: removes expired pictures and rewrites the branch without them. Returns how
+        many were removed (0 when nothing expired or it is not time yet)."""
+        now = self.clock() if now is None else now
+        if not force and now - self.swept < 86400:
+            return 0
+        self.swept = now
+        gone = self.expired(now)
+        if not gone:
+            return 0
+        with self.lock:
+            for name in gone:
+                try:
+                    (self.folder / name).unlink()
+                except FileNotFoundError:
+                    pass
+            self.run(['checkout', '-q', '--orphan', 'fresh-pictures'], self.folder)
+            self.run(['add', '-A'], self.folder)
+            self.run(['commit', '-q', '-m', f'{len(gone)} picture(s) older than {self.keep / 86400:g} days removed'], self.folder)
+            self.run(['branch', '-M', self.branch], self.folder)
+            self.run(['push', '-q', '--force', 'origin', f'{self.branch}:{self.branch}'], self.folder)
+        logging.info('pictures: %d expired picture(s) removed, branch rewritten', len(gone))
+        return len(gone)
+
+    def run_forever(self, every=3600):
+        while True:
+            time.sleep(every)
+            try:
+                self.sweep()
+            except Exception as exc:
+                logging.warning('picture sweep failed: %s', exc)
+
+
 def pictures_from_config(cfg, folder):
     """(PictureStore, QuickTunnel or None) from `notify.pictures`, or (None, None) when it is not
     configured. Either a fixed `base_url` (https) or `cloudflared` (the path to cloudflared.exe:
-    a quick tunnel to this PC's picture listener, `port` 18791) must be given."""
+    a quick tunnel to this PC's picture listener, `port` 18791) must be given; or `git` (see
+    GitPictures), which needs no listener: then (GitPictures, None)."""
     settings = (cfg.get('notify') or {}).get('pictures')
     if not settings:
         return None, None
     where = Path(settings['dir']) if settings.get('dir') else Path(folder) / 'pictures'
     keep = float(settings.get('keep_days', 7))
+    if settings.get('git'):
+        git = settings['git']
+        if not git.get('url'):
+            raise ValueError('notify.pictures.git.url is needed')
+        if not settings.get('dir'):
+            where = Path(folder) / 'pictures-git'  # not the listener's folder (0.5.52 left pictures there)
+        return GitPictures(where, git['url'], branch=git.get('branch') or 'pictures', raw_base=git.get('raw_base'),
+                           keep_days=keep, name=git.get('name') or 'desk-remote-helper',
+                           email=git.get('email') or 'desk-remote-helper@localhost', git=git.get('exe') or 'git'), None
     ip, port = str(settings.get('bind_ip') or '127.0.0.1'), int(settings.get('port') or 18791)
     if settings.get('base_url'):
         base = str(settings['base_url'])
@@ -5609,7 +5775,8 @@ class LightWatch:
         if self.notify is not None and (on or not first):
             title = f'{self.pc_name}：{self.name}' + ('亮了' if on else '暗了') + ('（小幫手啟動時已亮）' if first else '')
             try:
-                self.notify(title, f'{stamp:%H:%M} 亮度 {level:.0f}', tags=['bulb'], picture=self.picture, picture_name='light.jpg')
+                self.notify(title, f'{stamp:%H:%M} 亮度 {level:.0f}', tags=['bulb'], picture=self.picture, picture_name='light.jpg',
+                            shared=True)
             except OSError as exc:
                 logging.warning('light notification failed: %s', exc)
 
@@ -6788,13 +6955,20 @@ def main(argv=None):
     log.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s', '%Y-%m-%d %H:%M:%S'))
     logger.addHandler(log)
     pictures, tunnel = pictures_from_config(cfg, path.parent)
-    if pictures is not None:
+    if isinstance(pictures, PictureStore):
         settings = cfg['notify']['pictures']
         pictures.serve(str(settings.get('bind_ip') or '127.0.0.1'), int(settings.get('port') or 18791))
         pictures.sweep()
         threading.Thread(target=pictures.run_forever, daemon=True, name='picture-sweep').start()
         if tunnel is not None:
             threading.Thread(target=tunnel.run_forever, daemon=True, name='quick-tunnel').start()
+    elif pictures is not None:  # GitPictures: clone now (the first picture then only pushes), sweep daily
+        try:
+            pictures.ensure()
+            pictures.sweep()
+        except OSError as exc:
+            logging.warning('pictures: %s', exc)
+        threading.Thread(target=pictures.run_forever, daemon=True, name='picture-sweep').start()
     notifier = Notifier(cfg, pictures=pictures)
     notify = notifier.post if (cfg.get('notify') or {}).get('topic') else None
     pc_name = cfg.get('pc_name') or os.environ.get('COMPUTERNAME', 'PC')
