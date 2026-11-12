@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.48'
+VERSION = '0.5.49'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -5042,7 +5042,16 @@ class LightWatch:
     stays on the PC (the user: 「長時間紀錄統計的資料存在電腦就好」), and the phone's camera page
     shows today's changes from `/v1/light`. Every change (on and off) is sent to ntfy (and LINE
     when configured; the user 11/11: 「目前先加入亮燈和暗燈的通知就好」); the first look of a
-    watch window is notified only when the light is already on."""
+    watch window is notified only when the light is already on.
+
+    0.5.49 (11/12 08:00 the first look of the day read 137 on a washed-out frame, the camera's
+    exposure not yet settled after seven hours closed, and said the dark room was lit): after the
+    camera opens, frames are taken `settle` seconds apart until the whole picture's brightness
+    stops moving (two in a row within SETTLED of each other, at most SETTLE_FRAMES), and the first
+    look of a window needs two samples in a row on the same side too, like every change."""
+
+    SETTLED = 4.0       # whole-picture mean change (0-255) under which the exposure counts as settled
+    SETTLE_FRAMES = 6   # frames waited for at most (settle seconds apart) before measuring anyway
 
     KEEP = 30  # recent samples kept for /v1/light (to pick the thresholds)
 
@@ -5056,6 +5065,7 @@ class LightWatch:
         self.hours, self.weekdays_only = (int(hours[0]), int(hours[1])), bool(weekdays_only)
         self.aim = aim  # RegionAim: follows the door frame when the camera is nudged (None: fixed region)
         self.measure = measure or (lambda jpeg: self.aim.measure(jpeg)[0] if self.aim is not None else region_brightness(jpeg, self.region))
+        self.whole = lambda jpeg: region_brightness(jpeg, (0.0, 0.0, 1.0, 1.0))  # the exposure check (tests swap it)
         self.clock, self.sleep = clock, sleep
         self.lock = threading.Lock()
         self.on = None        # True/False once decided, None before the first readable picture
@@ -5079,8 +5089,7 @@ class LightWatch:
         applied when a second sample agrees."""
         data, why = self.feed.frame_bytes(wait=8.0)
         if data is not None and self.settle:
-            self.sleep(self.settle)  # the exposure settles over the first frames after opening
-            data, why = self.feed.frame_bytes(wait=8.0)
+            data, why = self.settled(data)
         if data is None:
             with self.lock:
                 self.error = why
@@ -5099,9 +5108,14 @@ class LightWatch:
             self.error = '找不到門框的圖案，用上次的位置量' if self.aim is not None and self.aim.lost else None
             self.level = level
             self.samples = (self.samples + [(now, level)])[-self.KEEP:]
-            if self.on is None:
-                self.on, self.since = level >= (self.on_above + self.off_below) / 2, now
-                change = (self.on, True)
+            if self.on is None:  # the window's first state: two looks on the same side of the middle
+                state = level >= (self.on_above + self.off_below) / 2
+                if self.pending == state:
+                    self.pending = None
+                    self.on, self.since = state, now
+                    change = (state, True)
+                else:
+                    self.pending = state
             else:
                 if self.on and level < self.off_below:
                     state = False
@@ -5120,6 +5134,35 @@ class LightWatch:
         if change is not None:
             self.record(now, change[0], level, first=change[1])
         return level
+
+    def settled(self, data):
+        """Frames `settle` seconds apart until the whole picture's brightness holds still (the
+        camera's auto exposure after opening: the first frames can be washed out), at most
+        SETTLE_FRAMES of them; (JPEG, None) of the last one, or (None, why) when the camera
+        stopped giving frames."""
+        try:
+            before = float(self.whole(data))
+        except Exception:
+            before = None  # not a readable picture: measure() will say so
+        for frame in range(1, self.SETTLE_FRAMES + 1):
+            self.sleep(self.settle)
+            data, why = self.feed.frame_bytes(wait=8.0)
+            if data is None:
+                return None, why
+            if before is None:
+                return data, None
+            try:
+                now = float(self.whole(data))
+            except Exception:
+                return data, None
+            if abs(now - before) < self.SETTLED:
+                if frame > 1:
+                    logging.info('light watch: the exposure settled after %d frames (%.0f -> %.0f)', frame + 1, before, now)
+                return data, None
+            before = now
+        logging.warning('light watch: the exposure was still moving after %d frames (%.0f); measuring anyway',
+                        self.SETTLE_FRAMES + 1, before)
+        return data, None
 
     def record(self, when, on, level, first=False):
         stamp = datetime.fromtimestamp(when)
@@ -5731,8 +5774,10 @@ class FakeSetup:
                        f'{yesterday:%Y-%m-%d},08:12:30,on,178.4\n{yesterday:%Y-%m-%d},12:03:05,off,74.2\n'
                        f'{yesterday:%Y-%m-%d},13:10:41,on,181.0\n{yesterday:%Y-%m-%d},18:32:12,off,70.9\n'
                        f'{today:%Y-%m-%d},08:05:17,on,179.6\n{today:%Y-%m-%d},12:01:48,off,72.3\n', encoding='utf-8')
-        return LightWatch(feed, (0.75, 0.4, 0.05, 0.18), log, name='玻璃門', interval=5, settle=0,
-                          measure=lambda jpeg: 183.0)
+        watch = LightWatch(feed, (0.75, 0.4, 0.05, 0.18), log, name='玻璃門', interval=5, settle=0,
+                           measure=lambda jpeg: 183.0)
+        watch.pending = True  # as if one bright look had happened: the first sample decides (0.5.49 takes two)
+        return watch
 
     def elevate_relay(self):
         """The companion's Python twin with a test key and one waiting request (fixture data)."""

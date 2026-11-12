@@ -2906,6 +2906,8 @@ class LightWatchTests(unittest.TestCase):
 
     def test_changes_need_two_samples_go_to_the_log_and_turning_on_is_notified(self):
         self.assertEqual(self.tick(55), 55)
+        self.assertIsNone(self.watch.on, 'one look decided the first state (0.5.49: it takes two)')
+        self.tick(54)
         self.assertEqual((self.watch.on, self.notes), (False, []), 'a dark first look was not recorded as off')
         self.tick(170)
         self.assertFalse(self.watch.on, 'one bright sample flipped the light')
@@ -2927,7 +2929,7 @@ class LightWatchTests(unittest.TestCase):
         self.assertEqual(self.notes[1][2].get('picture_name'), 'light.jpg')
         lines = (self.root / 'light_log.csv').read_text(encoding='utf-8').splitlines()
         self.assertEqual(lines[0], 'date,time,state,level,note')
-        self.assertEqual([l.split(',')[2:] for l in lines[1:]], [['off', '55.0', 'start'], ['on', '175.0'], ['off', '58.0']])
+        self.assertEqual([l.split(',')[2:] for l in lines[1:]], [['off', '54.0', 'start'], ['on', '175.0'], ['off', '58.0']])
         self.assertTrue(all(l.startswith('2026-11-11,') for l in lines[1:]))
         snap = self.watch.snapshot()
         self.assertEqual((snap['name'], snap['on'], snap['level'], snap['watching'], snap['hours'], snap['weekdaysOnly']),
@@ -2936,9 +2938,9 @@ class LightWatchTests(unittest.TestCase):
         days = self.watch.history(2)
         self.assertEqual([d['date'] for d in days], ['2026-11-11', '2026-11-10'])
         self.assertEqual([(c['time'][:5], c['on'], c['start']) for c in days[0]['changes']],
-                         [('09:00', False, True), ('09:02', True, False), ('09:03', False, False)])
+                         [('09:01', False, True), ('09:03', True, False), ('09:04', False, False)])
         self.assertEqual(days[1]['changes'], [])
-        self.assertEqual(len(self.watch.recent()), 7)
+        self.assertEqual(len(self.watch.recent()), 8)
         self.assertEqual(self.feed.opened, 1, 'every sample reopened the camera although the feed was still open')
 
     def test_outside_workdays_and_hours_nothing_is_watched_and_the_window_starts_afresh(self):
@@ -2951,10 +2953,29 @@ class LightWatchTests(unittest.TestCase):
         self.assertFalse(self.watch.active())
         self.watch.weekdays_only = False
         self.assertTrue(self.watch.active())
-        # A bright start inside the window is recorded as 'start' and notified once.
+        # A bright start inside the window is recorded as 'start' and notified once, after two
+        # bright looks: 11/12 08:00 one washed-out first frame said the dark room was lit.
+        self.tick(137)
+        self.tick(53)
+        self.tick(52)
+        self.assertEqual((self.watch.on, self.notes), (False, []), 'a washed-out first frame and a dark one decided the state')
+        self.watch.on = self.watch.pending = None
         self.tick(180)
+        self.assertIsNone(self.watch.on)
+        self.tick(182)
         self.assertTrue(self.watch.on)
         self.assertEqual(self.notes[-1][0], '示範電腦：玻璃門亮了（小幫手啟動時已亮）')
+        # The exposure after opening: frames are taken until the whole picture holds still.
+        self.watch.settle = 1
+        means = [250, 190, 141, 139]
+        self.watch.whole = lambda jpeg: means.pop(0)
+        calls = []
+        real = self.feed.frame_bytes
+        self.feed.frame_bytes = lambda **kw: calls.append(1) or real(**kw)
+        self.tick(181)
+        self.assertEqual(len(calls), 4, 'the washed-out frames were not waited out')
+        self.assertEqual(means, [], 'measuring started before the picture held still')
+        self.watch.settle = 0
         # A picture that cannot be read keeps the state and says why.
         self.watch.measure = lambda jpeg: 1 / 0
         self.assertIsNone(self.watch.sample())
