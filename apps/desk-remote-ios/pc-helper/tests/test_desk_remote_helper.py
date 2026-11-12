@@ -3117,6 +3117,42 @@ class LightWatchTests(unittest.TestCase):
         self.assertGreater(h.region_brightness(jpeg, (0.5, 0.0, 0.5, 1.0)), 200)
         self.assertGreater(h.region_brightness(jpeg, (0.99, 0.99, 0.01, 0.01)), 200)
 
+    def test_the_date_and_time_are_stamped_in_the_bottom_left_corner(self):
+        """0.5.57 (the user 11/12): every webcam frame carries the date and time, bottom left,
+        where the light watch's region (top right) is not touched."""
+        try:
+            import cv2
+            import numpy
+        except ImportError:
+            self.skipTest('OpenCV is not installed')
+        from datetime import datetime
+        frame = numpy.full((360, 640, 3), 90, dtype=numpy.uint8)
+        before = frame.copy()
+        out = h.stamp_time(cv2, frame, datetime(2026, 11, 12, 13, 5, 9))
+        self.assertIs(out, frame, 'the frame is stamped in place')
+        corner = frame[330:360, 0:260]
+        self.assertGreater(int((corner > 200).sum()), 200, 'no white text in the corner')
+        self.assertGreater(int((corner < 30).sum()), 200, 'no dark outline in the corner')
+        self.assertTrue((frame[0:300, :] == before[0:300, :]).all(), 'the stamp reached above the bottom strip')
+        self.assertTrue((frame[:, 320:] == before[:, 320:]).all(), 'the stamp reached the right half')
+        # Big and small frames: the text scales, never below a readable size.
+        small = numpy.zeros((90, 160, 3), dtype=numpy.uint8)
+        h.stamp_time(cv2, small, datetime(2026, 1, 1))
+        self.assertGreater(int((small > 200).sum()), 50)
+        # Config: on by default, `camera.stamp: false` turns it off.
+        feeds = []
+
+        class Cam:
+            def __init__(self, *args, **kwargs):
+                feeds.append(kwargs.get('stamp'))
+
+            def close(self):
+                pass
+        with mock.patch.object(h, 'OpenCVCamera', Cam):
+            h.camera_from_config({'camera': {}}, names=['cam']).open_device().close()
+            h.camera_from_config({'camera': {'stamp': False}}, names=['cam']).open_device().close()
+        self.assertEqual(feeds, [True, False])
+
 
 class CameraHttpTests(FakeEnvironment):
     def fetch(self, server, path, token=TOKEN):

@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.56'
+VERSION = '0.5.57'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -5436,7 +5436,7 @@ class OpenCVCamera:
     JPEG for the phone, in two sizes: 'low' (data saver, the default: 640 px, quality 50, about
     15 KB a frame on the office webcam) and 'high' (clear: 960 px, quality 70, about 34 KB)."""
 
-    def __init__(self, index=0, long_side=960, quality=70, low_long_side=640, low_quality=50):
+    def __init__(self, index=0, long_side=960, quality=70, low_long_side=640, low_quality=50, stamp=True, clock=None):
         import cv2
         self.cv2 = cv2
         backend = getattr(cv2, 'CAP_DSHOW', 0) if sys.platform == 'win32' else 0
@@ -5447,6 +5447,7 @@ class OpenCVCamera:
         self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
         self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
         self.sizes = {'high': (long_side, quality), 'low': (low_long_side, low_quality)}
+        self.stamp, self.clock = bool(stamp), clock or datetime.now
 
     def grab_jpeg(self, profile='low'):
         ok, frame = self.capture.read()
@@ -5457,11 +5458,28 @@ class OpenCVCamera:
         scale = long_side / max(height, width)
         if scale < 1:
             frame = self.cv2.resize(frame, (int(width * scale), int(height * scale)), interpolation=self.cv2.INTER_AREA)
+        if self.stamp:
+            stamp_time(self.cv2, frame, self.clock())
         ok, encoded = self.cv2.imencode('.jpg', frame, [self.cv2.IMWRITE_JPEG_QUALITY, quality])
         return encoded.tobytes() if ok else None
 
     def close(self):
         self.capture.release()
+
+
+def stamp_time(cv2, frame, when):
+    """Writes the date and time (0.5.57, the user 11/12: 「WEBCAM畫面上面可以加上日期時間嗎」) in the
+    bottom-left corner of `frame` (in place): white on a dark outline, sized to the picture.
+    Bottom-left is away from the light watch's region and anchor (top right), and the text is the
+    same from frame to frame, so the exposure check sees no change from it."""
+    height, width = frame.shape[:2]
+    text = when.strftime('%Y-%m-%d %H:%M:%S')
+    scale = max(0.45, width / 1200)
+    thickness = 1 if width < 800 else 2
+    origin = (8, height - 10)
+    cv2.putText(frame, text, origin, cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), thickness + 2, cv2.LINE_AA)
+    cv2.putText(frame, text, origin, cv2.FONT_HERSHEY_SIMPLEX, scale, (255, 255, 255), thickness, cv2.LINE_AA)
+    return frame
 
 
 class FakeCamera:
@@ -5910,7 +5928,8 @@ def camera_from_config(cfg, names=None):
     quality = int(settings.get('quality', 70))
     low_long_side = int(settings.get('low_long_side', 640))
     low_quality = int(settings.get('low_quality', 50))
-    return CameraFeed(lambda: OpenCVCamera(index, long_side, quality, low_long_side, low_quality),
+    stamp = bool(settings.get('stamp', True))  # the date and time in the corner of every frame (0.5.57)
+    return CameraFeed(lambda: OpenCVCamera(index, long_side, quality, low_long_side, low_quality, stamp=stamp),
                       idle=float(settings.get('idle_seconds', 5)))
 
 

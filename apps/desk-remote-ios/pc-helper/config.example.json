@@ -14,7 +14,7 @@
   "idle_seconds": 60,
   "alerts": {"usage_percent": 80, "context_percent": 80},
   "screen": true,
-  "camera": {"low_long_side": 640, "low_quality": 50, "long_side": 960, "quality": 70, "idle_seconds": 5},
+  "camera": {"low_long_side": 640, "low_quality": 50, "long_side": 960, "quality": 70, "idle_seconds": 5, "stamp": true},
   "light_watch": {"region": [0.76, 0.45, 0.03, 0.09], "name": "玻璃門", "interval_seconds": 30, "on_above": 130, "off_below": 90, "hours": [8, 18], "weekdays_only": true, "reference": "light_reference.jpg", "anchor": [0.73, 0.35, 0.14, 0.26]},
   "lan": {"enabled": true, "prefix": 24, "bind_ip": "<optional: this PC's Wi-Fi/Ethernet address; found from the default route when left out>"},
   "drive_windows": true,
