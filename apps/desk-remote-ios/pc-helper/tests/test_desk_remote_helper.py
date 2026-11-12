@@ -2857,6 +2857,16 @@ class NotifierTests(unittest.TestCase):
         self.assertEqual(sent[-1][2]['to'], ['U1', 'U2'])
         self.assertEqual(sent[-1][2]['messages'][0]['text'], '標題\n內容')
         del sent[-1]
+        # Several official accounts (0.5.55, the friend's own quota): a list of settings, each
+        # with its own token, recipient and tags.
+        notifier = h.Notifier({'notify': {'line': [{'channel_access_token': 'mine', 'to': 'U1', 'tags': ['bulb']},
+                                                   {'channel_access_token': 'friends', 'to': 'U9', 'tags': ['bulb']},
+                                                   {'channel_access_token': 'other', 'to': 'U5', 'tags': ['question']}]}},
+                              urlopen=urlopen)
+        notifier.post('亮了', '09:00', tags=['bulb'])
+        self.assertEqual([(auth, body['to']) for _, auth, body in sent[-2:]], [('Bearer mine', 'U1'), ('Bearer friends', 'U9')])
+        self.assertEqual(len(sent), 6)
+        del sent[-2:]
 
         # A picture rides along (0.5.48): PUT to the topic as the ntfy attachment, its URL as a
         # LINE image message in the same push.
@@ -2886,6 +2896,19 @@ class NotifierTests(unittest.TestCase):
             raise urllib.error.HTTPError(request.full_url, 401, 'Unauthorized', {}, __import__('io').BytesIO(b'{"message":"invalid token"}'))
         with self.assertRaisesRegex(OSError, 'LINE answered 401'):
             h.Notifier({'notify': {'line': {'channel_access_token': 'bad', 'to': 'U1'}}}, urlopen=refuse).post('a', 'b')
+        # One account refusing does not stop the next (0.5.55); the error is raised afterwards.
+        tried = []
+
+        def refuse_first(request, timeout=10):
+            tried.append(request.get_header('Authorization'))
+            if request.get_header('Authorization') == 'Bearer bad':
+                return refuse(request, timeout)
+            return Answer()
+        with self.assertRaises(OSError) as caught:
+            h.Notifier({'notify': {'line': [{'channel_access_token': 'bad', 'to': 'U1'}, {'channel_access_token': 'good', 'to': 'U2'}]}},
+                       urlopen=refuse_first).post('a', 'b')
+        self.assertEqual(tried, ['Bearer bad', 'Bearer good'])
+        self.assertNotIn('bad', str(caught.exception).replace('Bearer', ''), 'the token leaked into the error')
 
 
 class LightWatchTests(unittest.TestCase):

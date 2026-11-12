@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.54'
+VERSION = '0.5.55'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -1655,7 +1655,12 @@ class Notifier:
     picture for days, not hours. ntfy still gets the attachment as before.
     0.5.54 (the user 11/12 wants a friend to get the light notifications too): `to` may be a
     list of user IDs, sent in one multicast (LINE counts one message per recipient); every
-    recipient must have added the official account."""
+    recipient must have added the official account.
+    0.5.55 (the user 11/12: 「要個別用個別的額度」): `notify.line` may also be a list of such
+    objects, one per official account (the friend's own token and user ID, so each account
+    spends its own 200 a month); each is sent on its own with its own `tags`, a failing one
+    does not stop the others (the first error is raised after all were tried), and no token is
+    ever logged."""
 
     LINE_PUSH = 'https://api.line.me/v2/bot/message/push'
     LINE_MULTICAST = 'https://api.line.me/v2/bot/message/multicast'
@@ -1682,11 +1687,16 @@ class Notifier:
                 picture_url = self.pictures.put(picture) or picture_url  # None while the tunnel is down
             except OSError as exc:  # the disk; LINE gets ntfy's URL (the phone still shows it)
                 logging.warning('picture could not be kept for LINE: %s', exc)
-        line = self.cfg.get('line') or {}
-        if line.get('channel_access_token') and line.get('to'):
+        accounts = self.cfg.get('line') or []
+        if isinstance(accounts, dict):
+            accounts = [accounts]
+        failed = None
+        for number, line in enumerate(accounts, 1):
+            if not (isinstance(line, dict) and line.get('channel_access_token') and line.get('to')):
+                continue
             wanted = line.get('tags')
             if wanted and not set(wanted) & set(tags or []):
-                return
+                continue
             messages = [{'type': 'text', 'text': f'{title}\n{message}'[:5000]}]
             if picture_url:
                 messages.append({'type': 'image', 'originalContentUrl': picture_url, 'previewImageUrl': picture_url})
@@ -1695,8 +1705,15 @@ class Notifier:
                 to, url = [str(v) for v in to], line.get('url') or self.LINE_MULTICAST
             else:
                 url = line.get('url') or self.LINE_PUSH
-            self.send(url, {'to': to, 'messages': messages},
-                      {'Authorization': f"Bearer {line['channel_access_token']}"}, 'LINE')
+            try:
+                self.send(url, {'to': to, 'messages': messages},
+                          {'Authorization': f"Bearer {line['channel_access_token']}"},
+                          'LINE' if len(accounts) == 1 else f'LINE #{number}')
+            except OSError as exc:  # the service's answer only, never the token
+                logging.warning('LINE account #%d refused the notification: %s', number, exc)
+                failed = failed or exc
+        if failed is not None:
+            raise failed
 
     @staticmethod
     def header(text):

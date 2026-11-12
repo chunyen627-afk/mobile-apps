@@ -8,6 +8,7 @@
     "server": "https://ntfy.sh",
     "topic": "<a private, random ntfy topic: treat it like a password>",
     "line": {"channel_access_token": "<optional: a LINE Messaging API long-lived channel access token>", "to": "<your LINE user ID, starts with U; or a list of IDs, each counted as one message>", "tags": ["bulb"]},
+    "line_can_also_be_a_list": [{"channel_access_token": "<account 1 token>", "to": "U...", "tags": ["bulb"]}, {"channel_access_token": "<a friend's own account token>", "to": "U...", "tags": ["bulb"]}],
     "pictures": {"git": {"url": "https://github.com/<owner>/<public repo>.git", "branch": "pictures", "name": "<committer>", "email": "<committer email>", "exe": "C:\\Program Files\\Git\\mingw64\\bin\\git.exe"}, "keep_days": 7, "_or": "\"cloudflared\": \"<path to cloudflared.exe>\" with \"port\": 18791 serves them from this PC through a quick tunnel instead; or a fixed \"base_url\""}
   },
   "idle_seconds": 60,
