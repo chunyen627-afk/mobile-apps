@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.57'
+VERSION = '0.5.58'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -2420,10 +2420,11 @@ class Hub:
                 'camera': {'on': self.camera.on()} if self.camera is not None else None,
                 'light': self.light.snapshot() if self.light is not None else None}
 
-    def recent(self, per_app=3):
-        """Each app's few most recently written conversations, newest first, for the phone's PC
-        list to link straight into (read at most every 10 seconds). Every app gets its share, so
-        a quiet one still shows when it was last used."""
+    def recent(self, limit=6):
+        """The most recently written conversations of all apps together, newest first, for the
+        phone's PC list to link straight into (read at most every 10 seconds). 0.5.58 (the user
+        11/12: 「首頁這邊都留最新對話就好，不一定要 Codex 三個、Claude 三個」): no share per app
+        any more, so an app nobody used lately drops off the list."""
         now = time.monotonic()
         stamp, cached = self.latest_cache
         if cached is not None and now - stamp < 10:
@@ -2435,9 +2436,9 @@ class Hub:
             except (OSError, ValueError, sqlite3.Error):
                 logging.exception('recent conversations of %s failed', app)
                 rows = []
-            rows.sort(key=lambda r: r['updatedAt'], reverse=True)
-            out += [dict(row, app=app) for row in rows[:per_app]]
+            out += [dict(row, app=app) for row in rows]
         out.sort(key=lambda r: r['updatedAt'], reverse=True)
+        out = out[:limit]
         self.latest_cache = (now, out)
         return out
 
