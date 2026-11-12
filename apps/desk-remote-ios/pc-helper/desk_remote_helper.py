@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.58'
+VERSION = '0.5.59'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -211,6 +211,26 @@ def clock_reset(text, read_at):
         if candidate.weekday() == day and candidate.timestamp() > read_at - 60:
             return candidate.timestamp()
     return None
+
+
+def with_reset_times(usage):
+    """`usage` with every window whose reset is only words ("週五上午11:00 重設") also given
+    `resetsAt`, the next such moment after `sampledAt` (0.5.59: the phone's first screen counts
+    down to it, the user 11/12: 「首頁也順便提醒離 reset 還剩幾天幾小時」). The words stay."""
+    if not usage or not usage.get('sampledAt'):
+        return usage
+    try:
+        read_at = datetime.fromisoformat(usage['sampledAt'].replace('Z', '+00:00')).timestamp()
+    except ValueError:
+        return usage
+    windows = []
+    for window in usage.get('windows') or []:
+        if not window.get('resetsAt') and window.get('resetsText'):
+            at = clock_reset(window['resetsText'], read_at)
+            if at is not None:
+                window = dict(window, resetsAt=iso(at))
+        windows.append(window)
+    return dict(usage, windows=windows)
 
 
 def relative_reset(text, read_at):
@@ -2458,8 +2478,8 @@ class Hub:
                 out[app] = None
         seen = self.ui('claude')
         button = ui_usage(seen.get('usage'), (self.strings.get('claude') or {}).get('usage_prefix'))
-        out['claude'] = merge_claude_usage(out.get('claude'), button, seen.get('usageAt'), time.time(),
-                                           seen.get('card'), seen.get('cardAt'))
+        out['claude'] = with_reset_times(merge_claude_usage(out.get('claude'), button, seen.get('usageAt'), time.time(),
+                                                            seen.get('card'), seen.get('cardAt')))
         for app, source in self.sources.items():
             if out.get(app) and hasattr(source, 'account'):
                 try:

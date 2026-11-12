@@ -152,6 +152,25 @@ public enum DeskText {
         return meta?.permissionPending == true ? "\(permission)（下一則回覆起生效）" : permission
     }
 
+    /// The first screen's reminder under a PC (asked 11/12: 「離 reset 還剩幾天幾小時」):
+    /// "Claude 每週 64%・2 天 19 小時後重設", from the app's weekly window; nil without a reset
+    /// moment ahead (helper 0.5.59 gives Claude's worded reset its moment).
+    public static func resetCountdown(_ app: DeskApp, _ usage: PlanUsage?, now: Date = Date()) -> String? {
+        let weekly = (usage?.windows ?? []).filter { $0.label.hasPrefix("每週") }
+        guard let window = weekly.first(where: { $0.label == "每週" }) ?? weekly.first,
+              let iso = window.resetsAt, let date = parse(iso), date > now else { return nil }
+        return "\(app.displayName) \(window.label) \(window.percent)%・\(remaining(date.timeIntervalSince(now)))後重設"
+    }
+
+    /// "2 天 19 小時", "5 小時 3 分", "12 分鐘", "不到 1 分鐘".
+    public static func remaining(_ seconds: TimeInterval) -> String {
+        let minutes = max(0, Int(seconds / 60))
+        let days = minutes / 1440, hours = minutes % 1440 / 60, rest = minutes % 60
+        if days > 0 { return "\(days) 天 \(hours) 小時" }
+        if hours > 0 { return "\(hours) 小時 \(rest) 分" }
+        return rest > 0 ? "\(rest) 分鐘" : "不到 1 分鐘"
+    }
+
     /// "每週 46%・週日上午11:00 重設" or "每週 5%・11/2 18:49 重設".
     public static func usageWindow(_ window: PlanUsage.Window, timeZone: TimeZone = .current) -> String {
         var text = "\(window.label) \(window.percent)%"
