@@ -2941,6 +2941,11 @@ class LightWatchTests(unittest.TestCase):
                          [('09:01', False, True), ('09:03', True, False), ('09:04', False, False)])
         self.assertEqual(days[1]['changes'], [])
         self.assertEqual(len(self.watch.recent()), 8)
+        samples = (self.root / 'light_samples.csv').read_text(encoding='utf-8').splitlines()
+        self.assertEqual(samples[0], 'date,time,level,score')
+        self.assertEqual([l.split(',')[2:] for l in samples[1:]],
+                         [[v, ''] for v in ('55.0', '54.0', '170.0', '100.0', '170.0', '175.0', '60.0', '58.0')],
+                         'not every look was kept for the calibration')
         self.assertEqual(self.feed.opened, 1, 'every sample reopened the camera although the feed was still open')
 
     def test_outside_workdays_and_hours_nothing_is_watched_and_the_window_starts_afresh(self):

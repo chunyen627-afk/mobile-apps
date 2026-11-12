@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.49'
+VERSION = '0.5.50'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -5048,7 +5048,12 @@ class LightWatch:
     exposure not yet settled after seven hours closed, and said the dark room was lit): after the
     camera opens, frames are taken `settle` seconds apart until the whole picture's brightness
     stops moving (two in a row within SETTLED of each other, at most SETTLE_FRAMES), and the first
-    look of a window needs two samples in a row on the same side too, like every change."""
+    look of a window needs two samples in a row on the same side too, like every change.
+
+    0.5.50 (the user 11/12 「多紀錄多校正」, after closing the glass door took a lit reading from
+    158 to 104, inside the thresholds' gap): every sample's level and door-frame match score also
+    go to light_samples.csv next to the log (date,time,level,score), so the thresholds can be
+    set from what the door looks like open, closed, lit and dark."""
 
     SETTLED = 4.0       # whole-picture mean change (0-255) under which the exposure counts as settled
     SETTLE_FRAMES = 6   # frames waited for at most (settle seconds apart) before measuring anyway
@@ -5059,6 +5064,7 @@ class LightWatch:
                  on_above=160.0, off_below=120.0, settle=1.0, hours=(0, 24), weekdays_only=False,
                  measure=None, aim=None, clock=time.time, sleep=time.sleep):
         self.feed, self.region, self.log_path = feed, tuple(float(v) for v in region), Path(log_path)
+        self.samples_path = self.log_path.with_name('light_samples.csv')  # every look (0.5.50)
         self.notify, self.pc_name, self.name = notify, pc_name, name or '燈'
         self.interval, self.on_above, self.off_below = float(interval), float(on_above), float(off_below)
         self.settle = float(settle)
@@ -5131,9 +5137,24 @@ class LightWatch:
                     change = (state, False)
                 else:
                     self.pending = state
+        self.keep_sample(now, level)
         if change is not None:
             self.record(now, change[0], level, first=change[1])
         return level
+
+    def keep_sample(self, when, level):
+        """Appends one look to light_samples.csv (every sample, not only changes): the level and
+        the door-frame match score (blank without RegionAim)."""
+        stamp = datetime.fromtimestamp(when)
+        score = '' if self.aim is None or self.aim.score is None else f'{self.aim.score:.2f}'
+        try:
+            new = not self.samples_path.exists()
+            with self.samples_path.open('a', encoding='utf-8') as out:
+                if new:
+                    out.write('date,time,level,score\n')
+                out.write(f'{stamp:%Y-%m-%d},{stamp:%H:%M:%S},{level:.1f},{score}\n')
+        except OSError as exc:
+            logging.warning('light samples could not be written: %s', exc)
 
     def settled(self, data):
         """Frames `settle` seconds apart until the whole picture's brightness holds still (the
