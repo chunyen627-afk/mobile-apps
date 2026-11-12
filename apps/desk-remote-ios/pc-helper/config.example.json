@@ -7,7 +7,8 @@
   "notify": {
     "server": "https://ntfy.sh",
     "topic": "<a private, random ntfy topic: treat it like a password>",
-    "line": {"channel_access_token": "<optional: a LINE Messaging API long-lived channel access token>", "to": "<your LINE user ID, starts with U>", "tags": ["bulb"]}
+    "line": {"channel_access_token": "<optional: a LINE Messaging API long-lived channel access token>", "to": "<your LINE user ID, starts with U>", "tags": ["bulb"]},
+    "pictures": {"cloudflared": "<optional: path to cloudflared.exe; the helper runs a quick tunnel to its picture listener and LINE gets pictures from there. Or a fixed \"base_url\": \"https://...\">", "keep_days": 7, "port": 18791}
   },
   "idle_seconds": 60,
   "alerts": {"usage_percent": 80, "context_percent": 80},
