@@ -1174,6 +1174,15 @@ for line in sys.stdin:
         self.assertEqual(h.relative_reset('45 分後重設', t), t + 45 * 60)
         self.assertEqual(h.relative_reset('1 天 3 小時後重設', t), t + 86400 + 3 * 3600)
         self.assertIsNone(h.relative_reset('週日上午11:00 重設', t))
+        # 0.5.59: the words also become a moment, the next such time after the sample.
+        sampled = time.mktime((2026, 11, 12, 16, 0, 0, 3, 316, -1))  # Thursday 16:00
+        timed = h.with_reset_times({'sampledAt': h.iso(sampled), 'windows': [
+            {'label': '每週', 'percent': 64, 'resetsAt': None, 'resetsText': '週五上午11:00 重設'},
+            {'label': '5 小時', 'percent': 1, 'resetsAt': None, 'resetsText': None}]})
+        self.assertEqual(timed['windows'][0]['resetsAt'], h.iso(sampled + 19 * 3600))
+        self.assertEqual(timed['windows'][0]['resetsText'], '週五上午11:00 重設')
+        self.assertIsNone(timed['windows'][1]['resetsAt'])
+        self.assertIsNone(h.with_reset_times(None))
         self.assertIsNone(h.relative_reset('後重設', t))
         rows = [{'label': '工作階段限制', 'percent': 5.0, 'reset': '2 小時 56 分後重設'},
                 {'label': '每週 · 所有模型', 'percent': 62, 'reset': '週日上午11:00 重設'}, {'label': 'x'}]
@@ -1323,7 +1332,11 @@ for line in sys.stdin:
         self.assertEqual((session['label'], session['percent'], session['resetsText']), ('工作階段', 5, None))
         self.assertAlmostEqual(h.datetime.fromisoformat(session['resetsAt'].replace('Z', '+00:00')).timestamp(),
                                time.time() + 2 * 3600 + 56 * 60, delta=120)
-        self.assertEqual(week, {'label': '每週', 'percent': 46, 'resetsAt': None, 'resetsText': '週日上午11:00 重設'})
+        self.assertEqual({k: v for k, v in week.items() if k != 'resetsAt'}, {'label': '每週', 'percent': 46, 'resetsText': '週日上午11:00 重設'})
+        # 0.5.59: the words' moment, a Sunday 11:00 within the coming week.
+        moment = h.datetime.fromisoformat(week['resetsAt'].replace('Z', '+00:00')).astimezone()
+        self.assertEqual((moment.weekday(), moment.hour, moment.minute), (6, 11, 0))
+        self.assertTrue(0 < moment.timestamp() - time.time() <= 7 * 86400 + 3600)
         self.assertEqual(state['usage']['codex']['windows'][0]['percent'], 5)
         self.assertEqual(state['models']['claude'], ['Opus 5.5', 'Sonnet 5.5', 'Haiku 5.5', 'Fable 5.1'])
         self.assertIn('GPT-6.1 Terra', state['models']['codex'])
@@ -1461,8 +1474,19 @@ class RecentTests(FakeEnvironment):
         self.assertEqual(recent[0]['status'], 'active')  # written within the last minute
         self.assertEqual(recent[0]['title'], '評估 iPhone App 的做法')
         self.assertEqual([r['updatedAt'] for r in recent], sorted((r['updatedAt'] for r in recent), reverse=True))
-        self.assertEqual(sum(r['app'] == 'claude' for r in recent), 3, 'three per app')
-        self.assertEqual(sum(r['app'] == 'codex' for r in recent), 2, 'Codex has two listed conversations')
+        # 0.5.58: the newest six of all apps together, no share per app.
+        everything = sorted(([r['updatedAt'], app] for app, source in self.sources.items()
+                             for r in source.list_sessions(10) if r.get('updatedAt')), reverse=True)
+        self.assertEqual([(r['updatedAt'], r['app']) for r in recent], [tuple(e) for e in everything[:6]])
+        # Claude written well after every Codex conversation fills the list on its own.
+        for row in self.sources['claude'].list_sessions(10):
+            later = time.time() + 600
+            os.utime(self.sources['claude'].transcript_path(row['id']), (later, later))
+        hub.latest_cache = (0, None)
+        recent = hub.state()['recent']
+        claude_count = len([r for r in self.sources['claude'].list_sessions(10) if r.get('updatedAt')])
+        self.assertEqual(sum(r['app'] == 'claude' for r in recent[:min(6, claude_count)]), min(6, claude_count),
+                         'an app still kept a share although others were newer')
 
     def test_an_app_without_conversations_is_left_out(self):
         hub = drive(self.fake)[0]

@@ -81,6 +81,8 @@ struct DeskPCRow: View {
     @ObservedObject var store: DeskStore
     let pc: DeskPC
     @State private var line = "連線中…"
+    /// "Claude 每週 64%・2 天 19 小時後重設", one line per app (asked 11/12), or "".
+    @State private var resets = ""
     @State private var healthy: Bool?
     /// The PC could not be reached at the last look: retry every 5 s instead of 30.
     @State private var unreachable = false
@@ -93,6 +95,9 @@ struct DeskPCRow: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(pc.name).font(.headline)
                 Text(line).font(.footnote).foregroundStyle(.secondary)
+                if !resets.isEmpty {
+                    Text(resets).font(.footnote).foregroundStyle(.secondary)
+                }
             }
         }
         .accessibilityElement(children: .combine)
@@ -109,6 +114,9 @@ struct DeskPCRow: View {
             let state = try await client.state()
             store.note(state, pcID: pc.id)
             line = (client.viaLAN ? "連線正常（區網）・" : "連線正常・") + DeskText.presence(state.presence)
+            resets = DeskApp.allCases.compactMap { app in
+                DeskText.resetCountdown(app, store.shownUsage(app, in: state, pcID: pc.id)?.usage)
+            }.joined(separator: "\n")
             if let waiting = state.elevate?.pending, waiting > 0 {
                 line += "・\(waiting) 個管理員權限請求"
             }

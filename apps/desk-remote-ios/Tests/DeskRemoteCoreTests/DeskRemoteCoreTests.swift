@@ -559,6 +559,18 @@ final class MetaAndUsageTests: XCTestCase {
         XCTAssertEqual(DeskText.usageWindow(weekly), "每週 46%・週日上午11:00 重設")
         let codex = PlanUsage.Window(label: "每週", percent: 5, resetsAt: "2026-11-02T10:49:20Z", resetsText: nil)
         XCTAssertEqual(DeskText.usageWindow(codex, timeZone: TimeZone(identifier: "Asia/Taipei")!), "每週 5%・11/2 18:49 重設")
+        // The first screen's countdown (asked 11/12): the weekly window's moment, days and hours.
+        let now = DeskText.parse("2026-11-12T08:00:00Z")!
+        let timed = PlanUsage(windows: [PlanUsage.Window(label: "5 小時", percent: 1, resetsAt: "2026-11-12T09:00:00Z", resetsText: nil),
+                                        PlanUsage.Window(label: "每週", percent: 64, resetsAt: "2026-11-15T03:30:00Z", resetsText: "週日上午11:30 重設")],
+                              sampledAt: nil, account: nil)
+        XCTAssertEqual(DeskText.resetCountdown(.claude, timed, now: now), "Claude 每週 64%・2 天 19 小時後重設")
+        XCTAssertNil(DeskText.resetCountdown(.codex, PlanUsage(windows: [codex], sampledAt: nil, account: nil), now: now),
+                     "a reset already past was counted down")
+        XCTAssertNil(DeskText.resetCountdown(.claude, nil, now: now))
+        XCTAssertEqual(DeskText.remaining(3 * 3600 + 5 * 60), "3 小時 5 分")
+        XCTAssertEqual(DeskText.remaining(12 * 60 + 30), "12 分鐘")
+        XCTAssertEqual(DeskText.remaining(20), "不到 1 分鐘")
     }
 
     func testImportedCodexThreadShowsTheNoteAndAPendingModePick() throws {
