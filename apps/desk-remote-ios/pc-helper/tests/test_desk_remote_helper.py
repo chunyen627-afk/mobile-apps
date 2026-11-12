@@ -2859,14 +2859,19 @@ class NotifierTests(unittest.TestCase):
         del sent[-1]
         # Several official accounts (0.5.55, the friend's own quota): a list of settings, each
         # with its own token, recipient and tags.
-        notifier = h.Notifier({'notify': {'line': [{'channel_access_token': 'mine', 'to': 'U1', 'tags': ['bulb']},
-                                                   {'channel_access_token': 'friends', 'to': 'U9', 'tags': ['bulb']},
+        notifier = h.Notifier({'notify': {'line': [{'name': '我', 'owner': True, 'channel_access_token': 'mine', 'to': 'U1', 'tags': ['bulb', 'question']},
+                                                   {'name': 'Jupiter', 'channel_access_token': 'friends', 'to': 'U9', 'tags': ['bulb']},
                                                    {'channel_access_token': 'other', 'to': 'U5', 'tags': ['question']}]}},
                               urlopen=urlopen)
-        notifier.post('亮了', '09:00', tags=['bulb'])
+        notifier.post('亮了', '09:00', tags=['bulb'], shared=True)
         self.assertEqual([(auth, body['to']) for _, auth, body in sent[-2:]], [('Bearer mine', 'U1'), ('Bearer friends', 'U9')])
         self.assertEqual(len(sent), 6)
-        del sent[-2:]
+        # The desktop's own business (0.5.56: an approval, a question...) goes to the owner only,
+        # even when another account's tags would take it.
+        notifier.post('權限詢問', '要不要允許', tags=['question'])
+        self.assertEqual(len(sent), 7, 'a private notification reached a non-owner account')
+        self.assertEqual(sent[-1][1], 'Bearer mine')
+        del sent[-3:]
 
         # A picture rides along (0.5.48): PUT to the topic as the ntfy attachment, its URL as a
         # LINE image message in the same push.
@@ -2905,7 +2910,8 @@ class NotifierTests(unittest.TestCase):
                 return refuse(request, timeout)
             return Answer()
         with self.assertRaises(OSError) as caught:
-            h.Notifier({'notify': {'line': [{'channel_access_token': 'bad', 'to': 'U1'}, {'channel_access_token': 'good', 'to': 'U2'}]}},
+            h.Notifier({'notify': {'line': [{'channel_access_token': 'bad', 'to': 'U1', 'owner': True},
+                                            {'channel_access_token': 'good', 'to': 'U2', 'owner': True}]}},
                        urlopen=refuse_first).post('a', 'b')
         self.assertEqual(tried, ['Bearer bad', 'Bearer good'])
         self.assertNotIn('bad', str(caught.exception).replace('Bearer', ''), 'the token leaked into the error')
@@ -2957,6 +2963,7 @@ class LightWatchTests(unittest.TestCase):
         self.assertEqual(self.notes[1][2].get('tags'), ['bulb'])
         self.assertTrue(self.notes[1][2].get('picture', b'').startswith(b'\xff\xd8\xff'), 'the camera frame did not ride along')
         self.assertEqual(self.notes[1][2].get('picture_name'), 'light.jpg')
+        self.assertTrue(self.notes[1][2].get('shared'), 'the light is shared news (0.5.56), not the owner\'s alone')
         lines = (self.root / 'light_log.csv').read_text(encoding='utf-8').splitlines()
         self.assertEqual(lines[0], 'date,time,state,level,note')
         self.assertEqual([l.split(',')[2:] for l in lines[1:]], [['off', '54.0', 'start'], ['on', '175.0'], ['off', '58.0']])

@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.55'
+VERSION = '0.5.56'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -1660,7 +1660,12 @@ class Notifier:
     objects, one per official account (the friend's own token and user ID, so each account
     spends its own 200 a month); each is sent on its own with its own `tags`, a failing one
     does not stop the others (the first error is raised after all were tried), and no token is
-    ever logged."""
+    ever logged.
+    0.5.56 (the user 11/12: some notifications are his alone): each account may carry "name"
+    (for the log) and "owner": true. A notification posted with `shared=True` (the light watch)
+    goes to every account whose tags allow it; everything else (approvals, questions, UAC,
+    admin requests, usage, clipboard: the desktop and the accounts) goes only to owner accounts.
+    A single object without "owner" is the owner."""
 
     LINE_PUSH = 'https://api.line.me/v2/bot/message/push'
     LINE_MULTICAST = 'https://api.line.me/v2/bot/message/multicast'
@@ -1670,8 +1675,10 @@ class Notifier:
         self.urlopen = urlopen
         self.pictures = pictures  # PictureStore, or None: LINE gets ntfy's attachment URL
 
-    def post(self, title, message, priority=3, tags=None, click=None, picture=None, picture_name='camera.jpg'):
-        """`click` is the phone app's link (open_link): tapping the notification opens it there."""
+    def post(self, title, message, priority=3, tags=None, click=None, picture=None, picture_name='camera.jpg',
+             shared=False):
+        """`click` is the phone app's link (open_link): tapping the notification opens it there.
+        `shared`: may go to LINE accounts that are not the owner's (0.5.56)."""
         picture_url = None
         if self.cfg.get('topic') and self.cfg.get('server'):
             if picture:
@@ -1688,15 +1695,20 @@ class Notifier:
             except OSError as exc:  # the disk; LINE gets ntfy's URL (the phone still shows it)
                 logging.warning('picture could not be kept for LINE: %s', exc)
         accounts = self.cfg.get('line') or []
-        if isinstance(accounts, dict):
+        single = isinstance(accounts, dict)
+        if single:
             accounts = [accounts]
         failed = None
         for number, line in enumerate(accounts, 1):
             if not (isinstance(line, dict) and line.get('channel_access_token') and line.get('to')):
                 continue
+            owner = bool(line.get('owner', single))
+            if not (shared or owner):
+                continue  # the desktop's own business stays with the owner
             wanted = line.get('tags')
             if wanted and not set(wanted) & set(tags or []):
                 continue
+            label = 'LINE' if single else f"LINE {line.get('name') or '#%d' % number}"
             messages = [{'type': 'text', 'text': f'{title}\n{message}'[:5000]}]
             if picture_url:
                 messages.append({'type': 'image', 'originalContentUrl': picture_url, 'previewImageUrl': picture_url})
@@ -1707,10 +1719,9 @@ class Notifier:
                 url = line.get('url') or self.LINE_PUSH
             try:
                 self.send(url, {'to': to, 'messages': messages},
-                          {'Authorization': f"Bearer {line['channel_access_token']}"},
-                          'LINE' if len(accounts) == 1 else f'LINE #{number}')
+                          {'Authorization': f"Bearer {line['channel_access_token']}"}, label)
             except OSError as exc:  # the service's answer only, never the token
-                logging.warning('LINE account #%d refused the notification: %s', number, exc)
+                logging.warning('%s refused the notification: %s', label, exc)
                 failed = failed or exc
         if failed is not None:
             raise failed
@@ -5764,7 +5775,8 @@ class LightWatch:
         if self.notify is not None and (on or not first):
             title = f'{self.pc_name}：{self.name}' + ('亮了' if on else '暗了') + ('（小幫手啟動時已亮）' if first else '')
             try:
-                self.notify(title, f'{stamp:%H:%M} 亮度 {level:.0f}', tags=['bulb'], picture=self.picture, picture_name='light.jpg')
+                self.notify(title, f'{stamp:%H:%M} 亮度 {level:.0f}', tags=['bulb'], picture=self.picture, picture_name='light.jpg',
+                            shared=True)
             except OSError as exc:
                 logging.warning('light notification failed: %s', exc)
 
