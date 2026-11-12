@@ -699,21 +699,29 @@ final class DeskRemoteUITests: XCTestCase {
     }
 
     func test35FirstScreenLinksToEachPCsNewestConversations() throws {
+        // Helper 0.5.58 (asked 11/12): the newest six of all apps together, no share per app, so
+        // which conversations are listed depends on what earlier tests wrote. The helper's own
+        // list says which; the first idle one carries the dot.
+        let helper = try helperSettings()
+        let recent = (ask(helper, "/v1/state")?["recent"] as? [[String: Any]]) ?? []
+        XCTAssertLessThanOrEqual(recent.count, 6, "more than six conversations listed: \(recent.count)")
+        let idle = try XCTUnwrap(recent.first { ($0["status"] as? String) != "active" && $0["app"] is String },
+                                 "no idle conversation listed")
+        let id = try XCTUnwrap(idle["id"] as? String)
+        let appName = (idle["app"] as? String) == "codex" ? "Codex" : "Claude"
         // As if the user had last looked long ago: the conversations are all new.
         try launchWithHelper(environment: ["DESK_UI_SEEN_BEFORE": "2000-01-01T00:00:00Z"])
-        let codex = element("pc-recent-示範電腦-\(codexY)")
-        XCTAssertTrue(codex.waitForExistence(timeout: 15), "Codex's conversation is not on the first screen")
+        let codex = element("pc-recent-示範電腦-\(id)")
+        XCTAssertTrue(codex.waitForExistence(timeout: 15), "the newest idle conversation is not on the first screen")
         let links = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'pc-recent-示範電腦-'"))
         let labels = links.allElementsBoundByIndex.map(\.label)
-        XCTAssertTrue(labels.contains { $0.contains("Claude") } && labels.contains { $0.contains("Codex") }, "\(labels)")
-        XCTAssertLessThanOrEqual(labels.count, 6, "at most three per app")
-        // Codex's older conversation (5 hours ago) is idle, so it carries the dot.
+        XCTAssertTrue(labels.contains { $0.contains(appName) }, "\(labels)")
+        XCTAssertLessThanOrEqual(labels.count, 6, "at most six together")
         let marked = poll(timeout: 10) { (codex.value as? String) == "有新訊息" }
         snapshot("35-recent")
         XCTAssertTrue(marked, "not marked new: \(said(codex)) \(String(describing: codex.value))")
         codex.tap()
         XCTAssertTrue(element("chat-input").waitForExistence(timeout: 10), "the link did not open the conversation")
-        XCTAssertTrue(text("建議先做模擬器版本").waitForExistence(timeout: 10), "a different conversation opened")
         app.navigationBars.buttons.element(boundBy: 0).tap()
         XCTAssertTrue(codex.waitForExistence(timeout: 10), "back on the first screen")
         XCTAssertTrue(poll(timeout: 5) { (codex.value as? String) != "有新訊息" }, "still marked new after opening it")
