@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.51'
+VERSION = '0.5.52'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -1648,13 +1648,18 @@ class Notifier:
     A notification may carry a `picture` (JPEG bytes; 0.5.48, the light watch's camera frame, the
     user 11/11): it is published to ntfy as the attachment (PUT, headers RFC 2047 encoded), and
     the attachment's URL (ntfy.sh keeps it about three hours) goes into the same LINE push as an
-    image message, since LINE only takes a public HTTPS URL. No ntfy, no picture on LINE."""
+    image message, since LINE only takes a public HTTPS URL. No ntfy, no picture on LINE.
+    0.5.52: with a PictureStore (`notify.pictures`, served through a tunnel on this PC) the LINE
+    picture is that store's URL instead: LINE's desktop client never showed ntfy's attachment
+    (ntfy.sh answers HEAD without a Content-Type and has no Range), and the store keeps the
+    picture for days, not hours. ntfy still gets the attachment as before."""
 
     LINE_PUSH = 'https://api.line.me/v2/bot/message/push'
 
-    def __init__(self, cfg, urlopen=urllib.request.urlopen):
+    def __init__(self, cfg, urlopen=urllib.request.urlopen, pictures=None):
         self.cfg = cfg.get('notify') or {}
         self.urlopen = urlopen
+        self.pictures = pictures  # PictureStore, or None: LINE gets ntfy's attachment URL
 
     def post(self, title, message, priority=3, tags=None, click=None, picture=None, picture_name='camera.jpg'):
         """`click` is the phone app's link (open_link): tapping the notification opens it there."""
@@ -1668,6 +1673,11 @@ class Notifier:
                 if click:
                     payload['click'] = click
                 self.send(self.cfg['server'], payload, {}, 'ntfy')
+        if picture and self.pictures is not None:
+            try:
+                picture_url = self.pictures.put(picture) or picture_url  # None while the tunnel is down
+            except OSError as exc:  # the disk; LINE gets ntfy's URL (the phone still shows it)
+                logging.warning('picture could not be kept for LINE: %s', exc)
         line = self.cfg.get('line') or {}
         if line.get('channel_access_token') and line.get('to'):
             wanted = line.get('tags')
@@ -1720,6 +1730,383 @@ class Notifier:
         except urllib.error.HTTPError as e:  # the service says why in its body (ntfy 413 on 10/30)
             reason = e.read(300).decode('utf-8', 'replace')
             raise OSError(f'{service} answered {e.code}: {reason}') from None
+
+
+class PictureStore:
+    """Pictures LINE can fetch (0.5.52; the user 11/12: the light's picture showed on the phone's
+    LINE but never on the PC's). `notify.pictures` = {"base_url": "https://<host the tunnel
+    gives this PC>", "keep_days": 7, "port": 18791} and the helper keeps each notified picture
+    in `pictures/` next to config.json under an unguessable random name, serves it on its own
+    listener (127.0.0.1 only, the tunnel's origin; nothing else is reachable through it) with the
+    right Content-Type, HEAD and Range (what LINE's desktop client needs), and deletes it after
+    `keep_days`. Everything on this listener is public to whoever has the link: only pictures
+    already sent to LINE live here, and the links are 32 random characters.
+    `base_url` is a fixed https address or a callable giving the current one (a QuickTunnel's,
+    which changes whenever cloudflared restarts) or None while there is none: put() then keeps
+    nothing and returns None, and LINE gets ntfy's attachment URL instead."""
+
+    NAME = re.compile(r'[A-Za-z0-9_-]{32}\.jpg')
+    CACHE = 'public, max-age=604800'
+
+    def __init__(self, folder, base_url, keep_days=7, clock=time.time):
+        self.folder = Path(folder)
+        self.base = base_url if callable(base_url) else (lambda: base_url)
+        self.keep = float(keep_days) * 86400
+        self.clock = clock
+        self.lock = threading.Lock()
+        self.listening = None  # (ip, port) once the listener is up
+
+    @property
+    def base_url(self):
+        base = self.base()
+        return str(base).rstrip('/') if base else None
+
+    def put(self, data):
+        """Keeps `data` (JPEG bytes) and returns its public URL (None when there is no public
+        address right now); sweeps what has expired."""
+        base = self.base_url
+        if not base:
+            return None
+        self.folder.mkdir(parents=True, exist_ok=True)
+        name = secrets.token_urlsafe(24) + '.jpg'  # 32 characters
+        path = self.folder / name
+        with self.lock:
+            path.write_bytes(data)
+            now = self.clock()
+            os.utime(path, (now, now))  # the age sweep() measures
+        self.sweep()
+        return f'{base}/p/{name}'
+
+    def path(self, name):
+        """The file behind a request's name, or None: only names put() made, inside the folder."""
+        if not self.NAME.fullmatch(name or ''):
+            return None
+        path = self.folder / name
+        return path if path.is_file() else None
+
+    def sweep(self, now=None):
+        """Deletes pictures older than keep_days; returns how many."""
+        now = self.clock() if now is None else now
+        gone = 0
+        with self.lock:
+            try:
+                files = list(self.folder.iterdir()) if self.folder.is_dir() else []
+            except OSError:
+                return 0
+            for path in files:
+                if not self.NAME.fullmatch(path.name):
+                    continue
+                try:
+                    if now - path.stat().st_mtime > self.keep:
+                        path.unlink()
+                        gone += 1
+                except OSError:
+                    pass
+        if gone:
+            logging.info('pictures: %d expired picture(s) removed', gone)
+        return gone
+
+    def run_forever(self, every=3600):
+        while True:
+            time.sleep(every)
+            try:
+                self.sweep()
+            except Exception:
+                logging.exception('picture sweep failed')
+
+    def serve(self, ip='127.0.0.1', port=18791):
+        """Starts the listener on its own thread and returns the thread (ready once it binds)."""
+        server = ThreadingHTTPServer((ip, port), picture_handler_for(self))
+        server.daemon_threads = True
+        self.listening = (ip, port)
+        logging.info('pictures: serving %s on %s:%s under /p/', self.folder.name, ip, port)
+        thread = threading.Thread(target=server.serve_forever, kwargs={'poll_interval': 1}, daemon=True,
+                                  name='picture-listener')
+        thread.server = server
+        thread.start()
+        return thread
+
+
+class QuickTunnel:
+    """A Cloudflare quick tunnel (0.5.52) run by the helper itself: `cloudflared tunnel --url
+    http://127.0.0.1:<picture port>` needs no account and no domain (the user 11/12: 「網域我是要
+    全免費」, and about the address changing on every restart: 「這個我可以接受啊，因為推播開關燈照片
+    我只是要最新的狀態而已」). The https://….trycloudflare.com address is read from cloudflared's
+    log; `url` is None until it appears and again whenever cloudflared ends, and cloudflared is
+    started again after `restart_after` seconds (a new address). The child is tied to this
+    process with a Windows job object, so a helper killed by `schtasks /End` (a restart, an
+    upgrade) takes its cloudflared with it; leftovers from before that are ended at start.
+    Only the address and cloudflared's errors go to the log (its other lines name this PC's
+    addresses)."""
+
+    ADDRESS = re.compile(r'https://[a-z0-9-]+\.trycloudflare\.com')
+
+    def __init__(self, exe, target, popen=None, restart_after=15.0, sleep=time.sleep):
+        self.exe, self.target = str(exe), str(target)
+        self.popen, self.restart_after, self.sleep = popen or self.start_process, float(restart_after), sleep
+        self.lock = threading.Lock()
+        self.url = None
+        self.process = None
+        self.starts = 0
+        self.ready = threading.Event()  # set when an address is known, cleared when it is lost
+        self.stopped = False
+
+    def command(self):
+        return [self.exe, 'tunnel', '--url', self.target, '--no-autoupdate']
+
+    @staticmethod
+    def start_process(command):
+        import subprocess
+        return subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+
+    def current(self):
+        """The tunnel's https address, or None while there is none (PictureStore's base_url)."""
+        with self.lock:
+            return self.url
+
+    def run_forever(self):
+        self.end_leftovers()
+        while not self.stopped:
+            self.starts += 1
+            try:
+                process = self.popen(self.command())
+            except OSError as exc:
+                logging.warning('tunnel: cloudflared could not start (%s); again in %.0f s', exc, self.restart_after)
+                self.sleep(self.restart_after)
+                continue
+            self.process = process
+            keep_child_with_us(process)
+            self.watch(process)
+            code = process.wait()
+            process.stderr.close()
+            with self.lock:
+                self.url = None
+            self.ready.clear()
+            if self.stopped:
+                break
+            logging.warning('tunnel: cloudflared ended (%s); again in %.0f s', code, self.restart_after)
+            self.sleep(self.restart_after)
+
+    def watch(self, process):
+        """Reads cloudflared's log until it ends: the address once it appears, errors as warnings."""
+        for raw in process.stderr:
+            line = raw.decode('utf-8', 'replace').rstrip()
+            found = self.ADDRESS.search(line)
+            if found and not self.current():
+                with self.lock:
+                    self.url = found.group(0)
+                self.ready.set()
+                logging.info('tunnel: up at %s', self.url)
+            elif ' ERR ' in line:
+                logging.warning('tunnel: %s', line.split(' ERR ', 1)[1][:300])
+
+    def stop(self):
+        self.stopped = True
+        process = self.process
+        if process is not None and process.poll() is None:
+            process.terminate()
+
+    def end_leftovers(self):
+        """Ends cloudflared processes pointed at our target that an earlier helper left behind
+        (before the job object there was no tie; also a helper that died in a way the job did not
+        cover). Windows only, best effort."""
+        if os.name != 'nt':
+            return
+        import subprocess
+        script = ("Get-CimInstance Win32_Process -Filter \"Name='cloudflared.exe'\" | "
+                  "Where-Object { $_.CommandLine -like '*--url*' -and $_.CommandLine -like ('*' + $env:TUNNEL_TARGET + '*') } | "
+                  "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue; $_.ProcessId }")
+        try:
+            done = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', script],
+                                  capture_output=True, timeout=30, env=dict(os.environ, TUNNEL_TARGET=self.target),
+                                  creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+            left = done.stdout.decode('utf-8', 'replace').split()
+            if left:
+                logging.info('tunnel: ended %d leftover cloudflared process(es)', len(left))
+        except (OSError, subprocess.SubprocessError) as exc:
+            logging.warning('tunnel: could not look for leftover cloudflared: %s', exc)
+
+
+def keep_child_with_us(process):
+    """Puts `process` in a job object that kills it when this process ends (Windows; the handle
+    is kept on the process). Returns whether it worked."""
+    if os.name != 'nt':
+        return False
+    try:
+        kernel = ctypes.windll.kernel32
+
+        class BasicLimits(ctypes.Structure):
+            _fields_ = [('PerProcessUserTimeLimit', ctypes.c_int64), ('PerJobUserTimeLimit', ctypes.c_int64),
+                        ('LimitFlags', ctypes.c_uint32), ('MinimumWorkingSetSize', ctypes.c_size_t),
+                        ('MaximumWorkingSetSize', ctypes.c_size_t), ('ActiveProcessLimit', ctypes.c_uint32),
+                        ('Affinity', ctypes.c_size_t), ('PriorityClass', ctypes.c_uint32), ('SchedulingClass', ctypes.c_uint32)]
+
+        class IoCounters(ctypes.Structure):
+            _fields_ = [(name, ctypes.c_uint64) for name in ('ReadOperationCount', 'WriteOperationCount', 'OtherOperationCount',
+                                                              'ReadTransferCount', 'WriteTransferCount', 'OtherTransferCount')]
+
+        class ExtendedLimits(ctypes.Structure):
+            _fields_ = [('BasicLimitInformation', BasicLimits), ('IoInfo', IoCounters), ('ProcessMemoryLimit', ctypes.c_size_t),
+                        ('JobMemoryLimit', ctypes.c_size_t), ('PeakProcessMemoryUsed', ctypes.c_size_t), ('PeakJobMemoryUsed', ctypes.c_size_t)]
+
+        kernel.CreateJobObjectW.restype = ctypes.c_void_p
+        kernel.SetInformationJobObject.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+        kernel.AssignProcessToJobObject.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        job = kernel.CreateJobObjectW(None, None)
+        if not job:
+            return False
+        limits = ExtendedLimits()
+        limits.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not kernel.SetInformationJobObject(job, 9, ctypes.byref(limits), ctypes.sizeof(limits)):  # JobObjectExtendedLimitInformation
+            return False
+        if not kernel.AssignProcessToJobObject(job, ctypes.c_void_p(int(process._handle))):
+            logging.warning('tunnel: the child could not be tied to this process (error %d)', ctypes.get_last_error() or kernel.GetLastError())
+            return False
+        process.job = job  # the handle must stay open for as long as we live
+        return True
+    except (AttributeError, OSError, ValueError) as exc:
+        logging.warning('tunnel: job object failed: %s', exc)
+        return False
+
+
+def pictures_from_config(cfg, folder):
+    """(PictureStore, QuickTunnel or None) from `notify.pictures`, or (None, None) when it is not
+    configured. Either a fixed `base_url` (https) or `cloudflared` (the path to cloudflared.exe:
+    a quick tunnel to this PC's picture listener, `port` 18791) must be given."""
+    settings = (cfg.get('notify') or {}).get('pictures')
+    if not settings:
+        return None, None
+    where = Path(settings['dir']) if settings.get('dir') else Path(folder) / 'pictures'
+    keep = float(settings.get('keep_days', 7))
+    ip, port = str(settings.get('bind_ip') or '127.0.0.1'), int(settings.get('port') or 18791)
+    if settings.get('base_url'):
+        base = str(settings['base_url'])
+        if not base.startswith('https://'):
+            raise ValueError('notify.pictures.base_url must be an https:// address (LINE takes no other)')
+        return PictureStore(where, base, keep_days=keep), None
+    if settings.get('cloudflared'):
+        exe = Path(settings['cloudflared'])
+        if not exe.is_file():
+            raise ValueError(f'notify.pictures.cloudflared is not a file: {exe}')
+        tunnel = QuickTunnel(exe, f'http://{ip}:{port}')
+        return PictureStore(where, tunnel.current, keep_days=keep), tunnel
+    raise ValueError('notify.pictures needs base_url or cloudflared')
+
+
+def picture_handler_for(store):
+    """GET/HEAD /p/<name> with Content-Type, Content-Length, Accept-Ranges and a single byte
+    range (206 / 416); /health answers ok; anything else 404. No directory listing, no auth: the
+    names are the secret."""
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = 'HTTP/1.1'
+        server_version, sys_version = 'desk-remote', ''
+
+        def handle(self):
+            try:
+                super().handle()
+            except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError, TimeoutError):
+                pass
+
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            self.answer(True)
+
+        def do_HEAD(self):
+            self.answer(False)
+
+        def answer(self, with_body):
+            try:
+                self.respond(with_body)
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                pass
+            except Exception:
+                logging.exception('picture request failed')
+                self.plain(500, b'error')
+
+        def log_request(self, code='-', size='-'):
+            # Who fetches the pictures (11/12: the PC's LINE showed nothing, the phone's did; this
+            # tells whether the PC's client asked at all). Cloudflare adds the real address.
+            logging.info('pictures: %s %s -> %s from %s (%s)', self.command, self.path[:48], code,
+                         self.headers.get('Cf-Connecting-Ip') or self.client_address[0],
+                         (self.headers.get('User-Agent') or '-')[:80])
+
+        def plain(self, code, body, extra=None):
+            self.send_response(code)
+            self.send_header('Content-Type', 'text/plain; charset=utf-8')
+            self.send_header('Content-Length', str(len(body)))
+            self.send_header('Cache-Control', 'no-store')
+            for key, value in (extra or {}).items():
+                self.send_header(key, value)
+            self.end_headers()
+            if self.command != 'HEAD':
+                self.wfile.write(body)
+
+        def respond(self, with_body):
+            parts = urllib.parse.urlsplit(self.path).path.strip('/').split('/')
+            if parts == ['health']:
+                return self.plain(200, b'ok')
+            if len(parts) != 2 or parts[0] != 'p':
+                return self.plain(404, b'not found')
+            path = store.path(urllib.parse.unquote(parts[1]))
+            if path is None:
+                return self.plain(404, b'not found')
+            try:
+                data = path.read_bytes()
+                stamp = path.stat().st_mtime
+            except OSError:
+                return self.plain(404, b'not found')
+            size = len(data)
+            start, end = 0, size - 1
+            status = 200
+            wanted = self.headers.get('Range')
+            if wanted:
+                span = parse_byte_range(wanted, size)
+                if span is None:
+                    return self.plain(416, b'range not satisfiable', {'Content-Range': f'bytes */{size}'})
+                start, end = span
+                status = 206
+            body = data[start:end + 1]
+            self.send_response(status)
+            self.send_header('Content-Type', 'image/jpeg')
+            self.send_header('Content-Length', str(len(body)))
+            self.send_header('Accept-Ranges', 'bytes')
+            self.send_header('Cache-Control', store.CACHE)
+            self.send_header('Last-Modified', self.date_time_string(stamp))
+            self.send_header('X-Content-Type-Options', 'nosniff')
+            if status == 206:
+                self.send_header('Content-Range', f'bytes {start}-{end}/{size}')
+            self.end_headers()
+            if with_body:
+                self.wfile.write(body)
+
+    return Handler
+
+
+def parse_byte_range(header, size):
+    """(first, last) for a single `bytes=` range of a `size`-byte file, or None when the header
+    asks for nothing inside it (several ranges count as the first one)."""
+    found = re.fullmatch(r'\s*bytes\s*=\s*(\d*)\s*-\s*(\d*)\s*(?:,.*)?', header or '', re.S)
+    if not found or size <= 0:
+        return None
+    first, last = found.group(1), found.group(2)
+    if first == '' and last == '':
+        return None
+    if first == '':                       # the last N bytes
+        count = int(last)
+        if count == 0:
+            return None
+        return max(size - count, 0), size - 1
+    start = int(first)
+    if start >= size:
+        return None
+    end = size - 1 if last == '' else min(int(last), size - 1)
+    if end < start:
+        return None
+    return start, end
 
 
 class AuthGate:
@@ -6400,7 +6787,15 @@ def main(argv=None):
     log = RotatingFileHandler(path.parent / 'helper.log', maxBytes=1048576, backupCount=3, encoding='utf-8')
     log.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s', '%Y-%m-%d %H:%M:%S'))
     logger.addHandler(log)
-    notifier = Notifier(cfg)
+    pictures, tunnel = pictures_from_config(cfg, path.parent)
+    if pictures is not None:
+        settings = cfg['notify']['pictures']
+        pictures.serve(str(settings.get('bind_ip') or '127.0.0.1'), int(settings.get('port') or 18791))
+        pictures.sweep()
+        threading.Thread(target=pictures.run_forever, daemon=True, name='picture-sweep').start()
+        if tunnel is not None:
+            threading.Thread(target=tunnel.run_forever, daemon=True, name='quick-tunnel').start()
+    notifier = Notifier(cfg, pictures=pictures)
     notify = notifier.post if (cfg.get('notify') or {}).get('topic') else None
     pc_name = cfg.get('pc_name') or os.environ.get('COMPUTERNAME', 'PC')
     hub = Hub(pc_name, real_sources(cfg), WindowsPresence())

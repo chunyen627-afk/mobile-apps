@@ -3143,6 +3143,219 @@ class CameraHttpTests(FakeEnvironment):
         self.assertEqual((code, json.loads(body)['error']), (503, 'camera-failed'))
 
 
+class PictureStoreTests(unittest.TestCase):
+    """0.5.52: the light's picture for LINE is served from this PC (through a tunnel) instead of
+    ntfy's attachment, which the PC's LINE never showed (no Content-Type on HEAD, no Range) and
+    which expires after three hours."""
+
+    JPEG = b'\xff\xd8\xff\xe0' + bytes(range(256)) * 4 + b'\xff\xd9'
+
+    def setUp(self):
+        self.folder = Path(tempfile.mkdtemp(prefix='pictures-'))
+        self.addCleanup(shutil.rmtree, self.folder, True)
+        self.now = [1_700_000_000.0]
+        self.store = h.PictureStore(self.folder / 'pictures', 'https://pic.example.com/', keep_days=7, clock=lambda: self.now[0])
+
+    def listen(self):
+        thread = self.store.serve('127.0.0.1', 0)
+        self.addCleanup(thread.server.server_close)
+        self.addCleanup(thread.server.shutdown)
+        return thread.server.server_address[1]
+
+    def fetch(self, port, path, method='GET', headers=None):
+        request = urllib.request.Request(f'http://127.0.0.1:{port}{path}', method=method, headers=headers or {})
+        try:
+            with urllib.request.urlopen(request, timeout=5) as response:
+                return response.status, dict(response.headers), response.read()
+        except urllib.error.HTTPError as e:
+            return e.code, dict(e.headers), e.read()
+
+    def test_a_kept_picture_is_served_with_type_head_and_range(self):
+        url = self.store.put(self.JPEG)
+        name = url.rsplit('/', 1)[1]
+        self.assertRegex(url, r'^https://pic\.example\.com/p/[A-Za-z0-9_-]{32}\.jpg$')
+        self.assertNotEqual(self.store.put(self.JPEG), url, 'two pictures, two names')
+        port = self.listen()
+        code, headers, body = self.fetch(port, f'/p/{name}')
+        self.assertEqual((code, body), (200, self.JPEG))
+        self.assertEqual(headers['Content-Type'], 'image/jpeg')
+        self.assertEqual(headers['Accept-Ranges'], 'bytes')
+        self.assertEqual(int(headers['Content-Length']), len(self.JPEG))
+        self.assertIn('max-age', headers['Cache-Control'])
+        # HEAD: the same headers, no body (LINE's desktop client probes first).
+        code, headers, body = self.fetch(port, f'/p/{name}', 'HEAD')
+        self.assertEqual((code, body, headers['Content-Type'], int(headers['Content-Length'])), (200, b'', 'image/jpeg', len(self.JPEG)))
+        # Ranges: the first bytes, an open end, the last bytes, and one past the end.
+        size = len(self.JPEG)
+        code, headers, body = self.fetch(port, f'/p/{name}', headers={'Range': 'bytes=0-3'})
+        self.assertEqual((code, body, headers['Content-Range']), (206, b'\xff\xd8\xff\xe0', f'bytes 0-3/{size}'))
+        code, headers, body = self.fetch(port, f'/p/{name}', headers={'Range': f'bytes={size - 2}-'})
+        self.assertEqual((code, body, headers['Content-Range']), (206, b'\xff\xd9', f'bytes {size - 2}-{size - 1}/{size}'))
+        code, headers, body = self.fetch(port, f'/p/{name}', headers={'Range': 'bytes=-2'})
+        self.assertEqual((code, body), (206, b'\xff\xd9'))
+        code, headers, body = self.fetch(port, f'/p/{name}', headers={'Range': f'bytes={size}-'})
+        self.assertEqual((code, headers['Content-Range']), (416, f'bytes */{size}'))
+        self.assertEqual(self.fetch(port, f'/p/{name}', 'HEAD', {'Range': 'bytes=0-3'})[0], 206)
+        self.assertEqual(self.fetch(port, '/health')[0:3:2], (200, b'ok'))
+
+    def test_only_pictures_with_their_random_name_are_reachable(self):
+        (self.folder / 'pictures').mkdir()
+        (self.folder / 'pictures' / 'notes.txt').write_text('private')
+        (self.folder / 'secret.jpg').write_bytes(self.JPEG)
+        url = self.store.put(self.JPEG)
+        name = url.rsplit('/', 1)[1]
+        port = self.listen()
+        self.assertEqual(self.fetch(port, '/p/notes.txt')[0], 404)
+        self.assertEqual(self.fetch(port, '/p/../secret.jpg')[0], 404)
+        self.assertEqual(self.fetch(port, '/p/%2e%2e/secret.jpg')[0], 404)
+        self.assertEqual(self.fetch(port, '/p/')[0], 404)
+        self.assertEqual(self.fetch(port, '/p')[0], 404)
+        self.assertEqual(self.fetch(port, '/')[0], 404)
+        self.assertEqual(self.fetch(port, '/v1/state')[0], 404, 'the helper API must not be behind the tunnel')
+        self.assertEqual(self.fetch(port, f'/p/{name[:-4]}.png')[0], 404)
+        self.assertEqual(self.fetch(port, f'/p/{name}')[0], 200)
+        self.assertEqual(self.fetch(port, f'/p/{name}', 'POST')[0], 501)
+
+    def test_pictures_expire_after_keep_days(self):
+        old = self.store.put(self.JPEG).rsplit('/', 1)[1]
+        os.utime(self.folder / 'pictures' / old, (self.now[0] - 8 * 86400, self.now[0] - 8 * 86400))
+        (self.folder / 'pictures' / 'keep.me').write_text('not a picture')
+        os.utime(self.folder / 'pictures' / 'keep.me', (self.now[0] - 30 * 86400, self.now[0] - 30 * 86400))
+        self.assertEqual(self.store.sweep(), 1)
+        self.assertFalse((self.folder / 'pictures' / old).exists())
+        self.assertTrue((self.folder / 'pictures' / 'keep.me').exists(), 'only pictures are swept')
+        fresh = self.store.put(self.JPEG).rsplit('/', 1)[1]
+        self.now[0] += 6 * 86400
+        self.assertEqual(self.store.sweep(), 0)
+        self.now[0] += 2 * 86400
+        self.store.put(self.JPEG)  # putting one sweeps too
+        self.assertFalse((self.folder / 'pictures' / fresh).exists())
+        self.assertEqual(len([p for p in (self.folder / 'pictures').iterdir() if p.suffix == '.jpg']), 1)
+        self.assertEqual(h.PictureStore(self.folder / 'nowhere', 'https://x').sweep(), 0, 'no folder yet is fine')
+
+    def test_line_gets_the_stored_url_and_ntfy_its_attachment(self):
+        calls = []
+
+        class Answer:
+            def __init__(self, body):
+                self.body = body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                pass
+
+            def read(self, n=-1):
+                return self.body
+
+        def urlopen(request, timeout=None):
+            calls.append((request.full_url, request.method, dict(request.headers), request.data))
+            if request.method == 'PUT':
+                return Answer(b'{"attachment": {"url": "https://ntfy.sh/file/abc.jpg"}}')
+            return Answer(b'{}')
+
+        cfg = {'notify': {'server': 'https://ntfy.sh', 'topic': 't0pic',
+                          'line': {'channel_access_token': 'tok', 'to': 'U1', 'tags': ['bulb'], 'url': 'https://line.example/push'}}}
+        h.Notifier(cfg, urlopen, pictures=self.store).post('燈', '亮', tags=['bulb'], picture=self.JPEG, picture_name='light.jpg')
+        self.assertEqual([c[1] for c in calls], ['PUT', 'POST'])
+        self.assertEqual(calls[0][0], 'https://ntfy.sh/t0pic')
+        self.assertEqual(calls[0][3], self.JPEG, 'ntfy still gets the attachment')
+        line = json.loads(calls[1][3])
+        self.assertEqual(line['to'], 'U1')
+        self.assertRegex(line['messages'][1]['originalContentUrl'], r'^https://pic\.example\.com/p/[A-Za-z0-9_-]{32}\.jpg$')
+        self.assertEqual(line['messages'][1]['previewImageUrl'], line['messages'][1]['originalContentUrl'])
+        name = line['messages'][1]['originalContentUrl'].rsplit('/', 1)[1]
+        self.assertEqual((self.folder / 'pictures' / name).read_bytes(), self.JPEG)
+        # Without a store (or when it fails) LINE gets ntfy's URL, as before.
+        calls.clear()
+        h.Notifier(cfg, urlopen).post('燈', '亮', tags=['bulb'], picture=self.JPEG)
+        self.assertEqual(json.loads(calls[1][3])['messages'][1]['originalContentUrl'], 'https://ntfy.sh/file/abc.jpg')
+        calls.clear()
+        broken = h.PictureStore(self.folder / 'pictures' / 'keep.me' / 'x', 'https://pic.example.com')
+        (self.folder / 'pictures' / 'keep.me').write_text('a file, not a folder')
+        with self.assertLogs(level='WARNING'):
+            h.Notifier(cfg, urlopen, pictures=broken).post('燈', '亮', tags=['bulb'], picture=self.JPEG)
+        self.assertEqual(json.loads(calls[1][3])['messages'][1]['originalContentUrl'], 'https://ntfy.sh/file/abc.jpg')
+
+    def test_the_store_comes_from_notify_pictures(self):
+        self.assertEqual(h.pictures_from_config({'notify': {'topic': 't'}}, self.folder), (None, None))
+        store, tunnel = h.pictures_from_config({'notify': {'pictures': {'base_url': 'https://pic.example.com/', 'keep_days': 3}}}, self.folder)
+        self.assertEqual((store.folder, store.base_url, store.keep, tunnel), (self.folder / 'pictures', 'https://pic.example.com', 3 * 86400, None))
+        store, _ = h.pictures_from_config({'notify': {'pictures': {'base_url': 'https://pic.example.com', 'dir': str(self.folder / 'elsewhere')}}}, self.folder)
+        self.assertEqual((store.folder, store.keep), (self.folder / 'elsewhere', 7 * 86400))
+        for bad in ({'base_url': 'http://pic.example.com'}, {'keep_days': 3}, {'cloudflared': str(self.folder / 'missing.exe')}):
+            with self.assertRaises(ValueError, msg=bad):
+                h.pictures_from_config({'notify': {'pictures': bad}}, self.folder)
+        exe = self.folder / 'cloudflared.exe'
+        exe.write_bytes(b'')
+        store, tunnel = h.pictures_from_config({'notify': {'pictures': {'cloudflared': str(exe), 'port': 18795}}}, self.folder)
+        self.assertEqual((tunnel.target, tunnel.command()[:3]), ('http://127.0.0.1:18795', [str(exe), 'tunnel', '--url']))
+        self.assertIsNone(store.base_url, 'an address before the tunnel is up')
+        self.assertIsNone(store.put(self.JPEG), 'a picture was kept with nowhere to serve it from')
+        self.assertFalse((self.folder / 'pictures').exists())
+        self.assertIsNone(h.parse_byte_range('bytes=', 10))
+        self.assertIsNone(h.parse_byte_range('items=0-1', 10))
+        self.assertIsNone(h.parse_byte_range('bytes=5-2', 10))
+        self.assertIsNone(h.parse_byte_range('bytes=-0', 10))
+        self.assertEqual(h.parse_byte_range('bytes=0-100', 10), (0, 9))
+        self.assertEqual(h.parse_byte_range('bytes=-100', 10), (0, 9))
+        self.assertEqual(h.parse_byte_range('bytes=0-1, 5-6', 10), (0, 1))
+
+    def test_the_quick_tunnel_follows_cloudflared_and_restarts_it(self):
+        """A fake cloudflared prints a fresh trycloudflare address each time it starts; the
+        store's addresses follow it, and none is given while it is down."""
+        import subprocess
+        fake = self.folder / 'fake_cloudflared.py'
+        fake.write_text('\n'.join([
+            'import secrets, sys, time',
+            'lines = ["2026-11-12T01:20:24Z INF Requesting new quick Tunnel on trycloudflare.com...",',
+            '         "2026-11-12T01:20:29Z INF |  https://" + secrets.token_hex(4) + "-" + sys.argv[1].split(":")[-1] + ".trycloudflare.com   |",',
+            '         "2026-11-12T01:20:29Z INF ICMP proxy will use 192.168.1.9 as source for IPv4",',
+            '         "2026-11-12T01:20:30Z ERR Failed to dial a quic connection error=timeout connIndex=1"]',
+            'sys.stderr.write("".join(line + chr(10) for line in lines))',
+            'sys.stderr.flush()',
+            'time.sleep(60)', '']), encoding='utf-8')
+
+        def popen(command):
+            self.assertEqual(command[1:3], ['tunnel', '--url'])
+            return subprocess.Popen([sys.executable, str(fake), command[3]], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        tunnel = h.QuickTunnel(self.folder / 'cloudflared.exe', 'http://127.0.0.1:18795', popen=popen, restart_after=0.2)
+        tunnel.end_leftovers = lambda: None
+        store = h.PictureStore(self.folder / 'pictures', tunnel.current, keep_days=7, clock=lambda: self.now[0])
+        self.assertIsNone(store.put(self.JPEG))
+        with self.assertLogs(level='INFO') as logs:
+            threading.Thread(target=tunnel.run_forever, daemon=True).start()
+            self.addCleanup(tunnel.stop)
+            self.assertTrue(tunnel.ready.wait(10), 'no address within 10 s')
+            first = tunnel.current()
+            self.assertRegex(first, r'^https://[0-9a-f]{8}-18795\.trycloudflare\.com$')
+            self.assertEqual(store.base_url, first)
+            self.assertTrue(store.put(self.JPEG).startswith(first + '/p/'))
+            time.sleep(0.3)  # the ERR line is read
+        self.assertTrue(any('tunnel: up at ' + first in line for line in logs.output))
+        self.assertTrue(any('Failed to dial' in line and 'WARNING' in line for line in logs.output), 'the error line was not logged')
+        self.assertFalse(any('192.168.1.9' in line for line in logs.output), "cloudflared's other lines went to the log")
+        self.assertTrue(h.keep_child_with_us(tunnel.process) if os.name == 'nt' else True, 'the job object failed')
+        tunnel.process.kill()
+        deadline = time.monotonic() + 10
+        while tunnel.current() in (None, first) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        second = tunnel.current()
+        self.assertTrue(second and second != first, f'no new address after a restart: {second}')
+        self.assertEqual(tunnel.starts, 2)
+        tunnel.stop()
+        self.assertIsNotNone(tunnel.process.wait(5))
+        # cloudflared missing: no address, nothing kept, cloudflared is tried again.
+        slept = []
+        gone = h.QuickTunnel(self.folder / 'nope.exe', 'http://127.0.0.1:1', popen=lambda c: (_ for _ in ()).throw(OSError('no such file')),
+                             restart_after=0.01, sleep=lambda s: slept.append(s) or (len(slept) > 2 and setattr(gone, 'stopped', True)))
+        gone.end_leftovers = lambda: None
+        with self.assertLogs(level='WARNING'):
+            gone.run_forever()
+        self.assertEqual((gone.current(), gone.starts), (None, 3))
+
+
 if __name__ == '__main__':
     unittest.main()
 
