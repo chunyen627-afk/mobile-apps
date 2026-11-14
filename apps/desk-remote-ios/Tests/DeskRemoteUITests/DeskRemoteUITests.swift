@@ -472,7 +472,7 @@ final class DeskRemoteUITests: XCTestCase {
     func test24ScreenView() throws {
         try launchWithHelper()
         openPC()
-        XCTAssertTrue(element("pc-presence").waitForExistence(timeout: 10), "PC state did not load")
+        XCTAssertTrue(element("pc-presence").waitForExistence(timeout: 30), "PC state did not load")
         let row = element("pc-screen")
         XCTAssertTrue(reveal(row), "screen row missing")
         row.tap()
@@ -1044,7 +1044,7 @@ final class DeskRemoteUITests: XCTestCase {
     func test43CameraStreamsWhileThePageIsOpen() throws {
         try launchWithHelper()
         openPC()
-        XCTAssertTrue(element("pc-presence").waitForExistence(timeout: 10), "PC state did not load")
+        XCTAssertTrue(element("pc-presence").waitForExistence(timeout: 30), "PC state did not load")
         let row = element("pc-camera")
         XCTAssertTrue(reveal(row), "camera row missing")
         row.tap()
@@ -1176,7 +1176,8 @@ final class DeskRemoteUITests: XCTestCase {
         openPC()
         // Rows move down when the PC's state arrives; a tap during that layout change was lost
         // (CI 10/27, once the state also carried plan limits), so wait for it first.
-        XCTAssertTrue(element("pc-presence").waitForExistence(timeout: 10), "PC state did not load")
+        // 30 s: the iPad runner once took longer than 10 s for the first state (run 43563469463).
+        XCTAssertTrue(element("pc-presence").waitForExistence(timeout: 30), "PC state did not load")
         let row = element("app-row-\(app)")
         XCTAssertTrue(row.waitForExistence(timeout: 10), "\(app) row missing")
         // The memory, pop-up and usage rows of the state can still push it down after the

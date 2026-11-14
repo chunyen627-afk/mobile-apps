@@ -119,7 +119,8 @@ final class IPadLayoutShots: XCTestCase {
         let playVideo = app.buttons["播放 1 個項目"]
         guard require(playVideo, 15, "album-video-list") else { return }
         playVideo.tap()
-        guard require(app.sliders["影片進度"], 10, "album-video") else { return }
+        // 30 s: the iPad runner once needed longer than 10 s to bring the player up (run 43563469463).
+        guard require(app.sliders["影片進度"], 30, "album-video") else { return }
         // The controls hide a few seconds after they came up, and a button looked up twice can
         // be gone between the look and the tap, which fails the test outright (iPad run
         // 42783465756: "no matches found" for 暫停): one look, then a tap where it was. Should
