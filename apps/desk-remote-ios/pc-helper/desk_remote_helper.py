@@ -6816,7 +6816,8 @@ class FakeDriver:
             else:
                 lines = [{'timestamp': ts, 'type': 'event_msg', 'payload': {'type': 'task_started'}},
                          {'timestamp': ts, 'type': 'event_msg', 'payload': {'type': 'item_completed', 'item': {
-                             'type': 'UserMessage', 'content': [{'type': 'input_image'}] * photos + blocks[photos:]}}}]
+                             'type': 'UserMessage', 'content': [{'type': 'input_image', 'image_url': 'data:image/png;base64,' + FAKE_PNG}] * photos
+                             + blocks[photos:]}}}]  # with the picture, as Codex records it (so the phone shows it)
         elif role == 'plan' and app == 'claude':
             # The task list as the desktop writes it: an update_plan call, then its wrap-up later.
             lines = [{'type': 'assistant', 'timestamp': ts, 'message': {'role': 'assistant', 'content': [
