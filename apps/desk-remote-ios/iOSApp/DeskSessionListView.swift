@@ -192,6 +192,9 @@ struct DeskNewSessionView: View {
     let opened: (SessionSummary) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var text = ""
+    /// Photos for the first message, pasted before the text (helper 0.5.60; asked 11/14).
+    @State private var photos: [Data] = []
+    @FocusState private var focused: Bool
     @State private var status: String?
     @State private var working = false
     @State private var confirmBusy: Int??
@@ -204,11 +207,13 @@ struct DeskNewSessionView: View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("第一則訊息", text: $text, axis: .vertical)
-                        .lineLimit(4 ... 12)
-                        .accessibilityIdentifier("new-session-text")
+                    // The conversation page's photo, camera and microphone buttons (asked 11/14:
+                    // 「手機開新對話也要加上傳照片和語音那些功能」); sent with the toolbar button.
+                    DeskInputBar(text: $text, photos: $photos, limit: pcState?.newSessionPhotoLimit ?? 0,
+                                 focused: $focused, inputID: "new-session-text", placeholder: "第一則訊息",
+                                 sendButton: false) {}
                 } footer: {
-                    Text("電腦上的 \(app.displayName) 會開一個新對話（使用桌面版目前預設的資料夾），貼上這段文字並送出。")
+                    Text("電腦上的 \(app.displayName) 會開一個新對話（使用桌面版目前預設的資料夾），\(photos.isEmpty ? "" : "先貼上照片、")貼上這段文字並送出。")
                 }
                 // The model and effort are picked on the new conversation's empty page before the
                 // first message (helper 0.5.36; the user 11/8: choose them when opening, not after).
@@ -242,7 +247,7 @@ struct DeskNewSessionView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("送出") { Task { await start(force: false) } }
-                        .disabled(working || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .disabled(working || (text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && photos.isEmpty))
                         .accessibilityIdentifier("new-session-send")
                 }
             }
@@ -261,7 +266,9 @@ struct DeskNewSessionView: View {
         defer { working = false }
         status = "送出中…"
         do {
-            let first = try await client.newSession(app, text: text, clientMsgId: clientId, model: model, effort: effort, force: force)
+            focused = false
+            let first = try await client.newSession(app, text: text, clientMsgId: clientId, model: model, effort: effort,
+                                                    images: photos, force: force)
             let end = try await client.follow(first, timeout: 60) { status = $0.message }
             status = end.message
             if end.state == "done", let id = end.sessionId {

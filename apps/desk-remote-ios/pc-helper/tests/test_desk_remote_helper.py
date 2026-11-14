@@ -1423,6 +1423,31 @@ class MoreControlsTests(FakeEnvironment):
         self.assertEqual(runner.submit('send', 'claude', A, {'images': []})[0], 400)
         self.assertEqual(runner.submit('send', 'claude', A, {'images': photos[:1] + ['bad']})[0], 400)
 
+    def test_a_new_conversation_starts_with_photos(self):
+        """The phone's new-conversation sheet takes photos too (0.5.60, asked 11/14): pasted on
+        the new page before the text, from private files removed right after."""
+        import base64
+        hub, driver, _, runner = drive(self.fake)
+        before = set(glob_photos())
+        photos = [base64.b64encode(JPEG + bytes([n])).decode() for n in range(2)]
+        code, body = runner.submit('new', 'claude', None, {'text': '看這兩張', 'images': photos})
+        self.assertEqual(code, 202, body)
+        run_all(runner)
+        status = runner.status(body['id'])
+        self.assertEqual((status['state'], status['verified']), ('done', True), status)
+        self.assertEqual(status['message'], '已開新對話，附 2 張照片')
+        self.assertEqual(driver.calls[-1], ('new_send', 'claude', '新增') + (('image', len(JPEG) + 1),) * 2)
+        self.assertEqual(set(glob_photos()), before, 'a photo file was left behind')
+        self.assertEqual(runner.actions[body['id']]['images'], [], 'the photos stayed in memory')
+        events = hub.events('claude', status['sessionId'], 0, '', 0)['events']
+        self.assertEqual([e['text'] for e in events if e['kind'] == 'user'], ['[圖片]'] * 2 + ['看這兩張'])
+        # A photo alone starts one too; anything but a JPEG or PNG does not.
+        body = runner.submit('new', 'codex', None, {'image': photos[0]})[1]
+        run_all(runner)
+        self.assertEqual(runner.status(body['id'])['verified'], True)
+        self.assertEqual(runner.submit('new', 'claude', None, {'text': 'x', 'images': ['bad']})[0], 400)
+        self.assertEqual(runner.submit('new', 'claude', None, {'images': photos * 6})[0], 400)
+
 
 class FastModeTests(FakeEnvironment):
     """Codex's lightning switch (asked 10/29): read from config.toml, pressed in the model menu."""

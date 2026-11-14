@@ -1660,7 +1660,8 @@ function Run-Command($c) {
       # Codex names its new-conversation box differently from a conversation's (read live 10/27).
       $editName = $s.edit
       if ($s.new_edit -and (Find-ByName $w $CT::Edit $s.new_edit)) { $editName = $s.new_edit }
-      Paste-Send $w $w $editName $c.text
+      # Photos from the phone's new-conversation sheet go first, as in a conversation (11/14).
+      Paste-Send $w $w $editName $c.text @($c.images)
       return @{ ok = $true; docs = @(Get-Docs $w); picked = $picked }
     }
     'answer' {

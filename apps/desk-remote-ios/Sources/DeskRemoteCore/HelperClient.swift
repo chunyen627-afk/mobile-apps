@@ -298,9 +298,14 @@ public struct HelperClient: Sendable {
     /// Starts a new conversation with `text` as its first message; `model` and `effort` (from
     /// `HelperState.models(app)` / `efforts(app)`) are picked on its empty page first (helper 0.5.36).
     public func newSession(_ app: DeskApp, text: String, clientMsgId: String, model: String? = nil, effort: String? = nil,
-                           force: Bool = false) async throws -> ActionStatus {
-        try await post(["v1", app.rawValue, "sessions"],
-                       ActionRequest(text: text, clientMsgId: clientMsgId, model: model, effort: effort, force: force ? true : nil))
+                           images: [Data] = [], force: Bool = false) async throws -> ActionStatus {
+        // Photos as in `send` (helper 0.5.60, capability "new-photos").
+        let encoded = images.map { $0.base64EncodedString() }
+        return try await post(["v1", app.rawValue, "sessions"],
+                              ActionRequest(text: text, clientMsgId: clientMsgId, model: model, effort: effort,
+                                            image: encoded.count == 1 ? encoded[0] : nil,
+                                            images: encoded.count > 1 ? encoded : nil, force: force ? true : nil),
+                              timeout: images.isEmpty ? 20 : 30 + 15 * TimeInterval(images.count))
     }
 
     /// Picks `model` (one of `HelperState.models(app)`) in the conversation's model menu on the PC.

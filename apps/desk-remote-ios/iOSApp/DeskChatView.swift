@@ -1232,8 +1232,13 @@ struct DeskInputBar: View {
     @Binding var text: String
     /// In the order they go out; up to `limit` (1 for helpers before 0.5.11, which take one).
     @Binding var photos: [Data]
+    /// 0: no photos (a helper that cannot take them here).
     let limit: Int
     var focused: FocusState<Bool>.Binding
+    var inputID = "chat-input"
+    var placeholder = "輸入訊息"
+    /// false on the new-conversation sheet (asked 11/14), which sends from its own toolbar button.
+    var sendButton = true
     let send: () -> Void
     @State private var picked: [PhotosPickerItem] = []
     @State private var preparing = false
@@ -1245,7 +1250,7 @@ struct DeskInputBar: View {
 
     private var empty: Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && photos.isEmpty }
     /// With room for one photo only, a new pick replaces the one there.
-    private var room: Int { limit <= 1 ? 1 : max(0, limit - photos.count) }
+    private var room: Int { limit <= 0 ? 0 : limit <= 1 ? 1 : max(0, limit - photos.count) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -1266,9 +1271,9 @@ struct DeskInputBar: View {
             }
             row
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(.bar)
+        .padding(.horizontal, sendButton ? 12 : 0)
+        .padding(.vertical, sendButton ? 8 : 0)
+        .background(sendButton ? AnyShapeStyle(.bar) : AnyShapeStyle(.clear))
         .onChange(of: picked) {
             let items = picked
             guard !items.isEmpty else { return }
@@ -1347,13 +1352,15 @@ struct DeskInputBar: View {
 
     private var row: some View {
         HStack(alignment: .bottom, spacing: 8) {
-            PhotosPicker(selection: $picked, maxSelectionCount: max(1, room), selectionBehavior: .ordered, matching: .images) {
-                Image(systemName: preparing ? "hourglass" : "photo").font(.title3)
+            if limit > 0 {
+                PhotosPicker(selection: $picked, maxSelectionCount: max(1, room), selectionBehavior: .ordered, matching: .images) {
+                    Image(systemName: preparing ? "hourglass" : "photo").font(.title3)
+                }
+                .disabled(room == 0 || preparing)
+                .accessibilityLabel(limit > 1 ? "加入照片（最多 \(limit) 張）" : "加入照片")
+                .accessibilityIdentifier("chat-photo")
             }
-            .disabled(room == 0 || preparing)
-            .accessibilityLabel(limit > 1 ? "加入照片（最多 \(limit) 張）" : "加入照片")
-            .accessibilityIdentifier("chat-photo")
-            if canShoot {
+            if canShoot && limit > 0 {
                 Button(action: shoot) { Image(systemName: "camera").font(.title3) }
                     .disabled(preparing || room == 0)
                     .accessibilityLabel("拍照")
@@ -1365,21 +1372,25 @@ struct DeskInputBar: View {
             }
             .accessibilityLabel(dictation.listening ? "停止語音輸入" : "語音輸入")
             .accessibilityIdentifier("chat-mic")
-            TextField(dictation.listening ? "請說話…" : "輸入訊息", text: $text, axis: .vertical)
-                .lineLimit(1 ... 6)
+            TextField(dictation.listening ? "請說話…" : placeholder, text: $text, axis: .vertical)
+                .lineLimit(sendButton ? 1 ... 6 : 3 ... 12)
                 .textFieldStyle(.roundedBorder)
                 .focused(focused)
-                .accessibilityIdentifier("chat-input")
-            Button {
-                dictation.cancel()
-                send()
-            } label: {
-                Image(systemName: "paperplane.fill").font(.title3)
+                .accessibilityIdentifier(inputID)
+            if sendButton {
+                Button {
+                    dictation.cancel()
+                    send()
+                } label: {
+                    Image(systemName: "paperplane.fill").font(.title3)
+                }
+                .disabled(empty || preparing)
+                .accessibilityLabel("送出")
+                .accessibilityIdentifier("chat-send")
             }
-            .disabled(empty || preparing)
-            .accessibilityLabel("送出")
-            .accessibilityIdentifier("chat-send")
         }
+        // In a Form row every button of the row would fire on any tap without this.
+        .buttonStyle(.borderless)
     }
 }
 

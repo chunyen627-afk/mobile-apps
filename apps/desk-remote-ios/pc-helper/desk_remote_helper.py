@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.59'
+VERSION = '0.5.60'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -2962,10 +2962,11 @@ class WindowsDriver:
         self.queued = bool(answer.get('queued'))
         return answer.get('replaced') or None
 
-    def new_send(self, app, button, text, model=None, effort=None):
+    def new_send(self, app, button, text, model=None, effort=None, images=None):
         """Opens a new conversation, picks `model` and `effort` on its empty page when given,
-        then sends `text`."""
-        self.ask(app, cmd='new_send', name=button, text=text, model=model or '', effort=effort or '')
+        then pastes each of `images` (file paths) and sends `text`."""
+        self.ask(app, cmd='new_send', name=button, text=text, model=model or '', effort=effort or '',
+                 images=list(images or []))
 
     def popups(self):
         """Windows on the desktop waiting for an answer: [{hwnd, title, process, text, buttons}]."""
@@ -3824,8 +3825,10 @@ class ActionRunner:
         force = bool(payload.get('force'))
         text = payload.get('text')
         images = []
-        if kind == 'send' and (payload.get('image') is not None or payload.get('images') is not None):
-            # One photo as `image` (App 0.5.5 and earlier), several as `images` (asked on 10/29).
+        if kind in ('send', 'new') and (payload.get('image') is not None or payload.get('images') is not None):
+            # One photo as `image` (App 0.5.5 and earlier), several as `images` (asked on 10/29);
+            # a new conversation's first message too (0.5.60, the user 11/14: 「手機開新對話也要加
+            # 上傳照片和語音那些功能」).
             raw = payload.get('images') if payload.get('images') is not None else [payload.get('image')]
             if not isinstance(raw, list) or not 1 <= len(raw) <= self.MAX_IMAGES:
                 return 400, error('bad-request', f'一次最多 {self.MAX_IMAGES} 張照片')
@@ -4175,6 +4178,26 @@ class ActionRunner:
             time.sleep(0.5)
         return True
 
+    @staticmethod
+    def photo_files(action, paths):
+        """Writes the action's photos to files only this user can read, appending each path to
+        `paths` as it goes (the worker pastes from them)."""
+        for image in action.get('images') or []:
+            handle, path = tempfile.mkstemp(prefix='desk-remote-photo-', suffix='.img')
+            paths.append(path)
+            with os.fdopen(handle, 'wb') as out:
+                out.write(image)
+
+    @staticmethod
+    def drop_photos(action, paths):
+        """Removes the photo files right after pasting, and the photos from memory."""
+        for path in paths:
+            try:
+                os.remove(path)
+            except OSError:
+                logging.warning('could not remove the photo file')
+        action['images'] = []
+
     def do_send(self, action):
         app, info, text = action['app'], action['info'], action['text']
         transcript = self.hub.transcript(app, action['sessionId'])
@@ -4185,22 +4208,12 @@ class ActionRunner:
         self.recheck(action)
         paths = []
         try:
-            # The worker pastes each photo from a file only this user can read; removed right after.
-            for image in action.get('images') or []:
-                handle, path = tempfile.mkstemp(prefix='desk-remote-photo-', suffix='.img')
-                paths.append(path)
-                with os.fdopen(handle, 'wb') as out:
-                    out.write(image)
+            self.photo_files(action, paths)
             self.presence.begin_own()
             replaced = self.driver.send(app, info['doc'], text, paths)
         finally:
             self.presence.end_own()
-            for path in paths:
-                try:
-                    os.remove(path)
-                except OSError:
-                    logging.warning('could not remove the photo file')
-            action['images'] = []
+            self.drop_photos(action, paths)
         if replaced:
             # The phone's message always wins over unsent text in the box (the user's rule 10/31);
             # only its length is logged, never the text.
@@ -4501,10 +4514,18 @@ class ActionRunner:
             self.driver.open(app, info)
             self.wait_doc(app, info)
             time.sleep(self.settle_seconds)
-        self.driver.new_send(app, button, text, model, effort)
+        photos = len(action.get('images') or [])
+        paths = []
+        try:
+            self.photo_files(action, paths)
+            self.driver.new_send(app, button, text, model, effort, paths)
+        finally:
+            self.drop_photos(action, paths)
         self.presence.end_own()
         picked = '、'.join(part for part in ((f'模型 {model}' if model else ''), (f'推理強度 {effort}' if effort else '')) if part)
         opened = f'已開新對話（{picked}）' if picked else '已開新對話'
+        if photos:
+            opened += f'，附 {photos} 張照片'
         self.update(action, message='已送出，等待新對話出現')
         deadline = self.clock() + self.verify_seconds
         while True:
@@ -6726,16 +6747,19 @@ class FakeDriver:
         self.later(app, path, reply, delay, doc)
         return replaced
 
-    def new_send(self, app, button, text, model=None, effort=None):
-        self.calls.append(('new_send', app, button))
-        session_id, path = self.setup.create_session(app, text[:24])
+    def new_send(self, app, button, text, model=None, effort=None, images=None):
+        self.calls.append(('new_send', app, button) + tuple(('image', Path(path).stat().st_size) for path in images or []))
+        session_id, path = self.setup.create_session(app, text[:24] or '照片')
         self.open_doc[app] = self.hub.sources[app].info(session_id)['doc']
         if model:
             self.set_model(app, self.open_doc[app], model)
         if effort:
             self.set_effort(app, self.open_doc[app], effort)
-        self.write(app, path, 'user', text)
-        self.later(app, path, f'（示範）新對話收到：{text[:30]}')
+        if images:
+            self.write(app, path, 'user-image', text, len(images))
+        else:
+            self.write(app, path, 'user', text)
+        self.later(app, path, f'（示範）新對話收到：{text[:30] or "照片"}')
 
     def answer(self, app, doc, decision, expect):
         self.calls.append(('answer', app, decision))
@@ -6792,7 +6816,8 @@ class FakeDriver:
             else:
                 lines = [{'timestamp': ts, 'type': 'event_msg', 'payload': {'type': 'task_started'}},
                          {'timestamp': ts, 'type': 'event_msg', 'payload': {'type': 'item_completed', 'item': {
-                             'type': 'UserMessage', 'content': [{'type': 'input_image'}] * photos + blocks[photos:]}}}]
+                             'type': 'UserMessage', 'content': [{'type': 'input_image', 'image_url': 'data:image/png;base64,' + FAKE_PNG}] * photos
+                             + blocks[photos:]}}}]  # with the picture, as Codex records it (so the phone shows it)
         elif role == 'plan' and app == 'claude':
             # The task list as the desktop writes it: an update_plan call, then its wrap-up later.
             lines = [{'type': 'assistant', 'timestamp': ts, 'message': {'role': 'assistant', 'content': [
@@ -6868,7 +6893,7 @@ def build_driving(hub, driver, notify, pc_name, cfg, interval, verify_seconds, m
                           idle_seconds=int(cfg.get('idle_seconds', 60)), verify_seconds=verify_seconds)
     watcher.busy = lambda: bool(runner.queue)
     hub.capabilities = ['read', 'send', 'permission', 'new', 'open', 'question', 'model', 'effort', 'mode', 'stop',
-                        'photo', 'launch', 'photos', 'popups', 'fast', 'update']
+                        'photo', 'launch', 'photos', 'popups', 'fast', 'update', 'new-photos']
     hub.alerts = dict(hub.alerts, **(cfg.get('alerts') or {}))
     threading.Thread(target=watcher.run_forever, daemon=True).start()
     threading.Thread(target=runner.run_forever, daemon=True).start()
