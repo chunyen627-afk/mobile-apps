@@ -205,6 +205,8 @@ public struct HelperState: Decodable, Equatable, Sendable {
     public var shownPopups: [Popup] { can("popups") ? popups ?? [] : [] }
     /// How many photos one message may carry: helpers before 0.5.11 take one.
     public var photoLimit: Int { can("photos") ? 10 : 1 }
+    /// Photos a new conversation's first message may carry: none before helper 0.5.60.
+    public var newSessionPhotoLimit: Int { can("new-photos") ? photoLimit : 0 }
 
     public func app(_ app: DeskApp) -> AppState? { apps[app.rawValue] }
     /// Links for the PC list; an app the phone does not know (a newer helper) is skipped.

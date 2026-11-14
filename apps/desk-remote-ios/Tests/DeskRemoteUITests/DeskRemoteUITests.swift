@@ -270,6 +270,13 @@ final class DeskRemoteUITests: XCTestCase {
         XCTAssertTrue(field.waitForExistence(timeout: 5), "new conversation sheet missing")
         field.tap()
         field.typeText("look at README")
+        // The conversation page's camera and microphone are on the sheet too (asked 11/14).
+        let camera = element("chat-camera")
+        XCTAssertTrue(camera.waitForExistence(timeout: 10), "camera button missing on the new-conversation sheet")
+        camera.tap()
+        XCTAssertTrue(element("chat-photo-preview").waitForExistence(timeout: 5), "the shot is not shown on the sheet")
+        XCTAssertTrue(element("chat-mic").exists, "microphone button missing on the new-conversation sheet")
+        XCTAssertTrue(element("chat-photo").exists, "photo button missing on the new-conversation sheet")
         // The sheet offers the model and effort for the new conversation (helper 0.5.36).
         let effort = element("new-session-effort")
         XCTAssertTrue(effort.waitForExistence(timeout: 10), "effort picker missing on the new-conversation sheet")
@@ -280,6 +287,7 @@ final class DeskRemoteUITests: XCTestCase {
         app.buttons["new-session-send"].tap()
         XCTAssertTrue(app.navigationBars["look at README"].waitForExistence(timeout: 25), "did not open the new conversation")
         XCTAssertTrue(text("（示範）新對話收到：look at README").waitForExistence(timeout: 20), "new conversation reply missing")
+        XCTAssertTrue(poll(timeout: 15) { self.app.descendants(matching: .any).matching(identifier: "picture").count >= 1 }, "the photo did not reach the new conversation")
         snapshot("15-new-session-chat")
     }
 
