@@ -33,7 +33,10 @@ public struct UsageBook: Codable, Equatable, Sendable {
         for app in DeskApp.allCases {
             guard let usage = state.usage(app), let account = usage.account, let at = Self.time(usage) else { continue }
             let key = Self.key(app, account)
-            if let known = entries[key], let knownAt = Self.time(known.usage), knownAt >= at { continue }
+            // The same reading may come back fuller (helper 0.5.65 gave Claude's "於 上午11:00 重設" its
+            // moment, live 11/15): the same PC's same-time sample replaces it when it differs.
+            if let known = entries[key], let knownAt = Self.time(known.usage),
+               knownAt > at || (knownAt == at && (known.pc != pc || known.usage == usage)) { continue }
             entries[key] = Entry(usage: usage, pc: pc)
             changed = true
         }
