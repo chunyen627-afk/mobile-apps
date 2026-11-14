@@ -334,22 +334,38 @@ function Paste-Send($w, $scope, $editName, $text, $imagePaths = @()) {
         Start-Sleep -Milliseconds 300
         return
       }
+      # Codex lost the text pasted right after three photos (home PC 11/14: the box still read its
+      # placeholder): the photos can take the keyboard focus off the box. Back to the box first.
+      $edit.SetFocus()
+      Start-Sleep -Milliseconds 500
     }
-    Set-PrivateText $text
-    [System.Windows.Forms.SendKeys]::SendWait('^v')
-    Start-Sleep -Milliseconds 500
-    if ([DeskWin]::GetForegroundWindow() -ne [IntPtr]$w.Current.NativeWindowHandle) { Fail 'focus-failed' 'focus moved before sending' }
-    # The page reports the box's text a little later than it shows it: read for up to 2 s.
+    # The text is pasted once more only while the box still reads empty (its placeholder or
+    # nothing), so it can never be doubled.
     $now = $null
-    for ($i = 0; $i -lt 8; $i++) {
-      $now = Box-Text $edit
+    for ($try = 0; $try -lt 2; $try++) {
+      if ($try -gt 0) {
+        $empty = (-not $now) -or (-not $now.Trim()) -or ($now.Trim() -eq $editName.Trim())
+        if (-not $empty) { break }
+        $edit.SetFocus()
+        Start-Sleep -Milliseconds 500
+      }
+      Set-PrivateText $text
+      [System.Windows.Forms.SendKeys]::SendWait('^v')
+      Start-Sleep -Milliseconds 500
+      if ([DeskWin]::GetForegroundWindow() -ne [IntPtr]$w.Current.NativeWindowHandle) { Fail 'focus-failed' 'focus moved before sending' }
+      # The page reports the box's text a little later than it shows it: read for up to 2 s.
+      for ($i = 0; $i -lt 8; $i++) {
+        $now = Box-Text $edit
+        if ($null -eq $now -or ($now -replace '\s', '').Contains($probe)) { break }
+        Start-Sleep -Milliseconds 250
+      }
       if ($null -eq $now -or ($now -replace '\s', '').Contains($probe)) { break }
-      Start-Sleep -Milliseconds 250
     }
     if ($null -ne $now -and -not (($now -replace '\s', '').Contains($probe))) {
       [System.Windows.Forms.SendKeys]::SendWait('^a{DEL}')
       $seen = ($now -replace '\s', ' ')
-      Fail 'paste-failed' ("the box reads " + $seen.Length + " chars: " + $seen.Substring(0, [Math]::Min(30, $seen.Length)))
+      $code = if ($imagePaths) { 'paste-failed-photos' } else { 'paste-failed' }
+      Fail $code ("the box reads " + $seen.Length + " chars: " + $seen.Substring(0, [Math]::Min(30, $seen.Length)))
     }
     [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
     Start-Sleep -Milliseconds 300

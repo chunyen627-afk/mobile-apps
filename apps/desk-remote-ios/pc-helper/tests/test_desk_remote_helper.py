@@ -432,6 +432,7 @@ class HelpersTests(unittest.TestCase):
         # Older workers (no detail) and other errors keep the plain text.
         self.assertEqual(h.failure_text('focus-failed', 'could not bring the window to the front'), base)
         self.assertEqual(h.failure_text('paste-failed', ''), h.FAILURE_TEXT['paste-failed'])
+        self.assertIn('照片可能還留在電腦的輸入框裡', h.failure_text('paste-failed-photos', ''))
         self.assertEqual(h.failure_text('odd-code', 'raw text'), 'raw text')
 
 
@@ -486,6 +487,30 @@ class DrivingTests(FakeEnvironment):
         second = runner.submit('send', 'claude', A, {'text': 'x', 'clientMsgId': 'same'})[1]
         self.assertEqual(first['id'], second['id'])
         self.assertEqual(len(runner.queue), 1)
+
+    def test_a_retry_after_a_failure_runs_again(self):
+        class OnceDriver(h.FakeDriver):
+            failed = False
+
+            def send(self, app, doc, text, images=None):
+                if not OnceDriver.failed:
+                    OnceDriver.failed = True
+                    raise h.ActionError('paste-failed-photos', 'the box reads 11 chars')
+                return super().send(app, doc, text, images)
+        hub, driver, _, runner = drive(self.fake, driver_class=OnceDriver)
+        payload = {'text': '數學也產生一份', 'clientMsgId': 'again', 'images': [base64.b64encode(JPEG).decode()] * 2}
+        first = runner.submit('send', 'claude', A, dict(payload))[1]
+        run_all(runner)
+        self.assertEqual(runner.status(first['id'])['state'], 'failed')
+        with self.assertLogs(level='INFO') as logs:
+            second = runner.submit('send', 'claude', A, dict(payload))[1]
+            run_all(runner)
+            runner.submit('send', 'claude', A, {'text': ''})
+        self.assertNotEqual(first['id'], second['id'], 'the retry is a new action, not the old failure')
+        self.assertEqual(runner.status(second['id'])['state'], 'done')
+        self.assertEqual(runner.submit('send', 'claude', A, dict(payload))[1]['id'], second['id'],
+                         'once it went through, the same id is never sent twice')
+        self.assertTrue(any('refused: 400 bad-request' in line for line in logs.output), logs.output)
 
     def test_someone_at_the_pc_blocks_until_the_phone_confirms(self):
         presence = dict(self.fake.cfg['presence'], idleSeconds=5)
