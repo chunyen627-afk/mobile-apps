@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.63'
+VERSION = '0.5.64'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -2972,6 +2972,15 @@ class WindowsDriver:
         self.ask(app, cmd='new_send', name=button, text=text, model=model or '', effort=effort or '',
                  images=list(images or []))
 
+    def foreground(self):
+        """The window in front now (a handle), before an action brings its app up."""
+        return self.worker.request({'cmd': 'foreground'}).get('hwnd') or None
+
+    def restore_front(self, app, hwnd):
+        """Brings `hwnd` back to the front unless it is `app` itself or the desktop; how it went."""
+        answer = self.worker.request({'cmd': 'restore_front', 'app': app, 'hwnd': hwnd})
+        return answer.get('how'), answer.get('name')
+
     def popups(self):
         """Windows on the desktop waiting for an answer: [{hwnd, title, process, text, buttons}]."""
         found = self.worker.request({'cmd': 'popups', 'codex': self.strings.get('codex') or {}}).get('popups') or []
@@ -4007,8 +4016,31 @@ class ActionRunner:
         with self.lock:
             action.update(fields)
 
+    # Actions after which the window that was in front comes back (the user's rule 11/14: a game in
+    # front is switched away for the send and back afterwards). Opening a conversation stays open.
+    RESTORE_FRONT = ('send', 'new', 'answer', 'permission', 'model', 'effort', 'mode', 'fast', 'stop')
+
+    def remember_front(self, action):
+        get = getattr(self.driver, 'foreground', None)
+        if action['kind'] not in self.RESTORE_FRONT or get is None:
+            return None
+        try:
+            return get()
+        except Exception:
+            return None
+
+    def restore_front(self, action, hwnd):
+        try:
+            how, name = self.driver.restore_front(action['app'], hwnd)
+        except Exception as exc:
+            logging.warning('switching back to the window in front failed: %s', exc)
+            return
+        if how not in ('already', 'skipped', 'gone', 'hidden'):
+            logging.info('%s %s: back to %s by %s', action['kind'], action['app'], name, how)
+
     def run(self, action):
         self.update(action, state='running', message='處理中')
+        front = self.remember_front(action)
         handler = {'send': self.do_send, 'permission': self.do_permission, 'new': self.do_new,
                    'open': self.do_open, 'answer': self.do_answer, 'model': self.do_model,
                    'effort': self.do_effort, 'mode': self.do_mode, 'stop': self.do_stop,
@@ -4032,6 +4064,8 @@ class ActionRunner:
         else:
             self.tell(action)
         finally:
+            if front:
+                self.restore_front(action, front)
             self.presence.end_own()
 
     def tell(self, action, failed=False):
