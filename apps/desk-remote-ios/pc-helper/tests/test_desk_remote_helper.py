@@ -2477,6 +2477,21 @@ class MemoryWatchTests(unittest.TestCase):
         self.assertEqual(worker.limits, [(600 * 2 ** 20, 15_000)])
         self.assertIn('1900 MB', watch.snapshot()['action'])
 
+    def test_a_forced_foreground_switch_is_logged(self):
+        class Worker:
+            def __init__(self, answer):
+                self.answer = answer
+
+            def request(self, command):
+                return self.answer
+        driver = h.WindowsDriver({'codex': {}}, worker=Worker({'ok': True, 'front': 'minimized PBZ'}))
+        with self.assertLogs(level='INFO') as logs:
+            driver.ask('codex', cmd='send')
+        self.assertIn('send codex: took the foreground by minimized PBZ', logs.output[0])
+        quiet = h.WindowsDriver({'codex': {}}, worker=Worker({'ok': True}))
+        with self.assertNoLogs(level='INFO'):
+            quiet.ask('codex', cmd='send')
+
     def test_recycle_only_between_requests_and_past_a_limit(self):
         worker = h.UiaWorker()
 

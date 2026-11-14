@@ -23,6 +23,7 @@ public static class DeskWin {
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
   [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool attach);
   [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern void SwitchToThisWindow(IntPtr hWnd, bool altTab);
   [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
   [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X; public int Y; }
   public delegate bool EnumProc(IntPtr hWnd, IntPtr lParam);
@@ -122,7 +123,14 @@ function Out-Json($obj) {
   [Console]::Out.Flush()
 }
 
-function Fail($code, $message) { throw "DESK:$code`:$message" }
+# A failure after the target window was brought up names any other program covering it.
+function Fail($code, $message) {
+  if ($script:Target -and "$message" -notmatch 'in front: ') {
+    $cover = Covered-By $script:Target
+    if ($cover) { $message = "$message; in front: $cover" }
+  }
+  throw "DESK:$code`:$message"
+}
 
 function Find-Window($app) {
   foreach ($w in $AE::RootElement.FindAll($Tree::Children, [System.Windows.Automation.Condition]::TrueCondition)) {
@@ -211,17 +219,30 @@ function Get-Prompt($w, $s) {
   return @{ text = ($texts -join "`n"); buttons = $buttons }
 }
 
-# No Alt-key trick here: a lone Alt opens the Electron apps' menu bar, which then swallowed the
-# paste and the click (found live). Opening the conversation link already brings the app up.
-function Bring-Front($w) {
-  $hwnd = [IntPtr]$w.Current.NativeWindowHandle
-  if ([DeskWin]::GetForegroundWindow() -eq $hwnd) { return }
+function Window-Pid($h) {
+  $owner = [uint32]0
+  $null = [DeskWin]::GetWindowThreadProcessId($h, [ref]$owner)
+  return $owner
+}
+
+function Pid-Name($id) {
+  try { return (Get-Process -Id $id -ErrorAction Stop).ProcessName } catch { return 'unknown' }
+}
+
+# Every way Windows lets a background program take the foreground, in order; returns the one that
+# worked, or $null. A full-screen game refused the first two (home PC 11/14, PBZ), and the user's
+# rule is that the desktop app always comes to the top, whatever runs. $keepPid: never send Alt
+# while that process is in front (a lone Alt reaching an Electron app opens its menu bar, which
+# then swallowed the paste and the click, found live); $mayMinimize: the last resort minimizes the
+# window in front, which Restore-Front brings back afterwards.
+function Force-Front($hwnd, $keepPid, [bool]$mayMinimize) {
   if ([DeskWin]::IsIconic($hwnd)) { [DeskWin]::ShowWindow($hwnd, 9) | Out-Null }  # SW_RESTORE
+  elseif (-not [DeskWin]::IsWindowVisible($hwnd)) { [DeskWin]::ShowWindow($hwnd, 5) | Out-Null }  # SW_SHOW
+  if ([DeskWin]::GetForegroundWindow() -eq $hwnd) { return 'already' }
   [DeskWin]::SetForegroundWindow($hwnd) | Out-Null
   Start-Sleep -Milliseconds 300
-  if ([DeskWin]::GetForegroundWindow() -eq $hwnd) { return }
-  # Second try: share the input state of the window in front, which Windows then lets hand over
-  # the foreground (sends no keys, so no Electron menu bar).
+  if ([DeskWin]::GetForegroundWindow() -eq $hwnd) { return 'plain' }
+  # Share the input state of the window in front, which Windows then lets hand over the foreground.
   $front = [DeskWin]::GetForegroundWindow()
   $owner = [uint32]0
   $thread = [DeskWin]::GetWindowThreadProcessId($front, [ref]$owner)
@@ -232,7 +253,77 @@ function Bring-Front($w) {
       [DeskWin]::SetForegroundWindow($hwnd) | Out-Null
     } finally { [DeskWin]::AttachThreadInput($me, $thread, $false) | Out-Null }
     Start-Sleep -Milliseconds 300
-    if ([DeskWin]::GetForegroundWindow() -eq $hwnd) { return }
+    if ([DeskWin]::GetForegroundWindow() -eq $hwnd) { return 'attach' }
+  }
+  # A key press from this program lifts Windows' foreground lock. Alt goes to the window in front
+  # (the game), both down and up before the switch, so the target never sees it.
+  $front = [DeskWin]::GetForegroundWindow()
+  if ($front -ne [IntPtr]::Zero -and (Window-Pid $front) -ne $keepPid) {
+    [DeskWin]::keybd_event(0x12, 0, 0, [UIntPtr]::Zero)
+    [DeskWin]::keybd_event(0x12, 0, 2, [UIntPtr]::Zero)
+    Start-Sleep -Milliseconds 150
+    [DeskWin]::SetForegroundWindow($hwnd) | Out-Null
+    Start-Sleep -Milliseconds 300
+    if ([DeskWin]::GetForegroundWindow() -eq $hwnd) { return 'alt' }
+  }
+  # What Alt+Tab itself uses.
+  [DeskWin]::SwitchToThisWindow($hwnd, $true)
+  Start-Sleep -Milliseconds 400
+  if ([DeskWin]::GetForegroundWindow() -eq $hwnd) { return 'switch' }
+  if ($mayMinimize) {
+    $front = [DeskWin]::GetForegroundWindow()
+    $owner = Window-Pid $front
+    $name = Pid-Name $owner
+    if ($front -ne [IntPtr]::Zero -and $owner -ne $keepPid -and @('explorer', 'LockApp', 'consent') -notcontains $name) {
+      [DeskWin]::ShowWindow($front, 6) | Out-Null  # SW_MINIMIZE
+      $script:Minimized = $front
+      Start-Sleep -Milliseconds 800
+      [DeskWin]::SetForegroundWindow($hwnd) | Out-Null
+      Start-Sleep -Milliseconds 300
+      if ([DeskWin]::GetForegroundWindow() -ne $hwnd) {
+        [DeskWin]::SwitchToThisWindow($hwnd, $true)
+        Start-Sleep -Milliseconds 400
+      }
+      if ([DeskWin]::GetForegroundWindow() -eq $hwnd) { return "minimized $name" }
+    }
+  }
+  return $null
+}
+
+# Back to the window that was in front before the action (a minimized game restored first).
+function Restore-Front($before) {
+  if ($script:Minimized) {
+    [DeskWin]::ShowWindow($script:Minimized, 9) | Out-Null  # SW_RESTORE
+    $script:Minimized = $null
+  }
+  if ($before -ne [IntPtr]::Zero -and [DeskWin]::IsWindowVisible($before) -and [DeskWin]::GetForegroundWindow() -ne $before) {
+    $null = Force-Front $before $script:TargetPid $false
+  }
+}
+
+# The program whose window is actually on top at the middle of $w, when it is another one (a
+# window can be the foreground and still be covered, so the paste goes nowhere).
+function Covered-By($w) {
+  try {
+    $r = $w.Current.BoundingRectangle
+    $p = New-Object DeskWin+POINT
+    $p.X = [int]($r.X + $r.Width / 2); $p.Y = [int]($r.Y + $r.Height / 2)
+    $top = [DeskWin]::GetAncestor([DeskWin]::WindowFromPoint($p), 2)  # GA_ROOT
+    if ($top -eq [IntPtr]::Zero) { return $null }
+    $owner = Window-Pid $top
+    if ($owner -eq [uint32]$w.Current.ProcessId) { return $null }
+    return Pid-Name $owner
+  } catch { return $null }
+}
+
+function Bring-Front($w) {
+  $hwnd = [IntPtr]$w.Current.NativeWindowHandle
+  $script:Target = $w
+  $script:TargetPid = [uint32]$w.Current.ProcessId
+  $how = Force-Front $hwnd $script:TargetPid $true
+  if ($how) {
+    if ($how -ne 'already') { $script:FrontHow = $how }
+    return
   }
   # Name what is in front, so the phone can say what blocked it.
   $front = [DeskWin]::GetForegroundWindow()
@@ -372,7 +463,7 @@ function Paste-Send($w, $scope, $editName, $text, $imagePaths = @()) {
     return $replaced
   } finally {
     Restore-Clipboard $saved
-    if ($before -ne [IntPtr]::Zero) { [DeskWin]::SetForegroundWindow($before) | Out-Null }
+    Restore-Front $before
   }
 }
 
@@ -455,7 +546,7 @@ function Claude-AllowOnce($w, $s) {
     return $how
   } finally {
     [DeskWin]::SetCursorPos($cursor.X, $cursor.Y) | Out-Null
-    if ($before -ne [IntPtr]::Zero) { [DeskWin]::SetForegroundWindow($before) | Out-Null }
+    Restore-Front $before
   }
 }
 
@@ -633,7 +724,7 @@ function Answer-Questions($w, $page, $s, $questions) {
     return ($hows -join ',')
   } finally {
     [DeskWin]::SetCursorPos($cursor.X, $cursor.Y) | Out-Null
-    if ($before -ne [IntPtr]::Zero) { [DeskWin]::SetForegroundWindow($before) | Out-Null }
+    Restore-Front $before
   }
 }
 
@@ -723,7 +814,7 @@ function Answer-CodexQuestions($w, $page, $s, $questions) {
     return ($hows -join ',')
   } finally {
     [DeskWin]::SetCursorPos($cursor.X, $cursor.Y) | Out-Null
-    if ($before -ne [IntPtr]::Zero) { [DeskWin]::SetForegroundWindow($before) | Out-Null }
+    Restore-Front $before
   }
 }
 
@@ -880,7 +971,7 @@ function Set-CodexEffort($w, $page, $s, $label) {
     # The menu stayed open after the collapse once (11/8): Esc while Codex is still in front.
     Close-Claude-Menus $w
     [DeskWin]::SetCursorPos($cursor.X, $cursor.Y) | Out-Null
-    if ($before -ne [IntPtr]::Zero) { [DeskWin]::SetForegroundWindow($before) | Out-Null }
+    Restore-Front $before
   }
 }
 
@@ -1045,7 +1136,7 @@ function Set-Model($w, $page, $s, $label) {
     Start-Sleep -Milliseconds 200
     if (Find-InApp $w $CT::RadioButton $label) { [System.Windows.Forms.SendKeys]::SendWait('{ESC}') }
     [DeskWin]::SetCursorPos($cursor.X, $cursor.Y) | Out-Null
-    if ($before -ne [IntPtr]::Zero) { [DeskWin]::SetForegroundWindow($before) | Out-Null }
+    Restore-Front $before
   }
 }
 
@@ -1133,7 +1224,7 @@ function Set-Effort($w, $page, $s, $label) {
     Start-Sleep -Milliseconds 200
     Close-Claude-Menus $w
     [DeskWin]::SetCursorPos($cursor.X, $cursor.Y) | Out-Null
-    if ($before -ne [IntPtr]::Zero) { [DeskWin]::SetForegroundWindow($before) | Out-Null }
+    Restore-Front $before
   }
 }
 
@@ -1168,7 +1259,7 @@ function Set-ClaudeMode($w, $page, $s, $label) {
     Start-Sleep -Milliseconds 200
     Close-Claude-Menus $w
     [DeskWin]::SetCursorPos($cursor.X, $cursor.Y) | Out-Null
-    if ($before -ne [IntPtr]::Zero) { [DeskWin]::SetForegroundWindow($before) | Out-Null }
+    Restore-Front $before
   }
 }
 
@@ -1712,9 +1803,13 @@ while ($true) {
   $line = [Console]::In.ReadLine()
   if ($null -eq $line) { break }
   if (-not $line.Trim()) { continue }
+  $script:Target = $null; $script:TargetPid = $null; $script:Minimized = $null; $script:FrontHow = $null
   try {
     $c = $line | ConvertFrom-Json
-    Out-Json (Run-Command $c)
+    $result = Run-Command $c
+    # How the window came up when the plain way was refused (logged by the helper).
+    if ($script:FrontHow -and $script:FrontHow -ne 'plain' -and $result -is [hashtable]) { $result.front = $script:FrontHow }
+    Out-Json $result
   } catch {
     $m = "$($_.Exception.Message)"
     if ($m -match '^DESK:([a-z-]+):(.*)$') { Out-Json @{ ok = $false; error = $Matches[1]; message = $Matches[2] } }

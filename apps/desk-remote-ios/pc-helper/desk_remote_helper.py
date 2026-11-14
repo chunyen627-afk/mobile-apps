@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.62'
+VERSION = '0.5.63'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -2891,7 +2891,11 @@ class WindowsDriver:
     def ask(self, app, **command):
         command['app'] = app
         command['strings'] = self.strings[app]
-        return self.worker.request(command)
+        answer = self.worker.request(command)
+        if isinstance(answer, dict) and answer.get('front'):
+            # Windows refused the plain switch (a full-screen game in front, home PC 11/14).
+            logging.info('%s %s: took the foreground by %s', command.get('cmd'), app, answer['front'])
+        return answer
 
     def inspect(self, app):
         return self.ask(app, cmd='inspect')
