@@ -30,8 +30,8 @@ settings:
     # 0.6: the thermometers joined as the fourth tab. 0.6.2: the shared clipboard in the desk remote tab.
     # 0.6.3: clipboard rows open a picture or a web address; only the copy button copies.
     # 0.6.4: the PC's webcam, live only while its page is open (helper 0.5.41). 0.6.5: data saver by default, 清晰 switch.
-    MARKETING_VERSION: "0.6.9"
-    CURRENT_PROJECT_VERSION: "24"
+    MARKETING_VERSION: "0.6.10"
+    CURRENT_PROJECT_VERSION: "25"
 targets:
   # Named Lightbox, as the album app it replaces: the same bundle identifier, executable and
   # Swift module, so the album's unit tests (`@testable import Lightbox`) run here unchanged.
