@@ -512,6 +512,26 @@ class DrivingTests(FakeEnvironment):
                          'once it went through, the same id is never sent twice')
         self.assertTrue(any('refused: 400 bad-request' in line for line in logs.output), logs.output)
 
+    def test_the_window_in_front_comes_back_after_a_send_but_not_after_open(self):
+        class FrontDriver(h.FakeDriver):
+            restored = []
+
+            def foreground(self):
+                return 4242
+
+            def restore_front(self, app, hwnd):
+                FrontDriver.restored.append((app, hwnd))
+                return 'plain', 'PBZ'
+        hub, driver, _, runner = drive(self.fake, driver_class=FrontDriver)
+        with self.assertLogs(level='INFO') as logs:
+            runner.submit('send', 'claude', A, {'text': '遊戲開著也要送'})
+            run_all(runner)
+        self.assertEqual(FrontDriver.restored, [('claude', 4242)])
+        self.assertTrue(any('send claude: back to PBZ by plain' in line for line in logs.output), logs.output)
+        runner.submit('open', 'claude', A, {})
+        run_all(runner)
+        self.assertEqual(len(FrontDriver.restored), 1, 'an opened conversation stays in front')
+
     def test_someone_at_the_pc_blocks_until_the_phone_confirms(self):
         presence = dict(self.fake.cfg['presence'], idleSeconds=5)
         _, _, _, runner = drive(self.fake, presence)

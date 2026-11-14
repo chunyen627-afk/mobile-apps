@@ -1600,6 +1600,24 @@ function Run-Command($c) {
   $s = $c.strings
   switch ($c.cmd) {
     'ping' { return @{ ok = $true } }
+    # The window in front before an action (a game, home PC 11/14): the helper asks first, before
+    # the conversation's link brings the app up, and hands it back to 'restore_front' afterwards.
+    'foreground' { return @{ ok = $true; hwnd = [int64][DeskWin]::GetForegroundWindow() } }
+    'restore_front' {
+      $h = [IntPtr][int64]$c.hwnd
+      if ($h -eq [IntPtr]::Zero -or -not [DeskWin]::IsWindow($h)) { return @{ ok = $true; how = 'gone' } }
+      if (-not [DeskWin]::IsWindowVisible($h) -and -not [DeskWin]::IsIconic($h)) { return @{ ok = $true; how = 'hidden' } }
+      $owner = Window-Pid $h
+      $name = Pid-Name $owner
+      $w = Find-Window $c.app
+      $appPid = if ($w) { [uint32]$w.Current.ProcessId } else { [uint32]0 }
+      if ($owner -eq $appPid -or @('explorer', 'LockApp', 'ShellExperienceHost', 'SearchHost', 'StartMenuExperienceHost') -contains $name) {
+        return @{ ok = $true; how = 'skipped' }
+      }
+      $how = Force-Front $h $appPid $false
+      if (-not $how) { $how = 'refused' }
+      return @{ ok = $true; how = $how; name = $name }
+    }
     'inspect' {
       $w = Find-Window $c.app
       if (-not $w) {
