@@ -340,12 +340,13 @@ final class ElevateTests: XCTestCase {
 final class MetaAndUsageTests: XCTestCase {
     private func data(_ text: String) -> Data { Data(text.utf8) }
 
-    private func state(codex percent: Int, at time: String, account: String?) throws -> HelperState {
+    private func state(codex percent: Int, at time: String, account: String?, resetsAt: String? = nil) throws -> HelperState {
         let mark = account.map { "\"\($0)\"" } ?? "null"
+        let reset = resetsAt.map { "\"\($0)\"" } ?? "null"
         return try HelperClient.decode(HelperState.self, status: 200, data: data("""
         {"ok":true,"pc":{"name":"P","helperVersion":"0.5.8"},"capabilities":["read"],"apps":{},
          "presence":{"idleSeconds":1,"locked":false},"warnings":[],"elevate":null,
-         "usage":{"codex":{"windows":[{"label":"每週","percent":\(percent),"resetsAt":null,"resetsText":null}],
+         "usage":{"codex":{"windows":[{"label":"每週","percent":\(percent),"resetsAt":\(reset),"resetsText":null}],
                            "sampledAt":"\(time)","account":\(mark)}}}
         """))
     }
@@ -356,6 +357,14 @@ final class MetaAndUsageTests: XCTestCase {
         var book = UsageBook()
         XCTAssertTrue(book.record(office, pc: "辦公室"))
         XCTAssertFalse(book.record(home, pc: "家用電腦"), "an older sample must not replace a newer one")
+        XCTAssertFalse(book.record(office, pc: "辦公室"), "the same reading again changes nothing")
+        // The same reading come back fuller (a reset moment added, 11/15) replaces it.
+        let fuller = try state(codex: 0, at: "2026-10-28T09:30:53Z", account: "a1", resetsAt: "2026-11-01T03:00:00Z")
+        XCTAssertFalse(book.record(fuller, pc: "家用電腦"), "another PC's same-time reading is not taken")
+        XCTAssertTrue(book.record(fuller, pc: "辦公室"))
+        XCTAssertEqual(book.shown(.codex, own: home.usage(.codex), pc: "家用電腦")?.usage.windows.first?.resetsAt,
+                       "2026-11-01T03:00:00Z")
+        XCTAssertTrue(book.record(office, pc: "辦公室"))  // back as it was, for the checks below
         // The home PC shows the office's newer reading and says where it came from.
         let shownAtHome = try XCTUnwrap(book.shown(.codex, own: home.usage(.codex), pc: "家用電腦"))
         XCTAssertEqual(shownAtHome.usage.windows.first?.percent, 0)
