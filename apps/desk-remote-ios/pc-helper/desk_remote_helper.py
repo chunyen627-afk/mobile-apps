@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.64'
+VERSION = '0.5.65'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -196,11 +196,14 @@ def card_label(name):
 
 
 def clock_reset(text, read_at):
-    """'週四上午2:20 重設' read at `read_at` -> the next such local time's epoch seconds, or None."""
-    match = re.fullmatch(r'週([一二三四五六日])\s*(上午|下午)?\s*(\d{1,2}):(\d{2})\s*重設', (text or '').strip())
+    """'週四上午2:20 重設' read at `read_at` -> the next such local time's epoch seconds, or None.
+    Within a day Claude leaves the weekday out: '於 上午11:00 重設' (live 11/15, the phone lost
+    Claude's countdown) is the next 11:00."""
+    match = re.fullmatch(r'(?:於\s*)?(?:週([一二三四五六日])\s*)?(上午|下午)?\s*(\d{1,2}):(\d{2})\s*重設', (text or '').strip())
     if not match:
         return None
-    day, half, hour, minute = WEEKDAYS.index(match.group(1)), match.group(2), int(match.group(3)), int(match.group(4))
+    day = WEEKDAYS.index(match.group(1)) if match.group(1) else None
+    half, hour, minute = match.group(2), int(match.group(3)), int(match.group(4))
     if half == '下午' and hour < 12:
         hour += 12
     elif half == '上午' and hour == 12:
@@ -208,7 +211,7 @@ def clock_reset(text, read_at):
     start = datetime.fromtimestamp(read_at)
     for ahead in range(8):
         candidate = (start + timedelta(days=ahead)).replace(hour=hour, minute=minute, second=0, microsecond=0)
-        if candidate.weekday() == day and candidate.timestamp() > read_at - 60:
+        if day in (None, candidate.weekday()) and candidate.timestamp() > read_at - 60:
             return candidate.timestamp()
     return None
 
@@ -2976,6 +2979,10 @@ class WindowsDriver:
         """The window in front now (a handle), before an action brings its app up."""
         return self.worker.request({'cmd': 'foreground'}).get('hwnd') or None
 
+    def bring_front(self, app):
+        """Brings the app's window to the front, minimizing what covers it as a last resort."""
+        return self.worker.request({'cmd': 'bring_front', 'app': app}).get('how')
+
     def restore_front(self, app, hwnd):
         """Brings `hwnd` back to the front unless it is `app` itself or the desktop; how it went."""
         answer = self.worker.request({'cmd': 'restore_front', 'app': app, 'hwnd': hwnd})
@@ -4149,6 +4156,8 @@ class ActionRunner:
         live 10/27): the link brings its window back, so no window is not a reason to stop yet."""
         app, info = action['app'], action['info']
         docs = self.driver.docs(app)
+        if docs == []:
+            docs = self.uncover(action)
         page = self.page_of(docs, info)
         if page is not None:
             self.hub.learn_page_name(app, action['sessionId'], info, page)
@@ -4192,6 +4201,25 @@ class ActionRunner:
             time.sleep(self.settle_seconds)
             return
         raise ActionError('title-mismatch', '')
+
+    def uncover(self, action):
+        """A window wholly covered by another (Moonlight full screen, home PC 11/15) shows UI
+        Automation no page, so neither its link's page nor its sidebar entry can be found: the
+        send failed as a duplicate title with no entry at all. Up front first, then its pages."""
+        app = action['app']
+        bring = getattr(self.driver, 'bring_front', None)
+        if bring is None:
+            return []
+        self.recheck(action)
+        self.presence.begin_own()
+        how = bring(app)
+        logging.info('%s %s: no page readable while covered; brought to the front by %s', action['kind'], app, how)
+        deadline = self.clock() + self.doc_wait
+        while True:
+            docs = self.driver.docs(app)
+            if docs or self.clock() >= deadline:
+                return docs
+            time.sleep(0.25)
 
     def do_open(self, action):
         self.open_conversation(action)

@@ -1603,6 +1603,14 @@ function Run-Command($c) {
     # The window in front before an action (a game, home PC 11/14): the helper asks first, before
     # the conversation's link brings the app up, and hands it back to 'restore_front' afterwards.
     'foreground' { return @{ ok = $true; hwnd = [int64][DeskWin]::GetForegroundWindow() } }
+    # A window wholly covered by another (Moonlight full screen, home PC 11/15) shows UI Automation
+    # no page at all, so its conversation can be neither found nor typed into: up front first.
+    'bring_front' {
+      $w = Need-Window $c.app
+      $how = Force-Front ([IntPtr]$w.Current.NativeWindowHandle) ([uint32]$w.Current.ProcessId) $true
+      if (-not $how) { $how = 'refused' }
+      return @{ ok = $true; how = $how }
+    }
     'restore_front' {
       $h = [IntPtr][int64]$c.hwnd
       if ($h -eq [IntPtr]::Zero -or -not [DeskWin]::IsWindow($h)) { return @{ ok = $true; how = 'gone' } }
@@ -1733,6 +1741,7 @@ function Run-Command($c) {
         $n = $b.Current.Name
         if ($n -eq $c.title -or ($n.StartsWith($c.title + ' ') -and -not ($n.Substring($c.title.Length + 1) -match $s.menu_suffix))) { $hits += $b }
       }
+      if ($hits.Count -eq 0) { Fail 'title-mismatch' 'no sidebar entry with this title' }
       if ($hits.Count -ne 1) { Fail 'duplicate-title' ("sidebar entries with this title: " + $hits.Count) }
       if (-not (Invoke-Element $hits[0])) { Fail 'not-invokable' 'the sidebar entry has no invoke pattern' }
       return @{ ok = $true }

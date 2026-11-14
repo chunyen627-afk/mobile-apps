@@ -532,6 +532,27 @@ class DrivingTests(FakeEnvironment):
         run_all(runner)
         self.assertEqual(len(FrontDriver.restored), 1, 'an opened conversation stays in front')
 
+    def test_a_window_covered_whole_is_brought_up_before_its_conversation_is_looked_for(self):
+        # Moonlight full screen at home (11/15): the covered Claude window showed no page at all,
+        # so the send failed as a duplicate title with no sidebar entry.
+        class CoveredDriver(h.FakeDriver):
+            covered = True
+
+            def docs(self, app):
+                return [] if self.covered else super().docs(app)
+
+            def bring_front(self, app):
+                self.calls.append(('bring_front', app))
+                self.covered = False
+                return 'minimized Moonlight'
+        hub, driver, _, runner = drive(self.fake, driver_class=CoveredDriver)
+        with self.assertLogs(level='INFO') as logs:
+            runner.submit('send', 'claude', A, {'text': '蓋住了也要送'})
+            run_all(runner)
+        self.assertIn(('bring_front', 'claude'), driver.calls)
+        self.assertTrue(any(c[0] == 'send' for c in driver.calls), driver.calls)
+        self.assertTrue(any('brought to the front by minimized Moonlight' in line for line in logs.output), logs.output)
+
     def test_someone_at_the_pc_blocks_until_the_phone_confirms(self):
         presence = dict(self.fake.cfg['presence'], idleSeconds=5)
         _, _, _, runner = drive(self.fake, presence)
@@ -1280,6 +1301,9 @@ for line in sys.stdin:
         self.assertEqual(h.clock_reset('週日下午1:05 重設', read), h.datetime(2026, 11, 1, 13, 5).timestamp())
         self.assertEqual(h.clock_reset('週三上午12:00 重設', read), h.datetime(2026, 11, 4, 0, 0).timestamp())
         self.assertIsNone(h.clock_reset('2 小時後重設', read))
+        # Within a day the weekday is left out (live 11/15): the next such time.
+        self.assertEqual(h.clock_reset('於 上午5:10 重設', read), h.datetime(2026, 10, 29, 5, 10).timestamp())
+        self.assertEqual(h.clock_reset('於 下午11:50 重設', read), h.datetime(2026, 10, 28, 23, 50).timestamp())
         rows = [{'label': '5 小時限制', 'percent': 6, 'reset': '週四上午2:20 重設'},
                 {'label': '每週 · Fable', 'percent': 53, 'reset': '週日上午11:00 重設'},
                 {'label': '每週', 'percent': 62, 'reset': '週日上午11:00 重設'}]
