@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.60'
+VERSION = '0.5.62'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -3822,6 +3822,14 @@ class ActionRunner:
         return None
 
     def submit(self, kind, app, session_id, payload):
+        code, body = self.take(kind, app, session_id, payload)
+        if code >= 400 and kind in ('send', 'new'):
+            # Refusals never reach the action log otherwise: a phone that only said "failed" left
+            # nothing to read on the PC (home PC 11/14).
+            logging.info('phone %s %s refused: %s %s', kind, app, code, body.get('error'))
+        return code, body
+
+    def take(self, kind, app, session_id, payload):
         force = bool(payload.get('force'))
         text = payload.get('text')
         images = []
@@ -3902,7 +3910,10 @@ class ActionRunner:
             client_id = payload.get('clientMsgId')
             if isinstance(client_id, str) and client_id in self.client_ids:
                 existing = self.actions.get(self.client_ids[client_id])
-                if existing:
+                # The same id is the same message: answered with the first action, unless that one
+                # failed. A failed send stopped before Enter, so the phone's 重試 runs it again
+                # (until 0.5.62 it got the old failure back and nothing ran, home PC 11/14).
+                if existing and existing['state'] != 'failed':
                     return 202, self.public(existing)
             if len(self.queue) >= self.MAX_QUEUED:
                 return 429, error('busy', '電腦端還有動作在排隊，請稍後再試')
@@ -4006,7 +4017,7 @@ class ActionRunner:
             message = failure_text(exc.code, exc.message)
             if exc.code != 'uac' and self.presence.snapshot().get('uac'):
                 message += '；' + UAC_TEXT  # a prompt that came up while this ran
-            elif exc.code in ('focus-failed', 'paste-failed', 'no-prompt-box') and self.watcher.popup_list():
+            elif exc.code in ('focus-failed', 'paste-failed', 'paste-failed-photos', 'no-prompt-box') and self.watcher.popup_list():
                 message += '；電腦上有跳出的視窗擋著，可在電腦頁按掉後再送'
             self.update(action, state='failed', error=exc.code, message=message)
             self.tell(action, failed=True)
@@ -4683,6 +4694,7 @@ FAILURE_TEXT = {
     'clipboard-unsafe': '剪貼簿裡的內容無法安全保存，已中止',
     'box-not-empty': '電腦輸入框裡沒送出的字清不掉，已中止（沒有送出）',
     'paste-failed': '貼上後輸入框沒有出現這段文字，已清掉並中止（沒有送出）',
+    'paste-failed-photos': '照片貼上了但文字貼不進輸入框，已中止（沒有送出）；照片可能還留在電腦的輸入框裡，請先到電腦上移除再重試，不然會重複',
     'prompt-changed': '權限詢問已經不一樣了',
     'menu-failed': '打不開「允許一次」選單',
     'still-asking': '按了之後電腦上仍在詢問，可能沒有按到',
