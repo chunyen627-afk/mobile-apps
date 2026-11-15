@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.74'
+VERSION = '0.5.76'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -4117,6 +4117,10 @@ class ActionRunner:
     def run(self, action):
         self.update(action, state='running', message='處理中')
         self.acting_until = 0
+        # Pasting drops the photos from memory (drop_photos); a failed send keeps them to be sent
+        # again (live 11/15: the resent message had lost its photo).
+        photos = list(action.get('images') or [])
+        action['photoCount'] = len(photos)
         front = self.remember_front(action)
         handler = {'send': self.do_send, 'permission': self.do_permission, 'new': self.do_new,
                    'open': self.do_open, 'answer': self.do_answer, 'model': self.do_model,
@@ -4142,7 +4146,7 @@ class ActionRunner:
             self.tell(action, failed=True)
             if repairable:
                 try:
-                    self.on_send_failed(action, exc.code)
+                    self.on_send_failed(dict(action, images=photos), exc.code)
                 except Exception:
                     logging.exception('noting the failed send failed')
         except Exception:
@@ -4588,7 +4592,7 @@ class ActionRunner:
             return
         line = {'at': round(time.time()), 'kind': action['kind'], 'app': action.get('app'),
                 'state': action.get('state'), 'error': action.get('error'),
-                'photos': len(action.get('images') or [])}
+                'photos': action.get('photoCount', len(action.get('images') or []))}
         try:
             path = Path(self.data_dir) / 'outcomes.jsonl'
             with open(path, 'a', encoding='utf-8') as f:

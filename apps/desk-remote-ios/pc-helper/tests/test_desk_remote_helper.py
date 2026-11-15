@@ -700,13 +700,14 @@ class DrivingTests(FakeEnvironment):
                 raise h.ActionError('no-prompt-box', 'the message box is not on screen')
         _, _, _, runner = drive(self.fake, driver_class=NoBoxDriver)
         noted = []
-        runner.on_send_failed = lambda action, code: noted.append(code)
-        body = runner.submit('send', 'claude', A, {'text': '修好再送', 'force': True})[1]
+        runner.on_send_failed = lambda action, code: noted.append((code, len(action['images'])))
+        body = runner.submit('send', 'claude', A, {'text': '修好再送', 'force': True,
+                                                   'images': [base64.b64encode(b'\x89PNG\r\n\x1a\nx').decode()]})[1]
         run_all(runner)
         status = runner.status(body['id'])
         self.assertEqual(status['state'], 'failed')
         self.assertTrue(status['message'].endswith('；已請求自動檢查修復，修好後會自動重送這則'), status['message'])
-        self.assertEqual(noted, ['no-prompt-box'])
+        self.assertEqual(noted, [('no-prompt-box', 1)], 'the photo is kept to be sent again (lost live 11/15)')
 
     def test_a_failed_self_check_starts_one_repair(self):
         folder = Path(tempfile.mkdtemp())
