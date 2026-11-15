@@ -574,6 +574,161 @@ class DrivingTests(FakeEnvironment):
         self.assertLess(driver.calls.index(('bring_front', 'codex')),
                         [i for i, c in enumerate(driver.calls) if c[0] == 'new_send'][0], driver.calls)
 
+    def test_the_self_check_looks_at_both_apps_without_sending(self):
+        # 11/15, the user: desktop app updates must not stop sending from the phone; checked weekly,
+        # after an update and after a failed send, sending nothing.
+        hub, driver, _, runner = drive(self.fake)
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        runner.data_dir = folder
+        reports = []
+        runner.on_selfcheck = reports.append
+        runner.log_outcome({'kind': 'send', 'app': 'claude', 'state': 'done', 'images': [b'x']})
+        runner.log_outcome({'kind': 'send', 'app': 'codex', 'state': 'failed', 'error': 'paste-failed', 'images': []})
+        code, body = runner.submit('selfcheck', None, None, {'reason': '每週例行'})
+        self.assertEqual(code, 202, body)
+        self.assertEqual(runner.submit('selfcheck', None, None, {})[0], 409, 'one at a time')
+        sent_before = [c for c in driver.calls if c[0] in ('send', 'new_send')]
+        run_all(runner)
+        report = reports[-1]
+        self.assertTrue(report['ok'], report)
+        self.assertEqual([c for c in driver.calls if c[0] in ('send', 'new_send')], sent_before, 'nothing sent')
+        names = [c['name'] for c in report['apps']['claude']['checks']]
+        for name in ('對話列表', '視窗', '輸入框', '打字測試（不送出）', '模型按鈕', '模型選單', '開新對話鈕', '用量卡'):
+            self.assertIn(name, names)
+        self.assertEqual(report['week']['claude send（附照片）'], {'ok': 1, 'failed': 0, 'errors': []})
+        self.assertEqual(report['week']['codex send']['errors'], ['paste-failed'])
+        self.assertTrue(json.loads((folder / 'selfcheck.json').read_text(encoding='utf-8'))['ok'])
+        self.assertEqual(runner.status(body['id'])['message'], '自檢全部通過')
+        # A renamed message box and a model menu without models fail by name.
+        driver.broken = {'edit', 'menu'}
+        runner.submit('selfcheck', None, None, {'reason': 'codex 更新到 26.1111'})
+        run_all(runner)
+        failed = [(app, c['name']) for app, a in reports[-1]['apps'].items() for c in a['checks'] if c['status'] == 'fail']
+        self.assertFalse(reports[-1]['ok'])
+        self.assertIn(('codex', '輸入框'), failed)
+        self.assertIn(('claude', '模型選單'), failed)
+        # A game in front that will not give way (home PC 11/15): not tested, tried again; not a failure.
+        driver.broken = set()
+        real_probe = driver.probe
+        driver.probe = lambda app, **kw: dict(real_probe(app, **kw), typed={'ok': False, 'error': 'focus-failed'},
+                                              menu={'error': 'focus-failed:another window covers the model button'})
+        runner.submit('selfcheck', None, None, {'reason': '每週例行'})
+        run_all(runner)
+        self.assertTrue(reports[-1]['ok'], 'a window in front is not a changed app')
+        self.assertTrue(reports[-1]['busy'])
+        skipped = [c['name'] for c in reports[-1]['apps']['codex']['checks'] if c['status'] == 'skip']
+        self.assertEqual(skipped, ['打字測試（不送出）', '模型選單'])
+        # Someone at the PC: not now.
+        _, _, _, busy = drive(self.fake, dict(self.fake.cfg['presence'], idleSeconds=5))
+        self.assertEqual(busy.submit('selfcheck', None, None, {})[0], 409)
+
+    def test_the_self_check_plan_runs_weekly_after_updates_and_after_failed_sends(self):
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        shared = folder / 'shared'
+        shared.mkdir()
+
+        class Runner:
+            pc_name = '家用電腦'
+            answers = []
+            submitted = []
+
+            def __init__(self):
+                self.watcher = type('W', (), {'versions': {'codex': {'running': '26.1027.1.0'}}})()
+
+            def submit(self, kind, app, session_id, payload):
+                self.submitted.append((kind, app, session_id, payload))
+                return self.answers.pop(0) if self.answers else (202, {'id': 'x'})
+        runner = Runner()
+        now = [h.datetime(2026, 11, 14, 23, 0).timestamp()]  # a Saturday night
+        plan = h.SelfCheckPlan(runner, folder, shared, clock=lambda: now[0])
+        plan.tick()
+        self.assertEqual(runner.submitted, [], 'the first version seen is only remembered')
+        now[0] = h.datetime(2026, 11, 15, 3, 0, 30).timestamp()  # Sunday 03:00
+        plan.tick()
+        self.assertEqual(runner.submitted[-1][3], {'reason': '每週例行'})
+        plan.tick()
+        self.assertEqual(len(runner.submitted), 1, 'once that night')
+        # Codex updated: checked a few minutes later.
+        runner.watcher.versions = {'codex': {'running': '26.1111.2228.0'}}
+        plan.tick()
+        self.assertEqual(len(runner.submitted), 1)
+        now[0] += 200
+        plan.tick()
+        self.assertEqual(runner.submitted[-1][3], {'reason': 'codex 更新到 26.1111.2228.0'})
+        # Busy three times: published as not tested, never as passed.
+        runner.answers = [(409, h.error('busy-user', '電腦有人在用（5 秒前有操作）'))] * 3
+        plan.want('每週例行')
+        for _ in range(3):
+            plan.tick()
+            now[0] += plan.RETRY
+        shared_report = json.loads((shared / '_selfcheck_家用電腦.json').read_text(encoding='utf-8'))
+        self.assertIsNone(shared_report['ok'])
+        self.assertIn('有人在用', shared_report['notTested'])
+        # A send the UI refused: kept, a self-check wanted, sent again by a repaired helper.
+        action = {'kind': 'send', 'app': 'codex', 'sessionId': X, 'text': '手機訊息', 'images': [b'\x89PNG\r\n\x1a\nx']}
+        plan.on_send_failed(action, 'no-prompt-box')
+        self.assertEqual(plan.wanted[0], '手機傳訊失敗（no-prompt-box）')
+        self.assertIsNone(plan.resend_pending(), 'the same helper does not send it again')
+        kept = json.loads((folder / 'pending_resend.json').read_text(encoding='utf-8'))
+        kept['version'] = '0.0.1'
+        (folder / 'pending_resend.json').write_text(json.dumps(kept), encoding='utf-8')
+        told = []
+        self.assertEqual(plan.resend_pending(notify=lambda *a: told.append(a)), 202)
+        kind, app, session_id, payload = runner.submitted[-1]
+        self.assertEqual((kind, app, session_id, payload['text'], payload['force']), ('send', 'codex', X, '手機訊息', True))
+        self.assertEqual(base64.b64decode(payload['images'][0]), b'\x89PNG\r\n\x1a\nx')
+        self.assertFalse((folder / 'pending_resend.json').exists())
+        self.assertIn('自動重送', told[0][1])
+        # The self-check after a failed send passes (one conversation would not open): the send itself
+        # is a failed item, so the repair starts all the same.
+        repairs = []
+        plan.repair = type('R', (), {'consider': lambda self, report: repairs.append(report)})()
+        plan.on_send_failed(dict(action, message='打開的不是這個對話，已中止'), 'title-mismatch')
+        plan.on_report({'pc': '家用電腦', 'ok': True, 'apps': {'codex': {'checks': []}}})
+        self.assertEqual(len(repairs), 1)
+        item = repairs[0]['apps']['codex']['checks'][-1]
+        self.assertEqual((item['name'], item['status']), ('手機實際傳訊', 'fail'))
+        self.assertIn('title-mismatch', item['detail'])
+        plan.on_report({'pc': '家用電腦', 'ok': True, 'apps': {}})
+        self.assertEqual(len(repairs), 1, 'told once')
+
+    def test_a_send_the_ui_refuses_tells_the_phone_a_repair_was_asked_for(self):
+        class NoBoxDriver(h.FakeDriver):
+            def send(self, app, doc, text, images=None):
+                raise h.ActionError('no-prompt-box', 'the message box is not on screen')
+        _, _, _, runner = drive(self.fake, driver_class=NoBoxDriver)
+        noted = []
+        runner.on_send_failed = lambda action, code: noted.append((code, len(action['images'])))
+        body = runner.submit('send', 'claude', A, {'text': '修好再送', 'force': True,
+                                                   'images': [base64.b64encode(b'\x89PNG\r\n\x1a\nx').decode()]})[1]
+        run_all(runner)
+        status = runner.status(body['id'])
+        self.assertEqual(status['state'], 'failed')
+        self.assertTrue(status['message'].endswith('；已請求自動檢查修復，修好後會自動重送這則'), status['message'])
+        self.assertEqual(noted, [('no-prompt-box', 1)], 'the photo is kept to be sent again (lost live 11/15)')
+
+    def test_a_failed_self_check_starts_one_repair(self):
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        started = []
+        now = [1000000.0]
+        watch = h.RepairWatch('repair.ps1', folder, folder, '辦公室', clock=lambda: now[0],
+                              start=lambda script, path: started.append(json.loads(path.read_text(encoding='utf-8'))))
+        report = {'pc': '家用電腦', 'at': '2026-11-15T19:00:00Z', 'ok': False, 'apps': {}}
+        self.assertFalse(watch.consider(dict(report, ok=True)), 'nothing to repair')
+        self.assertTrue(watch.consider(report))
+        self.assertFalse(watch.consider(report), 'the same report once')
+        self.assertFalse(watch.consider(dict(report, at='2026-11-15T19:30:00Z')), 'one repair at a time')
+        (folder / 'repair_result.json').write_text('{}', encoding='utf-8')
+        now[0] += 10
+        (folder / '_selfcheck_家用電腦.json').write_text(json.dumps(dict(report, at='2026-11-15T20:00:00Z')),
+                                                     encoding='utf-8')
+        os.utime(folder / 'repair_result.json', (now[0], now[0]))
+        watch.poll_shared()
+        self.assertEqual([r['at'] for r in started], ['2026-11-15T19:00:00Z', '2026-11-15T20:00:00Z'])
+
     def test_someone_at_the_pc_blocks_until_the_phone_confirms(self):
         presence = dict(self.fake.cfg['presence'], idleSeconds=5)
         _, _, _, runner = drive(self.fake, presence)
@@ -1459,7 +1614,7 @@ for line in sys.stdin:
         self.assertEqual((moment.weekday(), moment.hour, moment.minute), (6, 11, 0))
         self.assertTrue(0 < moment.timestamp() - time.time() <= 7 * 86400 + 3600)
         self.assertEqual(state['usage']['codex']['windows'][0]['percent'], 5)
-        self.assertEqual(state['models']['claude'], ['Opus 5.5', 'Sonnet 5.5', 'Haiku 5.5', 'Fable 5.1'])
+        self.assertEqual(state['models']['claude'], ['Opus 5.5', 'Sonnet 5.5', 'Haiku 5.5', 'Fable 5.2'])
         self.assertIn('GPT-6.1 Terra', state['models']['codex'])
         page = hub.events('claude', A, 0, '', 0)
         self.assertEqual((page['meta']['model'], page['meta']['context']['percent']), ('Opus 5.5', 18))

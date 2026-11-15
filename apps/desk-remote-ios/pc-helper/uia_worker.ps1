@@ -467,6 +467,96 @@ function Paste-Send($w, $scope, $editName, $text, $imagePaths = @()) {
   }
 }
 
+# The self-check (11/15, the user: "desktop app updates must not stop sending from the phone"):
+# what sending needs, tried without sending. A test line is pasted into the message box the way
+# Paste-Send does it, read back, and cleared; an unsent draft already there is put back. Every key
+# goes only while the app's own window is in front, so nothing else is typed into.
+function Probe-Typing($w, $edit, $editName, $text) {
+  $out = [ordered]@{ ok = $false; focus = $false; readBack = $false; cleared = $false }
+  $saved = Save-Clipboard
+  if ($saved['__unsafe']) { $out.error = 'clipboard-unsafe'; return $out }
+  $before = [DeskWin]::GetForegroundWindow()
+  $hwnd = [IntPtr]$w.Current.NativeWindowHandle
+  try {
+    Bring-Front $w
+    $edit.SetFocus()
+    Start-Sleep -Milliseconds 300
+    $out.focus = [bool]$edit.Current.HasKeyboardFocus
+    if (-not $out.focus -or [DeskWin]::GetForegroundWindow() -ne $hwnd) { $out.error = 'focus-failed'; return $out }
+    $draft = Box-Text $edit
+    if ($draft -and $draft.Trim() -and $draft.Trim() -ne $editName.Trim()) { $out.draft = $true } else { $draft = $null }
+    if ($draft) {
+      [System.Windows.Forms.SendKeys]::SendWait('^a{DEL}')
+      Start-Sleep -Milliseconds 300
+    }
+    if ([DeskWin]::GetForegroundWindow() -ne $hwnd) { $out.error = 'focus-moved'; return $out }
+    Set-PrivateText $text
+    [System.Windows.Forms.SendKeys]::SendWait('^v')
+    $probe = ($text -replace '\s', '')
+    $seen = $null
+    for ($i = 0; $i -lt 10; $i++) {
+      Start-Sleep -Milliseconds 250
+      $seen = Box-Text $edit
+      if ($seen -and ($seen -replace '\s', '').Contains($probe)) { break }
+    }
+    $out.readBack = [bool]($seen -and ($seen -replace '\s', '').Contains($probe))
+    for ($try = 0; $try -lt 2; $try++) {
+      if ([DeskWin]::GetForegroundWindow() -ne $hwnd) { $out.error = 'focus-moved'; break }
+      [System.Windows.Forms.SendKeys]::SendWait('^a{DEL}')
+      Start-Sleep -Milliseconds 400
+      $after = Box-Text $edit
+      $out.cleared = (-not $after) -or (-not $after.Trim()) -or ($after.Trim() -eq $editName.Trim())
+      if ($out.cleared) { break }
+    }
+    if ($draft -and $out.cleared -and [DeskWin]::GetForegroundWindow() -eq $hwnd) {
+      Set-PrivateText $draft
+      [System.Windows.Forms.SendKeys]::SendWait('^v')
+      Start-Sleep -Milliseconds 500
+      $back = Box-Text $edit
+      $out.draftBack = [bool]($back -and $back.Trim() -eq $draft.Trim())
+    }
+    $out.ok = $out.readBack -and $out.cleared
+    return $out
+  } finally {
+    Restore-Clipboard $saved
+    Restore-Front $before
+  }
+}
+
+# The model menu's choices, opened and closed without picking (Codex: model button -> the
+# select-model item -> radio buttons; Claude: a click on its model button -> radio buttons).
+function Probe-ModelMenu($w, $s, $app, $button) {
+  $before = [DeskWin]::GetForegroundWindow()
+  $name = $button.Current.Name
+  $names = @()
+  try {
+    Bring-Front $w
+    if ($app -eq 'codex') {
+      $p = $null
+      if (-not $button.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$p)) { return @{ error = 'the model button does not expand' } }
+      $p.Expand()
+      $item = Wait-Named $w $CT::MenuItem $s.model_menu_item 20
+      if (-not $item) { return @{ error = 'the model menu did not open' } }
+      if (-not (Invoke-Element $item)) { return @{ error = 'the model item could not be pressed' } }
+    } else {
+      Click-Element $w $button 'the model button'
+    }
+    for ($i = 0; $i -lt 16; $i++) {
+      Start-Sleep -Milliseconds 250
+      $names = @(Radio-Names $w | Where-Object { $_ })
+      if ($names.Count) { break }
+    }
+    return @{ models = $names }
+  } finally {
+    Start-Sleep -Milliseconds 200
+    if ($s.effort_menu) { Collapse-Named $w $s.effort_menu }
+    Close-Claude-Menus $w
+    $again = Prefixed-Button $w $s.model_prefix
+    if ($again -and $again.Current.Name -ne $name) { Close-Claude-Menus $w }
+    Restore-Front $before
+  }
+}
+
 function Menu-Item($w, $name) {
   for ($i = 0; $i -lt 12; $i++) {
     Start-Sleep -Milliseconds 250
@@ -1791,6 +1881,32 @@ function Run-Command($c) {
       return @{ ok = $true; popups = @(Find-ExtensionCards $windows) }
     }
     'press_popup' { return @{ ok = $true; gone = (Press-Popup $c) } }
+    'probe' {
+      # The self-check's look at one app (see Probe-Typing): read-only unless type/menus are set.
+      $w = Need-Window $c.app
+      $r = [ordered]@{ ok = $true; docs = @(Get-Docs $w) }
+      $editName = $s.edit
+      $edit = Find-ByName $w $CT::Edit $s.edit
+      if (-not $edit -and $s.new_edit) { $edit = Find-ByName $w $CT::Edit $s.new_edit; if ($edit) { $editName = $s.new_edit } }
+      $r.edit = [bool]$edit
+      $r.editName = $editName
+      $model = Prefixed-Button $w $s.model_prefix
+      $r.model = if ($model) { $model.Current.Name } else { $null }
+      if ($s.usage_prefix) { $u = Prefixed-Button $w $s.usage_prefix; $r.usage = if ($u) { $u.Current.Name } else { $null } }
+      $r.newButton = [bool](Find-ByName $w $CT::Button $s.new)
+      $r.running = [bool]($s.stop -and (Find-ByName $w $CT::Button $s.stop))
+      # A window in front that will not give way (a game, Moonlight) is not a changed app: reported
+      # as an error of that step, which the helper counts as not tested (home PC 11/15).
+      if ($c.type -and $edit -and -not $r.running) {
+        try { $r.typed = Probe-Typing $w $edit $editName $c.text }
+        catch { $r.typed = @{ ok = $false; error = (("$_" -replace '^DESK:', '') -split ':', 2)[0]; detail = "$_" } }
+      }
+      if ($c.menus -and $model -and -not $r.running) {
+        try { $r.menu = Probe-ModelMenu $w $s $c.app $model }
+        catch { $r.menu = @{ error = ("$_" -replace '^DESK:', '') } }
+      }
+      return $r
+    }
     'new_send' {
       $w = Need-Window $c.app
       $before = @(Get-Docs $w)
