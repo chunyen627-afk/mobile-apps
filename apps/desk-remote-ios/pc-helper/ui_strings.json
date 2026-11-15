@@ -13,7 +13,7 @@
     "model_strip": "模型：",
     "usage_prefix": "使用量：",
     "usage_card": "使用量限制",
-    "models": ["Opus 5.5", "Sonnet 5.5", "Haiku 5.5", "Fable 5.1"],
+    "models": ["Opus 5.5", "Sonnet 5.5", "Haiku 5.5", "Fable 5.2"],
     "effort_item": "投入程度",
     "efforts": ["低", "中", "高", "超高", "最高", "Ultracode"],
     "modes": ["手動", "接受編輯", "計畫", "自動", "略過權限確認"],

@@ -1576,7 +1576,7 @@ for line in sys.stdin:
         self.assertEqual((moment.weekday(), moment.hour, moment.minute), (6, 11, 0))
         self.assertTrue(0 < moment.timestamp() - time.time() <= 7 * 86400 + 3600)
         self.assertEqual(state['usage']['codex']['windows'][0]['percent'], 5)
-        self.assertEqual(state['models']['claude'], ['Opus 5.5', 'Sonnet 5.5', 'Haiku 5.5', 'Fable 5.1'])
+        self.assertEqual(state['models']['claude'], ['Opus 5.5', 'Sonnet 5.5', 'Haiku 5.5', 'Fable 5.2'])
         self.assertIn('GPT-6.1 Terra', state['models']['codex'])
         page = hub.events('claude', A, 0, '', 0)
         self.assertEqual((page['meta']['model'], page['meta']['context']['percent']), ('Opus 5.5', 18))
