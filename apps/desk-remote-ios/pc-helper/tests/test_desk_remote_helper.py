@@ -608,6 +608,17 @@ class DrivingTests(FakeEnvironment):
         self.assertFalse(reports[-1]['ok'])
         self.assertIn(('codex', '輸入框'), failed)
         self.assertIn(('claude', '模型選單'), failed)
+        # A game in front that will not give way (home PC 11/15): not tested, tried again; not a failure.
+        driver.broken = set()
+        real_probe = driver.probe
+        driver.probe = lambda app, **kw: dict(real_probe(app, **kw), typed={'ok': False, 'error': 'focus-failed'},
+                                              menu={'error': 'focus-failed:another window covers the model button'})
+        runner.submit('selfcheck', None, None, {'reason': '每週例行'})
+        run_all(runner)
+        self.assertTrue(reports[-1]['ok'], 'a window in front is not a changed app')
+        self.assertTrue(reports[-1]['busy'])
+        skipped = [c['name'] for c in reports[-1]['apps']['codex']['checks'] if c['status'] == 'skip']
+        self.assertEqual(skipped, ['打字測試（不送出）', '模型選單'])
         # Someone at the PC: not now.
         _, _, _, busy = drive(self.fake, dict(self.fake.cfg['presence'], idleSeconds=5))
         self.assertEqual(busy.submit('selfcheck', None, None, {})[0], 409)
@@ -670,6 +681,32 @@ class DrivingTests(FakeEnvironment):
         self.assertEqual(base64.b64decode(payload['images'][0]), b'\x89PNG\r\n\x1a\nx')
         self.assertFalse((folder / 'pending_resend.json').exists())
         self.assertIn('自動重送', told[0][1])
+        # The self-check after a failed send passes (one conversation would not open): the send itself
+        # is a failed item, so the repair starts all the same.
+        repairs = []
+        plan.repair = type('R', (), {'consider': lambda self, report: repairs.append(report)})()
+        plan.on_send_failed(dict(action, message='打開的不是這個對話，已中止'), 'title-mismatch')
+        plan.on_report({'pc': '家用電腦', 'ok': True, 'apps': {'codex': {'checks': []}}})
+        self.assertEqual(len(repairs), 1)
+        item = repairs[0]['apps']['codex']['checks'][-1]
+        self.assertEqual((item['name'], item['status']), ('手機實際傳訊', 'fail'))
+        self.assertIn('title-mismatch', item['detail'])
+        plan.on_report({'pc': '家用電腦', 'ok': True, 'apps': {}})
+        self.assertEqual(len(repairs), 1, 'told once')
+
+    def test_a_send_the_ui_refuses_tells_the_phone_a_repair_was_asked_for(self):
+        class NoBoxDriver(h.FakeDriver):
+            def send(self, app, doc, text, images=None):
+                raise h.ActionError('no-prompt-box', 'the message box is not on screen')
+        _, _, _, runner = drive(self.fake, driver_class=NoBoxDriver)
+        noted = []
+        runner.on_send_failed = lambda action, code: noted.append(code)
+        body = runner.submit('send', 'claude', A, {'text': '修好再送', 'force': True})[1]
+        run_all(runner)
+        status = runner.status(body['id'])
+        self.assertEqual(status['state'], 'failed')
+        self.assertTrue(status['message'].endswith('；已請求自動檢查修復，修好後會自動重送這則'), status['message'])
+        self.assertEqual(noted, ['no-prompt-box'])
 
     def test_a_failed_self_check_starts_one_repair(self):
         folder = Path(tempfile.mkdtemp())

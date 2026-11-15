@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.72'
+VERSION = '0.5.73'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -4134,9 +4134,13 @@ class ActionRunner:
                 message += '；' + UAC_TEXT  # a prompt that came up while this ran
             elif exc.code in ('focus-failed', 'paste-failed', 'paste-failed-photos', 'no-prompt-box') and self.watcher.popup_list():
                 message += '；電腦上有跳出的視窗擋著，可在電腦頁按掉後再送'
+            repairable = action['kind'] in ('send', 'new') and exc.code in SELFCHECK_CODES and self.on_send_failed
+            if repairable:
+                # What the phone shows (the user 11/15: 「因為某某原因無法送出，已請求你檢查修復」).
+                message += '；已請求自動檢查修復，修好後會自動重送這則'
             self.update(action, state='failed', error=exc.code, message=message)
             self.tell(action, failed=True)
-            if action['kind'] in ('send', 'new') and exc.code in SELFCHECK_CODES and self.on_send_failed:
+            if repairable:
                 try:
                     self.on_send_failed(action, exc.code)
                 except Exception:
@@ -4684,6 +4688,9 @@ class ActionRunner:
             add('視窗', 'pass' if docs else 'fail', '、'.join(docs or []) or '被蓋住、讀不到頁面')
             probe = self.driver.probe(app, type=True, menus=True, text=SELFCHECK_TEXT)
         except ActionError as exc:
+            if exc.code in SELFCHECK_FRONT:
+                add('視窗', 'skip', '前景被別的程式佔住，沒測到')
+                return {'checks': checks, 'busy': True}
             add('視窗', 'fail', f'{exc.code} {exc.message}'.strip())
             return {'checks': checks}
         if probe.get('running'):
@@ -4691,8 +4698,12 @@ class ActionRunner:
             return {'checks': checks, 'busy': True}
         add('輸入框', 'pass' if probe.get('edit') else 'fail', probe.get('editName') or '')
         typed = probe.get('typed') or {}
-        if probe.get('edit'):
-            detail = '、'.join(f'{k}={v}' for k, v in typed.items() if k != 'ok')
+        busy = False
+        if probe.get('edit') and typed.get('error') in SELFCHECK_FRONT:
+            add('打字測試（不送出）', 'skip', '前景被別的程式佔住，沒測到')
+            busy = True
+        elif probe.get('edit'):
+            detail = '、'.join(f'{k}={v}' for k, v in typed.items() if k not in ('ok', 'detail'))
             add('打字測試（不送出）', 'pass' if typed.get('ok') else 'fail', detail)
         model, effort = ui_model(probe.get('model'), strings.get('model_strip'))
         add('模型按鈕', 'pass' if model else 'fail', probe.get('model') or '找不到')
@@ -4703,7 +4714,10 @@ class ActionRunner:
         listed = menu.get('models') or []
         listed = [m for m in (listed if isinstance(listed, list) else [listed]) if m]
         known = strings.get('models') or []
-        if menu.get('error') or not listed:
+        if str(menu.get('error') or '').split(':', 1)[0] in SELFCHECK_FRONT:
+            add('模型選單', 'skip', '前景被別的程式佔住，沒測到')
+            busy = True
+        elif menu.get('error') or not listed:
             add('模型選單', 'fail', menu.get('error') or '選單沒有列出模型')
         else:
             missing = [m for m in known if m not in listed]
@@ -4720,7 +4734,7 @@ class ActionRunner:
                     or '讀不到')
             except ActionError as exc:
                 add('用量卡', 'fail', f'{exc.code} {exc.message}'.strip())
-        return {'checks': checks}
+        return {'checks': checks, 'busy': busy}
 
     def do_update(self, action):
         """Claude's "重新啟動以更新" pressed for the phone (asked 10/30: only when the user presses
@@ -4924,6 +4938,7 @@ class SelfCheckPlan:
         self.shared_dir = Path(shared_dir) if shared_dir else None
         self.wanted = None            # [reason, tries, not before]
         self.last_send_check = 0.0
+        self.failed_sends = []        # phone sends the UI refused since the last report
         self.lock = threading.Lock()
         try:
             self.state = json.loads((self.data_dir / 'selfcheck_plan.json').read_text(encoding='utf-8'))
@@ -4990,6 +5005,17 @@ class SelfCheckPlan:
             time.sleep(60)
 
     def on_report(self, report):
+        # A send that really failed is a failed item even when the self-check itself passes (only
+        # one conversation may not open): the repair is started either way (the user 11/15:
+        # 「發送失敗也啟動自動修」).
+        with self.lock:
+            failed, self.failed_sends = self.failed_sends, []
+        for item in failed:
+            app = report.setdefault('apps', {}).setdefault(item['app'], {'checks': []})
+            app.setdefault('checks', []).append({
+                'name': '手機實際傳訊' if item['kind'] == 'send' else '手機實際開新對話', 'status': 'fail',
+                'detail': f"{item['at']} {item['error']} {item['message']}".strip()})
+            report['ok'] = False
         if report.get('busy'):
             with self.lock:
                 if self.wanted is None:
@@ -5019,6 +5045,11 @@ class SelfCheckPlan:
                 path.write_text(json.dumps(keep, ensure_ascii=False), encoding='utf-8')
             except OSError:
                 logging.exception('keeping the failed message failed')
+        with self.lock:
+            self.failed_sends = (self.failed_sends + [{
+                'kind': action.get('kind'), 'app': action.get('app'), 'error': code,
+                'message': str(action.get('message') or '')[:200],
+                'at': datetime.fromtimestamp(self.clock()).strftime('%m/%d %H:%M')}])[-5:]
         if self.clock() - self.last_send_check >= self.SEND_DEBOUNCE:
             self.last_send_check = self.clock()
             self.want(f"手機{'傳訊' if action.get('kind') == 'send' else '開新對話'}失敗（{code}）")
@@ -5301,6 +5332,8 @@ CLIPBOARD_TEXT_LIMIT = 1024 * 1024
 CLIPBOARD_IMAGE_LIMIT = 12 * 1024 * 1024
 # The self-check's test line: typed into the message box, read back and cleared, never sent.
 SELFCHECK_TEXT = '（小幫手自檢測試字，不會送出）'
+# Errors that mean another window held the front, not that the app changed: not tested, retried.
+SELFCHECK_FRONT = ('focus-failed', 'focus-moved')
 # Failures of a phone send that a changed desktop app explains: they start a self-check (and, on
 # the PC that repairs, a repair), and the message is sent again once the helper is fixed.
 SELFCHECK_CODES = ('no-prompt-box', 'focus-failed', 'paste-failed', 'paste-failed-photos', 'title-mismatch',

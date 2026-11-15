@@ -1895,8 +1895,16 @@ function Run-Command($c) {
       if ($s.usage_prefix) { $u = Prefixed-Button $w $s.usage_prefix; $r.usage = if ($u) { $u.Current.Name } else { $null } }
       $r.newButton = [bool](Find-ByName $w $CT::Button $s.new)
       $r.running = [bool]($s.stop -and (Find-ByName $w $CT::Button $s.stop))
-      if ($c.type -and $edit -and -not $r.running) { $r.typed = Probe-Typing $w $edit $editName $c.text }
-      if ($c.menus -and $model -and -not $r.running) { $r.menu = Probe-ModelMenu $w $s $c.app $model }
+      # A window in front that will not give way (a game, Moonlight) is not a changed app: reported
+      # as an error of that step, which the helper counts as not tested (home PC 11/15).
+      if ($c.type -and $edit -and -not $r.running) {
+        try { $r.typed = Probe-Typing $w $edit $editName $c.text }
+        catch { $r.typed = @{ ok = $false; error = (("$_" -replace '^DESK:', '') -split ':', 2)[0]; detail = "$_" } }
+      }
+      if ($c.menus -and $model -and -not $r.running) {
+        try { $r.menu = Probe-ModelMenu $w $s $c.app $model }
+        catch { $r.menu = @{ error = ("$_" -replace '^DESK:', '') } }
+      }
       return $r
     }
     'new_send' {
