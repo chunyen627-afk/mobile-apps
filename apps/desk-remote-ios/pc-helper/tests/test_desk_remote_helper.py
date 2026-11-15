@@ -1474,6 +1474,43 @@ for line in sys.stdin:
         self.assertEqual(h.merge_claude_usage(None, stale, before, before + 60)['windows'][0]['resetsAt'],
                          h.iso(h.datetime(2026, 11, 15, 11, 0).timestamp()))
 
+    def test_readings_of_the_week_before_are_dropped_and_fresh_ones_carry_their_time(self):
+        # Live 11/15 19:07: the phone showed 75%, Monday 11:00 under the office. The home PC's
+        # button, not yet refreshed after Sunday's 11:00 reset, still said "75% 於 上午11:00" when
+        # read at 14:00 (its card was from 11/13); the office's 4% was sent with its card's time
+        # 13:44 although the button gave it at 18:42, so the phone kept the home PC's as newer.
+        card_at = h.datetime(2026, 11, 13, 16, 45).timestamp()
+        rows = [{'label': '5 小時限制', 'percent': 5, 'reset': '於 下午1:10 重設'},
+                {'label': '每週 · 所有模型', 'percent': 69, 'reset': '週日上午11:00 重設'}]
+        file_at = h.datetime(2026, 11, 14, 20, 53).timestamp()
+        sample = {'windows': [{'label': '每週', 'percent': 73, 'resetsAt': None, 'resetsText': None}],
+                  'sampledAt': h.iso(file_at)}
+        stale = {'label': '每週 · 所有模型', 'percent': 75, 'resetsText': '於 上午11:00 重設'}
+        now = h.datetime(2026, 11, 15, 19, 10).timestamp()
+        self.assertIsNone(h.merge_claude_usage(sample, stale, h.datetime(2026, 11, 15, 14, 0).timestamp(), now, rows, card_at))
+        # The file's 73% alone is gone too: the reset came after it.
+        self.assertIsNone(h.merge_claude_usage(sample, None, None, now, rows, card_at))
+        # Before the reset both stand; the same words read before 11:00 count to that 11:00.
+        before = h.datetime(2026, 11, 15, 10, 0).timestamp()
+        merged = h.merge_claude_usage(sample, stale, before, before + 60, rows, card_at)
+        self.assertEqual([(w['percent'], w['resetsAt']) for w in merged['windows']],
+                         [(75, h.iso(h.datetime(2026, 11, 15, 11, 0).timestamp()))])
+        self.assertEqual(h.merge_claude_usage(sample, None, None, before, rows, card_at)['windows'][0]['percent'], 73)
+        # Without a card the file's week stays (nothing tells when the week resets).
+        self.assertEqual(h.merge_claude_usage(sample, None, None, now)['windows'][0]['percent'], 73)
+        # The office: card at 13:44, the button read at 18:42 gives the week, and its time.
+        office_card = h.datetime(2026, 11, 15, 13, 44).timestamp()
+        office_rows = [{'label': '5 小時限制', 'percent': 0, 'reset': '於 下午5:10 重設'},
+                       {'label': '每週 · 所有模型', 'percent': 0, 'reset': '週日上午11:00 重設'}]
+        button = {'label': '每週 · 所有模型', 'percent': 4, 'resetsText': '週日上午11:00 重設'}
+        read = h.datetime(2026, 11, 15, 18, 42).timestamp()
+        merged = h.merge_claude_usage(None, button, read, now, office_rows, office_card)
+        self.assertEqual(merged['sampledAt'], h.iso(read))
+        self.assertEqual([(w['percent'], w['resetsAt']) for w in merged['windows']],
+                         [(4, h.iso(h.datetime(2026, 11, 22, 11, 0).timestamp()))])
+        # A button the card's week outranks leaves the card's time.
+        self.assertEqual(h.merge_claude_usage(None, stale, read, now, office_rows, office_card)['sampledAt'], h.iso(office_card))
+
     def test_a_per_model_week_on_the_button_does_not_pass_for_the_all_models_week(self):
         # Live 11/2 (Claude 4.29, a Team plan with a Fable week): the button read "每週 · Fable：23%"
         # after the card, and the phone showed 每週 23% in place of the card's 21%.

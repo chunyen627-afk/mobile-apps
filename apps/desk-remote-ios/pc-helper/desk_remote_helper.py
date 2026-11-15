@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.76'
+VERSION = '0.5.77'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -276,6 +276,7 @@ def merge_claude_usage(from_file, button, button_at, now, card=None, card_at=Non
     21%). A 5-hour figure from the file older than five hours is left out (that window has reset
     since). `sampledAt` is the oldest time behind what is shown."""
     file_at = datetime.fromisoformat(from_file['sampledAt'].replace('Z', '+00:00')).timestamp() if from_file else None
+    anchor = week_anchor(card, card_at) if card and card_at else None
     weekly = None
     if button and button_at and button['label'].startswith('每週'):
         # Its reset moment from when the button was read: Claude leaves the weekday out within a
@@ -285,25 +286,43 @@ def merge_claude_usage(from_file, button, button_at, now, card=None, card_at=Non
                   'resetsAt': iso(at) if at is not None else None, 'resetsText': button['resetsText']}
         if at is not None and at <= now:
             weekly = None  # that week has reset since the button was read: its figure is the old week's
+        elif (at is not None and anchor is not None and weekly['label'] == '每週'
+              and not re.search(r'週[一二三四五六日]', button['resetsText'] or '')
+              and not on_week_grid(at, anchor) and on_week_grid(at - 86400, anchor)):
+            # "於 上午11:00" left on the button from before the weekly reset, read after it (live
+            # 11/15: the home PC's button still said 75% at 14:00, counted to Monday 11:00; the
+            # phone kept that reading as the newest and showed it under both PCs). The week resets
+            # every 7 days from the card's moment: the button meant the day before, now passed.
+            weekly = None
+    if weekly and weekly['label'] == '每週' and anchor is None and weekly.get('resetsAt'):
+        anchor = datetime.fromisoformat(weekly['resetsAt'].replace('Z', '+00:00')).timestamp()
     if card and card_at and (file_at is None or card_at > file_at):
         windows = card_windows(card, card_at, now)
         if windows:
+            sampled = card_at
             if weekly and button_at > card_at and not older_period(weekly, card, card_at):
                 windows = replace_window(windows, weekly)
+                # The week shown is the button's: its time, so the phone takes this over an older
+                # reading another PC sent after the card (live 11/15: the office's 4% read at 18:42
+                # was sent as 13:44, older than the home PC's stale 75% from 14:00).
+                sampled = button_at
             for i, window in enumerate(windows):
                 if not window.get('resetsAt') and window.get('resetsText'):
                     at = reset_moment(window['resetsText'], card_at)
                     if at is not None:
                         windows[i] = dict(window, resetsAt=iso(at))
-            return {'windows': windows, 'sampledAt': iso(card_at)}
+            return {'windows': windows, 'sampledAt': iso(sampled)}
     fresher = weekly is not None and (file_at is None or button_at > file_at)
     same_week = weekly is not None and weekly['label'] == '每週'  # the file only knows the all-models week
+    # The file's week is the week before when a weekly reset came after it (live 11/15: the home
+    # PC's file stopped at 11/14 20:53 with 73%; the reset was 11/15 11:00).
+    file_week_gone = file_at is not None and anchor is not None and next_on_grid(file_at, anchor) <= now
     windows, times = [], []
     for window in (from_file or {}).get('windows') or []:
         if window['label'] == '5 小時' and now - file_at < 5 * 3600:
             windows.append(window)
             times.append(file_at)
-        elif window['label'] == '每週' and not (fresher and same_week):
+        elif window['label'] == '每週' and not (fresher and same_week) and not file_week_gone:
             windows.append(dict(window, resetsText=weekly['resetsText'] if same_week else None))
             times.append(file_at)
     if fresher:
@@ -316,6 +335,29 @@ def reset_moment(text, read_at):
     """The reset moment a usage row's words name, read at `read_at`: '2 小時後重設' or '週日上午11:00 重設'."""
     at = relative_reset(text, read_at)
     return at if at is not None else clock_reset(text, read_at)
+
+
+WEEK_SECONDS = 7 * 86400
+
+
+def week_anchor(card, card_at):
+    """One moment of the all-models weekly reset, from the usage card's row however old the card
+    is: the week resets every 7 days from it."""
+    for row in card or []:
+        if isinstance(row, dict) and card_label(row.get('label')) == '每週':
+            return reset_moment(row.get('reset'), card_at)
+    return None
+
+
+def on_week_grid(at, anchor):
+    """True when `at` is a weekly reset moment (within 2 minutes) of the week that resets at `anchor`."""
+    k = round((at - anchor) / WEEK_SECONDS)
+    return abs(at - (anchor + k * WEEK_SECONDS)) <= 120
+
+
+def next_on_grid(after, anchor):
+    """The first weekly reset moment after `after`."""
+    return anchor + ((after - anchor) // WEEK_SECONDS + 1) * WEEK_SECONDS
 
 
 def older_period(weekly, card, card_at):
