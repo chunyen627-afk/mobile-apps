@@ -81,7 +81,7 @@ struct DeskPCRow: View {
     @ObservedObject var store: DeskStore
     let pc: DeskPC
     @State private var line = "連線中…"
-    /// "Claude 每週 64%・2 天 19 小時後重設", one line per app (asked 11/12), or "".
+    /// "Claude 每週 64%・11/15（日）11:30 重設・剩 2 天 19 小時", one line per app (asked 11/12), or "".
     @State private var resets = ""
     @State private var healthy: Bool?
     /// The PC could not be reached at the last look: retry every 5 s instead of 30.

@@ -573,7 +573,16 @@ final class MetaAndUsageTests: XCTestCase {
         let timed = PlanUsage(windows: [PlanUsage.Window(label: "5 小時", percent: 1, resetsAt: "2026-11-12T09:00:00Z", resetsText: nil),
                                         PlanUsage.Window(label: "每週", percent: 64, resetsAt: "2026-11-15T03:30:00Z", resetsText: "週日上午11:30 重設")],
                               sampledAt: nil, account: nil)
-        XCTAssertEqual(DeskText.resetCountdown(.claude, timed, now: now), "Claude 每週 64%・2 天 19 小時後重設")
+        let taipei = TimeZone(identifier: "Asia/Taipei")!
+        XCTAssertEqual(DeskText.resetCountdown(.claude, timed, now: now, timeZone: taipei),
+                       "Claude 每週 64%・11/15（日）11:30 重設・剩 2 天 19 小時")
+        // 11/15: the moment Claude itself reports (2026-11-22T03:00Z) on a Sunday afternoon.
+        let sunday = DeskText.parse("2026-11-15T07:10:00Z")!
+        let live = PlanUsage(windows: [PlanUsage.Window(label: "每週", percent: 0, resetsAt: "2026-11-22T03:00:00Z", resetsText: "週日上午11:00 重設")],
+                             sampledAt: nil, account: nil)
+        XCTAssertEqual(DeskText.resetCountdown(.claude, live, now: sunday, timeZone: taipei),
+                       "Claude 每週 0%・11/22（日）11:00 重設・剩 6 天 19 小時")
+        XCTAssertEqual(DeskText.resetMoment(DeskText.parse("2026-12-01T16:05:00Z")!, timeZone: taipei), "12/2（三）0:05")
         XCTAssertNil(DeskText.resetCountdown(.codex, PlanUsage(windows: [codex], sampledAt: nil, account: nil), now: now),
                      "a reset already past was counted down")
         XCTAssertNil(DeskText.resetCountdown(.claude, nil, now: now))

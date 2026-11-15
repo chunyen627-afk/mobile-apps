@@ -153,13 +153,25 @@ public enum DeskText {
     }
 
     /// The first screen's reminder under a PC (asked 11/12: 「離 reset 還剩幾天幾小時」):
-    /// "Claude 每週 64%・2 天 19 小時後重設", from the app's weekly window; nil without a reset
-    /// moment ahead (helper 0.5.59 gives Claude's worded reset its moment).
-    public static func resetCountdown(_ app: DeskApp, _ usage: PlanUsage?, now: Date = Date()) -> String? {
+    /// "Claude 每週 64%・11/15（日）11:30 重設・剩 2 天 19 小時", from the app's weekly window; nil
+    /// without a reset moment ahead (helper 0.5.59 gives Claude's worded reset its moment). The
+    /// date itself is shown too (11/15: "6 天 19 小時" on a Sunday afternoon read as a day short).
+    public static func resetCountdown(_ app: DeskApp, _ usage: PlanUsage?, now: Date = Date(),
+                                      timeZone: TimeZone = .current) -> String? {
         let weekly = (usage?.windows ?? []).filter { $0.label.hasPrefix("每週") }
         guard let window = weekly.first(where: { $0.label == "每週" }) ?? weekly.first,
               let iso = window.resetsAt, let date = parse(iso), date > now else { return nil }
-        return "\(app.displayName) \(window.label) \(window.percent)%・\(remaining(date.timeIntervalSince(now)))後重設"
+        return "\(app.displayName) \(window.label) \(window.percent)%・\(resetMoment(date, timeZone: timeZone)) 重設・剩 \(remaining(date.timeIntervalSince(now)))"
+    }
+
+    /// "11/22（日）11:00" in `timeZone`.
+    public static func resetMoment(_ date: Date, timeZone: TimeZone = .current) -> String {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        let parts = calendar.dateComponents([.month, .day, .weekday, .hour, .minute], from: date)
+        let weekday = Array("日一二三四五六")[(parts.weekday ?? 1) - 1]
+        return String(format: "%d/%d（%@）%d:%02d", parts.month ?? 0, parts.day ?? 0, String(weekday),
+                      parts.hour ?? 0, parts.minute ?? 0)
     }
 
     /// "2 天 19 小時", "5 小時 3 分", "12 分鐘", "不到 1 分鐘".
