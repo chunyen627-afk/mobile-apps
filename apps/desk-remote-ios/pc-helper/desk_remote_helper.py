@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.77'
+VERSION = '0.5.78'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -524,6 +524,29 @@ def local_image(path):
         return None
 
 
+MARKDOWN_IMAGE = re.compile(r'!\[[^\]\n]*\]\(\s*<?([^)<>\n]+?)>?(?:\s+"[^"\n]*")?\s*\)')
+LOCAL_PATH = re.compile(r'^(?:[A-Za-z]:[\\/]|file:|\\\\)')
+
+
+def text_images(text):
+    """The pictures a reply shows as Markdown images of files on this PC, "![官方原圖](C:/Users/
+    .../official.jpg)" (live 11/15: Codex put its generated picture and a downloaded one side by
+    side in a table, and the phone showed only the captions). Read while the files are there;
+    web addresses are left to the text. At most 8, each once."""
+    found, seen = [], set()
+    for match in MARKDOWN_IMAGE.finditer(text or ''):
+        path = match.group(1).strip()
+        if path in seen or not LOCAL_PATH.match(path):
+            continue
+        seen.add(path)
+        picture = local_image(path)
+        if picture:
+            found.append(picture)
+            if len(found) >= 8:
+                break
+    return found
+
+
 def flatten(content):
     """Text of a tool result or message body that may be a string or a list of blocks."""
     if content is None:
@@ -819,7 +842,7 @@ class ClaudeParser:
             if not isinstance(block, dict):
                 continue
             if block.get('type') == 'text' and block.get('text', '').strip():
-                out.append({'kind': 'assistant', 'text': block['text'], 'ts': ts})
+                out.append({'kind': 'assistant', 'text': block['text'], 'ts': ts, 'images': text_images(block['text'])})
             elif block.get('type') == 'tool_use':
                 name = block.get('name') or ''
                 self.tool_names[block.get('id')] = name
@@ -896,7 +919,9 @@ class CodexParser:
                 if text.strip() and not is_noise(text):
                     if ptype == 'user_message':
                         self.question = None  # the person moved on; the card is no longer the next thing
-                    return [{'kind': 'user' if ptype == 'user_message' else 'assistant', 'text': text, 'ts': ts}]
+                    if ptype == 'agent_message':
+                        return [{'kind': 'assistant', 'text': text, 'ts': ts, 'images': text_images(text)}]
+                    return [{'kind': 'user', 'text': text, 'ts': ts}]
             return []
         if kind == 'compacted':
             return [{'kind': 'status', 'text': COMPACTED, 'ts': ts}]
@@ -950,7 +975,8 @@ class CodexParser:
                 self.question = codex_question_from(item.get('id'), {'questions': item['questions']}) or self.question
                 return []
             text = flatten(item.get('content'))  # Automation heartbeats are echoed back; hide those too.
-            return [{'kind': 'assistant', 'text': text, 'ts': ts}] if text.strip() and not is_noise(text) else []
+            return [{'kind': 'assistant', 'text': text, 'ts': ts, 'images': text_images(text)}] \
+                if text.strip() and not is_noise(text) else []
         if itype == 'CommandExecution':
             parsed = item.get('parsed_cmd') or []
             command = parsed[0].get('cmd') if parsed and isinstance(parsed[0], dict) else None

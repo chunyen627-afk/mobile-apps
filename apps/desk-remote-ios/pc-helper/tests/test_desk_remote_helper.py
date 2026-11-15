@@ -2533,6 +2533,31 @@ class PopupTests(FakeEnvironment):
         self.assertEqual(out[0]['images'], [{'media': 'image/jpeg', 'data': png}])
         self.assertEqual(h.local_image_path('file:///C:/Users/u/a%20b.png'), Path('C:/Users/u/a b.png'))
 
+    def test_pictures_a_reply_shows_as_markdown_reach_the_phone(self):
+        """Home PC 11/15 (the user: 「家裡這對畫手機看不到照片」): Codex put its generated picture and
+        a downloaded one in a table, "| ![假髮修剪與定型示意](C:/Users/.../exec-1.png) | ![娜娜莉官方
+        原圖](C:/Users/.../official.jpg) |", and the phone showed only the captions."""
+        png = h.FAKE_PNG
+        with tempfile.TemporaryDirectory() as folder:
+            made, official = Path(folder) / 'exec-1.png', Path(folder) / 'official-original.jpg'
+            made.write_bytes(base64.b64decode(png))
+            official.write_bytes(base64.b64decode(png))
+            mine, theirs = str(made).replace('\\', '/'), str(official).replace('\\', '/')
+            text = (f'**左邊是示意，右邊是官方原圖。**\n\n| 示意 | 官方 |\n|---|---|\n| ![假髮修剪與定型示意]({mine}) | '
+                    f'![娜娜莉官方原圖]({theirs}) |\n\n要接近[官方造型](https://example.com/)，![網頁圖](https://example.com/a.png) '
+                    f'![不見了](C:/nowhere/x.png) ![再一次]({mine})')
+            pictures = [{'media': 'image/png', 'data': png}, {'media': 'image/jpeg', 'data': png}]
+            self.assertEqual(h.text_images(text), pictures)  # local files only, each once, in order
+            modern = h.CodexParser().feed({'type': 'event_msg', 'payload': {'type': 'item_completed', 'item': {
+                'type': 'AgentMessage', 'content': [{'type': 'Text', 'text': text}]}}})
+            self.assertEqual((modern[0]['kind'], modern[0]['text'], modern[0]['images']), ('assistant', text, pictures))
+            old = h.CodexParser().feed({'type': 'event_msg', 'payload': {'type': 'agent_message', 'message': text}})
+            self.assertEqual(old[0]['images'], pictures)
+            transcript = h.Transcript(Path(folder) / 'none.jsonl', h.CodexParser)
+            transcript.add(modern[0])
+            self.assertEqual(transcript.events[0]['images'], ['g1-0', 'g1-1'])
+        self.assertEqual(h.text_images('沒有圖'), [])
+
     def test_large_pictures_are_shrunk_for_the_phone(self):
         """A 4K picture pasted at the PC is 2-5 MB and the phone decodes it to 33 MB (home PC 11/8:
         with AirPlay on the same Wi-Fi the remote stalled): sent at most 1600 px on the long side
