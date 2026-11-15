@@ -1049,6 +1049,9 @@ class HttpTests(FakeEnvironment):
                                   raw=b'{"text":"' + b'x' * (70 * 1024) + b'"}')[0], 413)
         self.assertEqual(self.get(path, method='POST', raw=b'{"text":"' + b'x' * (70 * 1024) + b'"}')[1]['message'],
                          '訊息太長（上限 20000 字）')
+        # A new conversation carries photos too: past 64 KB it is read, not refused (live 11/15 「內容太大」).
+        self.assertEqual(self.get('/v1/claude/sessions', method='POST', raw=b'{"text":"' + b'x' * (70 * 1024) + b'"}')[1]['message'],
+                         '訊息太長（上限 20000 字）')
         self.assertEqual(self.get('/v1/claude/sessions/..%2Fx/messages', method='POST', body={'text': 'x'})[0], 404)
         self.assertEqual(self.get('/v1/claude/sessions/local_00000000-0000-4000-8000-000000000000/messages',
                                   method='POST', body={'text': 'x'})[0], 404)
