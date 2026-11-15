@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.70'
+VERSION = '0.5.71'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -2984,6 +2984,10 @@ class WindowsDriver:
         except OSError as exc:
             raise ActionError('app-not-running', f'Codex could not be started: {exc}')
 
+    def probe(self, app, type=False, menus=False, text=''):
+        """The self-check's look at the app's window (uia_worker 'probe')."""
+        return self.ask(app, cmd='probe', type=bool(type), menus=bool(menus), text=text or '')
+
     def usage_card(self, app):
         """The rows of the usage card ({label, percent, reset}), read with the button expanded."""
         rows = self.ask(app, cmd='usage_card').get('rows') or []
@@ -3858,6 +3862,10 @@ class ActionRunner:
         self.client_ids = {}
         self.queue = []
         self.acting_until = None         # while an action drives a window, then a few seconds after
+        self.data_dir = None             # where outcomes.jsonl and selfcheck.json go
+        self.on_selfcheck = None         # called with each self-check report
+        self.on_send_failed = None       # called with a send or new conversation that failed in the UI
+        self.last_selfcheck = None
         self.lock = threading.Condition()
 
     # -- submitting (HTTP thread) --------------------------------------------------------------
@@ -3926,6 +3934,23 @@ class ActionRunner:
                 return 400, error('bad-request', f'沒有這個{what}')
         if kind == 'stop' and not strings.get('stop'):
             return 400, error('not-supported', '這個 App 還不能從手機停止')
+        if kind == 'selfcheck':
+            # Nobody at the PC (it types into the message box), unless asked from the PC itself.
+            denied = self.gate(force, True)
+            if denied:
+                return denied
+            with self.lock:
+                if any(self.actions[i]['kind'] == 'selfcheck' for i in self.queue):
+                    return 409, error('busy', '自檢已在排隊')
+                action = {'id': secrets.token_hex(6), 'kind': 'selfcheck', 'app': None, 'sessionId': None,
+                          'info': None, 'text': str(payload.get('reason') or ''), 'images': [], 'force': force,
+                          'needsFront': True, 'state': 'queued', 'message': '排隊中', 'error': None,
+                          'verified': None, 'created': self.clock()}
+                self.actions[action['id']] = action
+                self.queue.append(action['id'])
+                self.prune()
+                self.lock.notify()
+            return 202, self.public(action)
         if kind == 'update':
             if app != 'claude':
                 return 400, error('not-supported', 'Codex 會在電腦閒置時自己更新')
@@ -4060,7 +4085,7 @@ class ActionRunner:
 
     # Actions after which the window that was in front comes back (the user's rule 11/14: a game in
     # front is switched away for the send and back afterwards). Opening a conversation stays open.
-    RESTORE_FRONT = ('send', 'new', 'answer', 'permission', 'model', 'effort', 'mode', 'fast', 'stop')
+    RESTORE_FRONT = ('send', 'new', 'answer', 'permission', 'model', 'effort', 'mode', 'fast', 'stop', 'selfcheck')
     # Actions on a conversation's window other than sending and opening (open_conversation sees to
     # those): a window covered whole shows UI Automation no page, so it comes up first.
     UNCOVER = ('new', 'answer', 'permission', 'model', 'effort', 'mode', 'fast', 'stop')
@@ -4097,7 +4122,7 @@ class ActionRunner:
                    'open': self.do_open, 'answer': self.do_answer, 'model': self.do_model,
                    'effort': self.do_effort, 'mode': self.do_mode, 'stop': self.do_stop,
                    'launch': self.do_launch, 'popup': self.do_popup, 'fast': self.do_fast,
-                   'update': self.do_update}[action['kind']]
+                   'update': self.do_update, 'selfcheck': self.do_selfcheck}[action['kind']]
         try:
             if action['kind'] in self.UNCOVER and self.driver.docs(action['app']) == []:
                 self.uncover(action)  # a full-screen Moonlight in front: no page to work on (11/15)
@@ -4111,6 +4136,11 @@ class ActionRunner:
                 message += '；電腦上有跳出的視窗擋著，可在電腦頁按掉後再送'
             self.update(action, state='failed', error=exc.code, message=message)
             self.tell(action, failed=True)
+            if action['kind'] in ('send', 'new') and exc.code in SELFCHECK_CODES and self.on_send_failed:
+                try:
+                    self.on_send_failed(action, exc.code)
+                except Exception:
+                    logging.exception('noting the failed send failed')
         except Exception:
             logging.exception('action failed')
             self.update(action, state='failed', error='internal', message='電腦端發生錯誤')
@@ -4122,6 +4152,7 @@ class ActionRunner:
                 self.restore_front(action, front)
             self.presence.end_own()
             self.acting_until = time.time() + CLIPBOARD_OWN_GRACE
+            self.log_outcome(action)
 
     def tell(self, action, failed=False):
         """Logged only: the phone that asked shows how each action went (no notification for
@@ -4542,6 +4573,155 @@ class ActionRunner:
         else:
             self.update(action, state='done', verified=True, message=f'權限模式已切換為 {label}')
 
+    # -- the self-check (11/15) --------------------------------------------------------------------
+
+    OUTCOME_KINDS = ('send', 'new', 'answer', 'permission', 'model', 'effort', 'mode', 'stop', 'fast', 'open', 'popup')
+
+    def log_outcome(self, action):
+        """One line per phone action in outcomes.jsonl (kind, app, state, error; never the text): the
+        weekly self-check reports what was really used and how it went."""
+        if self.data_dir is None or action.get('kind') not in self.OUTCOME_KINDS:
+            return
+        line = {'at': round(time.time()), 'kind': action['kind'], 'app': action.get('app'),
+                'state': action.get('state'), 'error': action.get('error'),
+                'photos': len(action.get('images') or [])}
+        try:
+            path = Path(self.data_dir) / 'outcomes.jsonl'
+            with open(path, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(line, ensure_ascii=False) + '\n')
+            if path.stat().st_size > 512 * 1024:  # keep about the last few weeks
+                lines = path.read_text(encoding='utf-8').splitlines()[-2000:]
+                path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+        except OSError:
+            logging.exception('outcome log failed')
+
+    def week_summary(self, now=None):
+        """{'<app> <kind>': {'ok': n, 'failed': n, 'errors': [...]}} of the last seven days."""
+        now = time.time() if now is None else now
+        out = {}
+        if self.data_dir is None:
+            return out
+        try:
+            lines = (Path(self.data_dir) / 'outcomes.jsonl').read_text(encoding='utf-8').splitlines()
+        except OSError:
+            return out
+        for line in lines:
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if now - row.get('at', 0) > 7 * 86400:
+                continue
+            key = f"{row.get('app') or ''} {row.get('kind')}".strip() + ('（附照片）' if row.get('photos') else '')
+            entry = out.setdefault(key, {'ok': 0, 'failed': 0, 'errors': []})
+            if row.get('state') == 'done':
+                entry['ok'] += 1
+            elif row.get('state') == 'failed':
+                entry['failed'] += 1
+                if row.get('error') and row['error'] not in entry['errors']:
+                    entry['errors'].append(row['error'])
+        return out
+
+    def do_selfcheck(self, action):
+        """Looks at both desktop apps the way sending from the phone needs them, sending nothing: the
+        window, its conversations, the message box (a test line typed, read back and cleared), the
+        model button and menu (opened and closed, nothing picked), the new-conversation button,
+        Claude's usage card. Each item passes, fails or was not tested (11/15, the user: desktop
+        app updates must not stop sending from the phone)."""
+        report = {'pc': self.pc_name, 'version': VERSION, 'at': iso(time.time()), 'reason': action.get('text') or '',
+                  'apps': {}}
+        versions = {}
+        try:
+            versions = self.driver.versions() if hasattr(self.driver, 'versions') else {}
+        except (ActionError, OSError):
+            pass
+        busy = False
+        for app in APPS:
+            result = self.selfcheck_app(action, app)
+            result['appVersion'] = (versions.get(app) or {}).get('running')
+            report['apps'][app] = result
+            busy = busy or result.get('busy', False)
+        report['week'] = self.week_summary()
+        report['ok'] = not any(c['status'] == 'fail' for a in report['apps'].values() for c in a['checks'])
+        report['busy'] = busy
+        self.last_selfcheck = report
+        if self.data_dir is not None:
+            try:
+                (Path(self.data_dir) / 'selfcheck.json').write_text(json.dumps(report, ensure_ascii=False, indent=1),
+                                                                    encoding='utf-8')
+            except OSError:
+                logging.exception('writing the self-check failed')
+        failed = [f"{app} {c['name']}" for app, a in report['apps'].items() for c in a['checks'] if c['status'] == 'fail']
+        logging.info('self-check (%s): %s', report['reason'] or 'asked',
+                     'all passed' if report['ok'] else 'failed: ' + ', '.join(failed))
+        if self.on_selfcheck:
+            try:
+                self.on_selfcheck(report)
+            except Exception:
+                logging.exception('self-check report handling failed')
+        self.update(action, state='done', verified=report['ok'],
+                    message='自檢全部通過' if report['ok'] else '自檢有項目失敗：' + '、'.join(failed))
+
+    def selfcheck_app(self, action, app):
+        checks = []
+
+        def add(name, status, detail=''):
+            checks.append({'name': name, 'status': status, 'detail': detail})
+        strings = self.strings.get(app) or {}
+        source = self.hub.sources.get(app)
+        try:
+            rows = source.list_sessions(5) if source else []
+            add('對話列表', 'pass' if rows else 'fail', f'{len(rows)} 則' if rows else '讀不到任何對話')
+        except Exception as exc:
+            add('對話列表', 'fail', str(exc)[:120])
+        try:
+            docs = self.driver.docs(app)
+            if docs is None:
+                add('視窗', 'skip', '沒有開著，沒測到')
+                return {'checks': checks}
+            if docs == []:
+                docs = self.uncover(dict(action, app=app))
+            add('視窗', 'pass' if docs else 'fail', '、'.join(docs or []) or '被蓋住、讀不到頁面')
+            probe = self.driver.probe(app, type=True, menus=True, text=SELFCHECK_TEXT)
+        except ActionError as exc:
+            add('視窗', 'fail', f'{exc.code} {exc.message}'.strip())
+            return {'checks': checks}
+        if probe.get('running'):
+            add('輸入與選單', 'skip', '對話正在跑，沒測到')
+            return {'checks': checks, 'busy': True}
+        add('輸入框', 'pass' if probe.get('edit') else 'fail', probe.get('editName') or '')
+        typed = probe.get('typed') or {}
+        if probe.get('edit'):
+            detail = '、'.join(f'{k}={v}' for k, v in typed.items() if k != 'ok')
+            add('打字測試（不送出）', 'pass' if typed.get('ok') else 'fail', detail)
+        model, effort = ui_model(probe.get('model'), strings.get('model_strip'))
+        add('模型按鈕', 'pass' if model else 'fail', probe.get('model') or '找不到')
+        if model and strings.get('efforts'):
+            add('推理強度', 'pass' if effort in strings['efforts'] else 'fail',
+                f"按鈕寫「{effort}」，設定的是 {'／'.join(strings['efforts'])}")
+        menu = probe.get('menu') or {}
+        listed = menu.get('models') or []
+        listed = [m for m in (listed if isinstance(listed, list) else [listed]) if m]
+        known = strings.get('models') or []
+        if menu.get('error') or not listed:
+            add('模型選單', 'fail', menu.get('error') or '選單沒有列出模型')
+        else:
+            missing = [m for m in known if m not in listed]
+            add('模型選單', 'pass' if not missing else 'fail',
+                f"選單有 {'／'.join(listed)}" + (f"；設定裡有但選單沒有：{'／'.join(missing)}" if missing else ''))
+        add('開新對話鈕', 'pass' if probe.get('newButton') else 'fail', strings.get('new', ''))
+        if app == 'claude' and strings.get('usage_card') and hasattr(self.driver, 'usage_card'):
+            try:
+                rows = self.driver.usage_card(app)
+                weekly = [r for r in rows if isinstance(r, dict) and str(r.get('label', '')).startswith('每週')]
+                timed = [r for r in weekly if reset_moment(r.get('reset'), time.time()) is not None]
+                add('用量卡', 'pass' if timed else 'fail',
+                    '、'.join(f"{r.get('label')} {r.get('percent')}% {r.get('reset')}" for r in rows if isinstance(r, dict))
+                    or '讀不到')
+            except ActionError as exc:
+                add('用量卡', 'fail', f'{exc.code} {exc.message}'.strip())
+        return {'checks': checks}
+
     def do_update(self, action):
         """Claude's "重新啟動以更新" pressed for the phone (asked 10/30: only when the user presses
         it there, since it ends every Claude Code session in the app); done once the new one runs."""
@@ -4725,6 +4905,249 @@ Write-Output ('已按「{button}」' + $(if ($still) {{ '，視窗還在（可�
 """
 
 
+class SelfCheckPlan:
+    """When the self-check runs and what follows (11/15, the user: 「桌面版改版了，小幫手自己跟上」):
+    every Sunday at 03:00 (the PCs stay on and unlocked for mining), right after a desktop app's
+    running version changes, and when a phone send fails in a way a changed app explains. A run
+    the PC was busy for is tried again in 30 minutes, three times at most, then logged as not
+    tested. Each report goes to the shared folder (_selfcheck_<pc>.json) for the PC that repairs.
+    A failed send is kept (pending_resend.json) and sent again by the next, repaired helper."""
+
+    WEEKDAY, HOUR = 6, 3     # Sunday 03:00, local time
+    RETRY = 1800             # seconds before a busy self-check is tried again
+    TRIES = 3
+    SEND_DEBOUNCE = 600      # seconds between self-checks started by failed sends
+    RESEND_WITHIN = 3600     # seconds a failed message may still be sent again
+
+    def __init__(self, runner, data_dir, shared_dir=None, repair=None, clock=time.time):
+        self.runner, self.data_dir, self.repair, self.clock = runner, Path(data_dir), repair, clock
+        self.shared_dir = Path(shared_dir) if shared_dir else None
+        self.wanted = None            # [reason, tries, not before]
+        self.last_send_check = 0.0
+        self.lock = threading.Lock()
+        try:
+            self.state = json.loads((self.data_dir / 'selfcheck_plan.json').read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            self.state = {}
+        self.state.setdefault('versions', {})
+
+    def save(self):
+        try:
+            (self.data_dir / 'selfcheck_plan.json').write_text(json.dumps(self.state, ensure_ascii=False), encoding='utf-8')
+        except OSError:
+            logging.exception('saving the self-check plan failed')
+
+    def want(self, reason, at=None):
+        with self.lock:
+            if self.wanted is None:
+                self.wanted = [reason, 0, self.clock() if at is None else at]
+                logging.info('self-check wanted: %s', reason)
+
+    def tick(self):
+        now = self.clock()
+        local = datetime.fromtimestamp(now)
+        day = local.date().isoformat()
+        if local.weekday() == self.WEEKDAY and local.hour == self.HOUR and self.state.get('weekly') != day:
+            self.state['weekly'] = day
+            self.save()
+            self.want('每週例行')
+        versions = getattr(getattr(self.runner, 'watcher', None), 'versions', None) or {}
+        for app, found in versions.items():
+            running = (found or {}).get('running') if isinstance(found, dict) else None
+            if not running:
+                continue
+            known = self.state['versions'].get(app)
+            if known != running:
+                self.state['versions'][app] = running
+                self.save()
+                if known:
+                    # Give the new version a few minutes to settle before looking at it.
+                    self.want(f'{app} 更新到 {running}', at=now + 180)
+        with self.lock:
+            wanted = self.wanted
+        if wanted is None or now < wanted[2]:
+            return
+        code, body = self.runner.submit('selfcheck', None, None, {'reason': wanted[0]})
+        with self.lock:
+            if code == 202:
+                self.wanted = None
+                return
+            wanted[1] += 1
+            if wanted[1] >= self.TRIES:
+                logging.warning('self-check not tested (%s): %s %s', wanted[0], code, body.get('error'))
+                self.publish({'pc': self.runner.pc_name, 'version': VERSION, 'at': iso(now), 'reason': wanted[0],
+                              'ok': None, 'notTested': body.get('message') or body.get('error'), 'apps': {}})
+                self.wanted = None
+            else:
+                wanted[2] = now + self.RETRY
+
+    def run_forever(self):
+        while True:
+            try:
+                self.tick()
+            except Exception:
+                logging.exception('self-check plan failed')
+            time.sleep(60)
+
+    def on_report(self, report):
+        if report.get('busy'):
+            with self.lock:
+                if self.wanted is None:
+                    self.wanted = [report.get('reason') or '重試', 1, self.clock() + self.RETRY]
+        self.publish(report)
+        if self.repair is not None and report.get('ok') is False:
+            self.repair.consider(report)
+
+    def publish(self, report):
+        if self.shared_dir is None:
+            return
+        try:
+            name = '_selfcheck_' + clipboard_tag(self.runner.pc_name) + '.json'
+            (self.shared_dir / name).write_text(json.dumps(report, ensure_ascii=False), encoding='utf-8')
+        except OSError:
+            logging.exception('sharing the self-check failed')
+
+    def on_send_failed(self, action, code):
+        """A phone message the UI refused: kept to be sent again after a repair, and a self-check."""
+        if action.get('kind') == 'send' or action.get('kind') == 'new':
+            keep = {'at': self.clock(), 'version': VERSION, 'kind': action['kind'], 'app': action['app'],
+                    'sessionId': action.get('sessionId'), 'text': action.get('text') or '', 'error': code,
+                    'images': [base64.b64encode(image).decode() for image in action.get('images') or []],
+                    'model': action.get('model'), 'effort': action.get('effort'), 'project': action.get('project')}
+            try:
+                path = self.data_dir / 'pending_resend.json'
+                path.write_text(json.dumps(keep, ensure_ascii=False), encoding='utf-8')
+            except OSError:
+                logging.exception('keeping the failed message failed')
+        if self.clock() - self.last_send_check >= self.SEND_DEBOUNCE:
+            self.last_send_check = self.clock()
+            self.want(f"手機{'傳訊' if action.get('kind') == 'send' else '開新對話'}失敗（{code}）")
+
+    def resend_pending(self, notify=None):
+        """At start: a message that failed under an older helper is sent again (once, within an hour)."""
+        path = self.data_dir / 'pending_resend.json'
+        try:
+            keep = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            return None
+        if self.clock() - keep.get('at', 0) > self.RESEND_WITHIN:
+            path.unlink(missing_ok=True)
+            return None
+        if keep.get('version') == VERSION:
+            return None  # not repaired yet
+        path.unlink(missing_ok=True)
+        payload = {'text': keep.get('text') or '', 'force': True}
+        for key in ('model', 'effort', 'project'):
+            if keep.get(key):
+                payload[key] = keep[key]
+        if keep.get('images'):
+            payload['images'] = keep['images']
+        code, body = self.runner.submit(keep['kind'], keep['app'], keep.get('sessionId'), payload)
+        logging.info('resending the message that failed under %s: %s %s', keep.get('version'), code, body.get('error'))
+        if notify:
+            what = '傳訊' if keep['kind'] == 'send' else '開新對話'
+            notify(f'{self.runner.pc_name}：修好後重送',
+                   f"小幫手 {keep.get('version')}→{VERSION} 修好後，自動重送剛才失敗的{what}（{keep['app']}）："
+                   + ('已排入' if code == 202 else f"沒送出（{body.get('message') or body.get('error')}）"),
+                   3, ['repeat'], None)
+        return code
+
+
+class RepairWatch:
+    """On the PC that repairs (config "repair": {"script": ...}): a failed self-check from this PC
+    or another (its _selfcheck_<pc>.json in the shared folder) starts the repair script once per
+    report, through WMI so that it outlives this helper (the repair redeploys and restarts it).
+    The script runs Claude Code headless to fix the helper, test, deploy to both PCs, check the
+    item again and tell the user (the user 11/15: 「認不到你就自動幫我修」)."""
+
+    MAX_PER_DAY = 4
+    RUNNING_FOR = 2 * 3600   # seconds a started repair counts as still running
+
+    def __init__(self, script, data_dir, shared_dir=None, pc_name='', clock=time.time, start=None):
+        self.script, self.data_dir, self.pc_name, self.clock = script, Path(data_dir), pc_name, clock
+        self.shared_dir = Path(shared_dir) if shared_dir else None
+        self.start = start or self.start_detached
+        self.lock = threading.Lock()
+
+    def state(self):
+        try:
+            return json.loads((self.data_dir / 'repair_state.json').read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            return {'handled': [], 'started': []}
+
+    def consider(self, report):
+        if report.get('ok') is not False:
+            return False
+        key = f"{report.get('pc')}|{report.get('at')}"
+        with self.lock:
+            state = self.state()
+            now = self.clock()
+            if key in state['handled']:
+                return False
+            started = [t for t in state['started'] if now - t < 86400]
+            if started and now - max(started) < self.RUNNING_FOR and not self.finished_since(max(started)):
+                logging.info('repair for %s waits: one is running', key)
+                return False
+            if len(started) >= self.MAX_PER_DAY:
+                logging.warning('repair for %s skipped: %d today already', key, len(started))
+                state['handled'] = (state['handled'] + [key])[-50:]
+                self.write(state)
+                return False
+            state['handled'] = (state['handled'] + [key])[-50:]
+            state['started'] = started + [now]
+            self.write(state)
+        path = self.data_dir / 'repair_input.json'
+        path.write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding='utf-8')
+        logging.info('repair started for %s', key)
+        self.start(self.script, path)
+        return True
+
+    def finished_since(self, started):
+        try:
+            return (self.data_dir / 'repair_result.json').stat().st_mtime > started
+        except OSError:
+            return False
+
+    def write(self, state):
+        try:
+            (self.data_dir / 'repair_state.json').write_text(json.dumps(state), encoding='utf-8')
+        except OSError:
+            logging.exception('saving the repair state failed')
+
+    def poll_shared(self):
+        if self.shared_dir is None:
+            return
+        try:
+            names = [n for n in os.listdir(self.shared_dir) if n.startswith('_selfcheck_') and n.endswith('.json')]
+        except OSError:
+            return
+        for name in names:
+            try:
+                report = json.loads((self.shared_dir / name).read_text(encoding='utf-8'))
+            except (OSError, ValueError):
+                continue
+            if report.get('pc') != self.pc_name:
+                self.consider(report)
+
+    def run_forever(self):
+        while True:
+            try:
+                self.poll_shared()
+            except Exception:
+                logging.exception('repair watch failed')
+            time.sleep(60)
+
+    @staticmethod
+    def start_detached(script, report_path):
+        import subprocess
+        line = (f'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{script}" '
+                f'-Report "{report_path}"')
+        quoted = line.replace("'", "''")
+        subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command',
+                        f"Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{{CommandLine='{quoted}'}} | Out-Null"],
+                       timeout=60, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+
+
 class ElevateRelay:
     """Passes administrator requests between the elevated companion and the phone (phase 3).
 
@@ -4876,6 +5299,12 @@ CLIPBOARD_PREVIEW = 300            # characters of a long text sent with the lis
 CLIPBOARD_INLINE = 4000            # a text up to this many characters comes whole with the list
 CLIPBOARD_TEXT_LIMIT = 1024 * 1024
 CLIPBOARD_IMAGE_LIMIT = 12 * 1024 * 1024
+# The self-check's test line: typed into the message box, read back and cleared, never sent.
+SELFCHECK_TEXT = '（小幫手自檢測試字，不會送出）'
+# Failures of a phone send that a changed desktop app explains: they start a self-check (and, on
+# the PC that repairs, a repair), and the message is sent again once the helper is fixed.
+SELFCHECK_CODES = ('no-prompt-box', 'focus-failed', 'paste-failed', 'paste-failed-photos', 'title-mismatch',
+                   'duplicate-title', 'not-found', 'not-invokable', 'model-failed', 'menu-failed', 'internal')
 CLIPBOARD_OWN_GRACE = 5          # seconds after an action during which a clipboard change is the helper's own
 CLIPBOARD_BOUNCE = 120           # seconds: content stored this recently by any PC is not stored again
 CLIPBOARD_FRESH = 600              # seconds: an older arrival (the PC was off) is listed, not pasted
@@ -6261,6 +6690,8 @@ def handler_for(hub, gate, networks, runner=None):
             body = self.read_body(PHOTO_BODY if photos else MAX_BODY)
             if body is None:
                 return None
+            if parts == ['selfcheck']:
+                return self.send_json(*runner.submit('selfcheck', None, None, body))
             if parts[1:] == ['launch'] and parts[0] in APPS:
                 return self.send_json(*runner.submit('launch', parts[0], None, body))
             if parts[1:] == ['update'] and parts[0] in APPS:
@@ -6285,6 +6716,9 @@ def handler_for(hub, gate, networks, runner=None):
                     return default
             if parts == ['state']:
                 return self.send_json(200, hub.state())
+            if parts == ['selfcheck']:
+                found = runner.last_selfcheck if runner is not None else None
+                return self.send_json(200, {'report': found})
             if parts == ['screen']:
                 if hub.screen is None:
                     return self.send_json(404, error('not-found', '這台電腦的小幫手不提供畫面'))
@@ -6689,6 +7123,22 @@ class FakeDriver:
             answer['mode'] = ClaudeSource.PERMISSION_LABELS.get(data.get('permissionMode'), data.get('permissionMode'))
             answer['running'] = self.open_doc.get(app) in self.running
         answer['update'] = (getattr(self, 'fake_update', None) or {}).get(app)
+        return answer
+
+    def probe(self, app, type=False, menus=False, text=''):
+        """The self-check's look: the fake windows have everything, unless a test took it away."""
+        self.calls.append(('probe', app))
+        seen = self.inspect(app)
+        strings = self.hub.strings.get(app) or {}
+        broken = getattr(self, 'broken', set())
+        answer = {'ok': True, 'docs': seen.get('docs'), 'edit': 'edit' not in broken,
+                  'editName': strings.get('edit'), 'model': None if 'model' in broken else seen.get('model'),
+                  'newButton': 'new' not in broken, 'running': bool(seen.get('running'))}
+        if type and answer['edit']:
+            answer['typed'] = {'ok': 'typing' not in broken, 'focus': True, 'readBack': 'typing' not in broken,
+                               'cleared': True}
+        if menus and answer['model']:
+            answer['menu'] = {'models': [] if 'menu' in broken else list(strings.get('models') or [])}
         return answer
 
     def set_effort(self, app, doc, label):
@@ -7198,6 +7648,17 @@ def main(argv=None):
     hub.clipboard = clipboard_sync_from_config(cfg, pc_name)
     if hub.clipboard is not None and runner is not None:
         hub.clipboard.busy = runner.busy
+    if runner is not None:
+        shared = (cfg.get('clipboard') or {}).get('folder')
+        repair = None
+        if (cfg.get('repair') or {}).get('script'):
+            repair = RepairWatch(cfg['repair']['script'], path.parent, shared, pc_name)
+            threading.Thread(target=repair.run_forever, daemon=True, name='repair-watch').start()
+        plan = SelfCheckPlan(runner, path.parent, shared, repair)
+        runner.data_dir, runner.on_selfcheck, runner.on_send_failed = path.parent, plan.on_report, plan.on_send_failed
+        hub.selfcheck_plan = plan
+        threading.Thread(target=plan.run_forever, daemon=True, name='selfcheck').start()
+        threading.Timer(90, plan.resend_pending, kwargs={'notify': notify}).start()
     if hub.clipboard is not None:
         threading.Thread(target=hub.clipboard.run_forever, daemon=True).start()
     submit = Path((cfg.get('elevate') or {}).get('submit_file') or elevate.submit_file())
