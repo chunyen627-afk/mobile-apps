@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.65'
+VERSION = '0.5.66'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -6196,7 +6196,10 @@ def handler_for(hub, gate, networks, runner=None):
                 return self.send_json(404, error('not-found', '沒有這個路徑'))
             if runner is None:
                 return self.send_json(405, error('read-only', '這一版只能讀取'))
-            body = self.read_body(PHOTO_BODY if parts[-1:] == ['messages'] else MAX_BODY)
+            # A message and a new conversation may both carry photos (0.5.60 gave the new one photos but
+            # kept it at 64 KB: one photo came back 「內容太大」, live 11/15).
+            photos = parts[-1:] == ['messages'] or (len(parts) == 2 and parts[0] in APPS and parts[1] == 'sessions')
+            body = self.read_body(PHOTO_BODY if photos else MAX_BODY)
             if body is None:
                 return None
             if parts[1:] == ['launch'] and parts[0] in APPS:
