@@ -881,18 +881,25 @@ function Set-CodexModel($w, $page, $s, $label) {
   if (Shows-Model $button $s $label) { return 'already' }
   $p = $null
   if (-not $button.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$p)) { Fail 'not-invokable' 'the model button does not expand' }
+  # Codex 26.1111 (home PC 11/15) opens the menu only while its window is in front (a full-screen
+  # Moonlight in front: "the model menu did not open"), and after the pick it goes back to the
+  # top menu, open, its button then named after the menu (effort_menu) instead of the model: the
+  # pick had worked but was reported as failed. So: up front, then close the menu and look.
   try {
+    Bring-Front $w
     $p.Expand()
-    $item = Wait-Named $w $CT::MenuItem $s.model_menu_item 12
+    $item = Wait-Named $w $CT::MenuItem $s.model_menu_item 20
     if (-not $item) { Fail 'model-failed' 'the model menu did not open' }
     if (-not (Invoke-Element $item)) { Fail 'not-invokable' 'the model item could not be pressed' }
-    $radio = Wait-Named $w $CT::RadioButton $label 12
+    $radio = Wait-Named $w $CT::RadioButton $label 20
     if (-not $radio) { Fail 'model-failed' ("the model is not in the menu; radio buttons: " + ((Radio-Names $w) -join ' | ')) }
     if (-not (Invoke-Element $radio)) { Fail 'not-invokable' 'the model could not be chosen' }
-    for ($i = 0; $i -lt 12; $i++) {
+    for ($i = 0; $i -lt 20; $i++) {
       Start-Sleep -Milliseconds 250
       $now = Prefixed-Button $w $s.model_prefix
       if ($now -and (Shows-Model $now $s $label)) { return 'invoke' }
+      if ($i -ge 2) { Collapse-Named $w $s.effort_menu }
+      if ($i -eq 6) { Close-Claude-Menus $w }
     }
     Fail 'model-failed' 'the model button does not show the chosen model'
   } finally {
@@ -933,24 +940,28 @@ function Set-CodexEffort($w, $page, $s, $label) {
       if (-not $item) { Start-Sleep -Milliseconds 250 }
     }
     if (-not $item) { Fail 'model-failed' 'the effort slider is not in the menu' }
-    $rail = Find-RawClass $item $s.effort_rail 6
-    if (-not $rail) { $rail = $item }
-    $r = $rail.Current.BoundingRectangle
-    if ($r.IsEmpty -or $r.Width -lt 2) { Fail 'model-failed' 'the effort slider has no position on screen' }
-    $pad = $r.Height / 2
-    $x = $r.X + $pad + $k * ($r.Width - 2 * $pad) / ($n - 1)
-    Click-Point $w $x ($r.Y + $r.Height / 2) 'the effort slider'
     # The status line names the tick (effort_status); the button names the effort once closed.
     $want = [string]::Format($s.effort_status, $k + 1)
+    # Codex 26.1111 (home PC 11/15) moves its slider with the arrow keys ("use the left and right
+    # arrow keys", it says) and no longer with a click on the rail: focus the item, all the way
+    # left, then right to the tick. The click by position stays for when the keys do nothing.
     $seen = ''
-    for ($i = 0; $i -lt 12; $i++) {
-      Start-Sleep -Milliseconds 250
-      $seen = ''
-      foreach ($t in $menu.FindAll($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Text)))) {
-        $name = "$($t.Current.Name)"
-        if ($name.Contains($s.effort_status_mark)) { $seen = $name; break }
-      }
-      if ($seen.Contains($want)) { break }
+    try { $item.SetFocus() } catch { }
+    Start-Sleep -Milliseconds 300
+    if ([DeskWin]::GetForegroundWindow() -eq [IntPtr]$w.Current.NativeWindowHandle) {
+      for ($i = 0; $i -lt $n; $i++) { [System.Windows.Forms.SendKeys]::SendWait('{LEFT}'); Start-Sleep -Milliseconds 150 }
+      for ($i = 0; $i -lt $k; $i++) { [System.Windows.Forms.SendKeys]::SendWait('{RIGHT}'); Start-Sleep -Milliseconds 250 }
+      $seen = Effort-Status $menu $s 8 $want
+    }
+    if (-not $seen.Contains($want)) {
+      $rail = Find-RawClass $item $s.effort_rail 6
+      if (-not $rail) { $rail = $item }
+      $r = $rail.Current.BoundingRectangle
+      if ($r.IsEmpty -or $r.Width -lt 2) { Fail 'model-failed' 'the effort slider has no position on screen' }
+      $pad = $r.Height / 2
+      $x = $r.X + $pad + $k * ($r.Width - 2 * $pad) / ($n - 1)
+      Click-Point $w $x ($r.Y + $r.Height / 2) 'the effort slider'
+      $seen = Effort-Status $menu $s 12 $want
     }
     if (-not $seen.Contains($want)) { Fail 'model-failed' ("the slider did not land on the effort; status: " + $seen) }
     # The pick is made; the button names it once the menu has closed (the collapse alone left
@@ -973,6 +984,22 @@ function Set-CodexEffort($w, $page, $s, $label) {
     [DeskWin]::SetCursorPos($cursor.X, $cursor.Y) | Out-Null
     Restore-Front $before
   }
+}
+
+# The effort menu's status line ("<model> <tick>, item 2 of 5"), once it names $want or after
+# $tries looks a quarter second apart.
+function Effort-Status($menu, $s, $tries, $want) {
+  $seen = ''
+  for ($i = 0; $i -lt $tries; $i++) {
+    Start-Sleep -Milliseconds 250
+    $seen = ''
+    foreach ($t in $menu.FindAll($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Text)))) {
+      $name = "$($t.Current.Name)"
+      if ($name.Contains($s.effort_status_mark)) { $seen = $name; break }
+    }
+    if ($seen.Contains($want)) { break }
+  }
+  return $seen
 }
 
 # The first element under $root (raw view, so parts the control view hides) whose class name
@@ -1778,6 +1805,9 @@ function Run-Command($c) {
           Start-Sleep -Milliseconds 200
           $now = @(Get-Docs $w)
           if (($now -join '|') -ne ($before -join '|')) { $changed = $true; break }
+          # Codex 26.1111 titles every page that is not a conversation "ChatGPT" (home PC 11/15): from
+          # such a page the title stays; its empty new-conversation box shows the switch.
+          if ($s.new_edit -and $i -ge 2 -and (Find-ByName $w $CT::Edit $s.new_edit)) { $changed = $true; break }
         }
         if (-not $changed) { Fail 'title-mismatch' 'the new conversation did not open' }
       }
