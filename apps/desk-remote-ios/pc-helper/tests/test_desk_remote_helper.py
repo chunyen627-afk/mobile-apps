@@ -553,6 +553,27 @@ class DrivingTests(FakeEnvironment):
         self.assertTrue(any(c[0] == 'send' for c in driver.calls), driver.calls)
         self.assertTrue(any('brought to the front by minimized Moonlight' in line for line in logs.output), logs.output)
 
+    def test_a_covered_window_is_brought_up_for_a_new_conversation_too(self):
+        # 11/15: the home PC's Codex behind a full-screen Moonlight could not open a new one.
+        class CoveredDriver(h.FakeDriver):
+            covered = True
+
+            def docs(self, app):
+                return [] if self.covered else super().docs(app)
+
+            def bring_front(self, app):
+                self.calls.append(('bring_front', app))
+                self.covered = False
+                return 'minimized Moonlight'
+        hub, driver, _, runner = drive(self.fake, driver_class=CoveredDriver)
+        self.assertFalse(runner.busy())
+        runner.submit('new', 'codex', None, {'text': '蓋住了也要開', 'force': True})
+        run_all(runner)
+        self.assertTrue(runner.busy(), "the clipboard is the helper's own for a few seconds after an action")
+        self.assertIn(('bring_front', 'codex'), driver.calls)
+        self.assertLess(driver.calls.index(('bring_front', 'codex')),
+                        [i for i, c in enumerate(driver.calls) if c[0] == 'new_send'][0], driver.calls)
+
     def test_someone_at_the_pc_blocks_until_the_phone_confirms(self):
         presence = dict(self.fake.cfg['presence'], idleSeconds=5)
         _, _, _, runner = drive(self.fake, presence)
@@ -803,10 +824,10 @@ class DrivingTests(FakeEnvironment):
         self.assertEqual(status['message'], '已開新對話（模型 Sonnet 5.5、推理強度 高）')
         self.assertEqual(driver.calls[-3:], [('new_send', 'claude', '新增'), ('set_model', 'claude', 'Sonnet 5.5'),
                                              ('set_effort', 'claude', '高')])
-        body = runner.submit('new', 'codex', None, {'text': 'x', 'effort': '超高'})[1]
+        body = runner.submit('new', 'codex', None, {'text': 'x', 'effort': '極高'})[1]
         run_all(runner)
-        self.assertEqual(runner.status(body['id'])['message'], '已開新對話（推理強度 超高）')
-        self.assertEqual(driver.calls[-1], ('set_effort', 'codex', '超高'))
+        self.assertEqual(runner.status(body['id'])['message'], '已開新對話（推理強度 極高）')
+        self.assertEqual(driver.calls[-1], ('set_effort', 'codex', '極高'))
 
     def test_codexs_effort_is_switched_from_the_phone(self):
         """Codex's effort is a slider in its model menu (11/8): clicked at the effort's tick, and
@@ -1152,7 +1173,9 @@ class MetaTests(FakeEnvironment):
                               {'label': '每週', 'percent': 53, 'resetsAt': None, 'resetsText': None}],
                   'sampledAt': h.iso(t)}
         button = {'label': '每週 · 所有模型', 'percent': 61, 'resetsText': '週日上午11:00 重設'}
-        week = {'label': '每週', 'percent': 61, 'resetsAt': None, 'resetsText': '週日上午11:00 重設'}
+        # The button's reset moment from when it was read (11/15).
+        week = {'label': '每週', 'percent': 61, 'resetsAt': h.iso(h.clock_reset('週日上午11:00 重設', t)),
+                'resetsText': '週日上午11:00 重設'}
         # A day later: the 5-hour figure has reset since, the button is the week.
         self.assertEqual(h.merge_claude_usage(sample, button, t + 86000, t + 86400),
                          {'windows': [week], 'sampledAt': h.iso(t + 86000)})
@@ -1263,12 +1286,38 @@ for line in sys.stdin:
                   'sampledAt': h.iso(t - 86400)}
         button = {'label': '每週 · 所有模型', 'percent': 63, 'resetsText': '週日上午11:00 重設'}
         # The card wins over an older file; a button read after the card gives the week.
+        timed_week = dict(week, resetsAt=h.iso(h.clock_reset('週日上午11:00 重設', t)))
         self.assertEqual(h.merge_claude_usage(sample, None, None, t + 60, rows, t),
-                         {'windows': [session, week], 'sampledAt': h.iso(t)})
+                         {'windows': [session, timed_week], 'sampledAt': h.iso(t)})
         merged = h.merge_claude_usage(sample, button, t + 30, t + 60, rows, t)
         self.assertEqual([(w['label'], w['percent']) for w in merged['windows']], [('工作階段', 5), ('每週', 63)])
         # A card older than the file, or none, leaves the earlier rules.
         self.assertEqual(h.merge_claude_usage(sample, button, t, t, rows, t - 2 * 86400)['windows'][-1]['percent'], 63)
+
+    def test_a_button_left_from_the_week_before_does_not_hide_the_new_week(self):
+        # Live 11/15: the weekly limit reset at Sunday 11:00; the card read at 13:44 said 0% and
+        # 週日上午11:00 (next Sunday), the composer's button, not yet refreshed and read later,
+        # still said 75% 於 上午11:00. It won, and 於 上午11:00 counted from 13:44 is Monday 11:00:
+        # the phone showed 75% and a day's countdown instead of 0% and six days.
+        card_at = h.datetime(2026, 11, 15, 13, 44).timestamp()
+        rows = [{'label': '5 小時限制', 'percent': 0, 'reset': '於 下午5:10 重設'},
+                {'label': '每週 · 所有模型', 'percent': 0, 'reset': '週日上午11:00 重設'}]
+        stale = {'label': '每週 · 所有模型', 'percent': 75, 'resetsText': '於 上午11:00 重設'}
+        merged = h.merge_claude_usage(None, stale, card_at + 300, card_at + 600, rows, card_at)
+        week = [w for w in merged['windows'] if w['label'] == '每週'][0]
+        self.assertEqual((week['percent'], week['resetsAt']), (0, h.iso(h.datetime(2026, 11, 22, 11, 0).timestamp())))
+        self.assertEqual([w['resetsAt'] for w in merged['windows'] if w['label'] != '每週'],
+                         [h.iso(h.datetime(2026, 11, 15, 17, 10).timestamp())])
+        # A button of the same week read after the card still gives the newer figure.
+        fresh = {'label': '每週 · 所有模型', 'percent': 3, 'resetsText': '週日上午11:00 重設'}
+        merged = h.merge_claude_usage(None, fresh, card_at + 300, card_at + 600, rows, card_at)
+        self.assertEqual([w['percent'] for w in merged['windows'] if w['label'] == '每週'], [3])
+        # The button alone, read before a reset that has passed since: that week's figure is gone.
+        before = h.datetime(2026, 11, 15, 10, 0).timestamp()
+        self.assertIsNone(h.merge_claude_usage(None, stale, before, card_at))
+        # ... and read before it, it counts down to that same day's 11:00, not the next day's.
+        self.assertEqual(h.merge_claude_usage(None, stale, before, before + 60)['windows'][0]['resetsAt'],
+                         h.iso(h.datetime(2026, 11, 15, 11, 0).timestamp()))
 
     def test_a_per_model_week_on_the_button_does_not_pass_for_the_all_models_week(self):
         # Live 11/2 (Claude 4.29, a Team plan with a Fable week): the button read "每週 · Fable：23%"
@@ -2403,7 +2452,7 @@ class PopupTests(FakeEnvironment):
         hub.capabilities = hub.capabilities + ['effort', 'mode', 'stop']
         state = hub.state()
         self.assertEqual(state['efforts'], {'claude': ['低', '中', '高', '超高', '最高', 'Ultracode'],
-                                            'codex': ['低', '中', '高', '超高']})
+                                            'codex': ['輕度', '中', '高', '極高', 'Ultra']})
         self.assertEqual(state['modes']['codex'], ['要求核准', '代我核准'])
         self.assertEqual(state['stop'], ['claude', 'codex'])
 
@@ -2637,6 +2686,37 @@ class ClipboardTests(unittest.TestCase):
         missing = h.ClipboardStore(self.folder / 'nowhere' / '剪貼簿', 'pc')
         self.assertFalse(missing.available(), 'no cloud folder: not made')
         self.assertEqual(missing.items(), [])
+
+    def test_the_helpers_own_pastes_and_a_back_and_forth_are_not_stored(self):
+        # Home 11/15: every message sent from the phone (pasted into Codex) was stored as a copy
+        # and pasted into the office's clipboard; two texts then swapped every few seconds.
+        clipboard = h.FakeClipboard()
+        sync = h.ClipboardSync(self.store, clipboard, '家用電腦', clock=lambda: self.now[0])
+        acting = [True]
+        sync.busy = lambda: acting[0]
+        clipboard.copy('text', '手機送給 Codex 的訊息')
+        sync.once()
+        clipboard.copy('text', '使用者原本複製的')  # put back after the paste
+        sync.once()
+        self.assertEqual(self.store.items(), [], 'nothing the helper pasted or put back is stored')
+        acting[0] = False
+        clipboard.copy('text', '甲')
+        sync.once()
+        self.now[0] += 1
+        clipboard.copy('text', '乙')
+        sync.once()
+        for _ in range(4):  # 甲 and 乙 swapped back and forth by another clipboard sharing
+            self.now[0] += 6
+            clipboard.copy('text', '甲')
+            sync.once()
+            self.now[0] += 6
+            clipboard.copy('text', '乙')
+            sync.once()
+        self.assertEqual([i['text'] for i in self.store.items()], ['乙', '甲'], 'each stored once')
+        self.now[0] += h.CLIPBOARD_BOUNCE + 1
+        clipboard.copy('text', '甲')
+        sync.once()
+        self.assertEqual(self.store.items()[0]['text'], '甲', 'copied again later: stored again')
 
     def test_a_copy_on_this_pc_goes_to_the_folder_and_an_arrival_into_its_clipboard(self):
         clipboard = h.FakeClipboard()

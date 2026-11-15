@@ -73,7 +73,7 @@ final class DeskRemoteUITests: XCTestCase {
         XCTAssertTrue(row.label.contains("閒置 7 分鐘"), "presence missing: \(row.label)")
         // The weekly reset counted down under the PC (asked 11/12; helper 0.5.59 turns Claude's
         // "週日上午11:00 重設" into a moment).
-        XCTAssertTrue(waitFor(row, labelContains: "後重設", timeout: 15), "reset countdown missing: \(row.label)")
+        XCTAssertTrue(waitFor(row, labelContains: "重設・剩", timeout: 15), "reset countdown missing: \(row.label)")
         XCTAssertTrue(row.label.contains("Claude 每週 46%"), "Claude's week missing: \(row.label)")
         snapshot("03-pc-list")
     }

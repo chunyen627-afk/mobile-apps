@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.66'
+VERSION = '0.5.70'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -103,6 +103,8 @@ EXTENSION_READ = 'read page content'
 
 
 EFFORT_LABELS = {'low': '低', 'medium': '中', 'high': '高', 'xhigh': '超高', 'max': '最高'}
+# Codex 26.1111 names its efforts on the model button 輕度 中 高 極高 Ultra (home PC 11/15).
+CODEX_EFFORT_LABELS = dict(EFFORT_LABELS, low='輕度', xhigh='極高', max='Ultra', ultra='Ultra')
 # Context window sizes the desktop app itself reported (Claude 10/27: Opus 5.5 has 1M) or that
 # the transcripts prove (10/31: Fable 5.1 and Opus 4.8 conversations reached 967K and 949K tokens
 # of input, so 1M). Models not listed show tokens used without a percentage rather than a guessed
@@ -276,13 +278,23 @@ def merge_claude_usage(from_file, button, button_at, now, card=None, card_at=Non
     file_at = datetime.fromisoformat(from_file['sampledAt'].replace('Z', '+00:00')).timestamp() if from_file else None
     weekly = None
     if button and button_at and button['label'].startswith('每週'):
-        weekly = {'label': card_label(button['label']), 'percent': button['percent'], 'resetsAt': None,
-                  'resetsText': button['resetsText']}
+        # Its reset moment from when the button was read: Claude leaves the weekday out within a
+        # day ("於 上午11:00"), so a later reference would land a day late.
+        at = reset_moment(button['resetsText'], button_at)
+        weekly = {'label': card_label(button['label']), 'percent': button['percent'],
+                  'resetsAt': iso(at) if at is not None else None, 'resetsText': button['resetsText']}
+        if at is not None and at <= now:
+            weekly = None  # that week has reset since the button was read: its figure is the old week's
     if card and card_at and (file_at is None or card_at > file_at):
         windows = card_windows(card, card_at, now)
         if windows:
-            if weekly and button_at > card_at:
+            if weekly and button_at > card_at and not older_period(weekly, card, card_at):
                 windows = replace_window(windows, weekly)
+            for i, window in enumerate(windows):
+                if not window.get('resetsAt') and window.get('resetsText'):
+                    at = reset_moment(window['resetsText'], card_at)
+                    if at is not None:
+                        windows[i] = dict(window, resetsAt=iso(at))
             return {'windows': windows, 'sampledAt': iso(card_at)}
     fresher = weekly is not None and (file_at is None or button_at > file_at)
     same_week = weekly is not None and weekly['label'] == '每週'  # the file only knows the all-models week
@@ -298,6 +310,28 @@ def merge_claude_usage(from_file, button, button_at, now, card=None, card_at=Non
         windows.append(weekly)
         times.append(button_at)
     return {'windows': windows, 'sampledAt': iso(min(times))} if windows else None
+
+
+def reset_moment(text, read_at):
+    """The reset moment a usage row's words name, read at `read_at`: '2 小時後重設' or '週日上午11:00 重設'."""
+    at = relative_reset(text, read_at)
+    return at if at is not None else clock_reset(text, read_at)
+
+
+def older_period(weekly, card, card_at):
+    """True when the button's weekly row is of a week that has ended since: the button keeps its
+    words until Claude refreshes it, and after the weekly reset (11/15 11:00) it still said
+    "75% 於 上午11:00 重設" while the card read at 13:44 said 0% and 週日上午11:00 — read later,
+    the button's row won and the phone counted down to the next day's 11:00 at 75%. The card's
+    row is kept when its week resets later than the button's."""
+    if not weekly.get('resetsAt'):
+        return False
+    for row in card or []:
+        if isinstance(row, dict) and card_label(row.get('label')) == weekly['label']:
+            mine = reset_moment(row.get('reset'), card_at)
+            theirs = datetime.fromisoformat(weekly['resetsAt'].replace('Z', '+00:00')).timestamp()
+            return mine is not None and mine > theirs + 120
+    return False
 
 
 def replace_window(windows, window):
@@ -1420,7 +1454,7 @@ class CodexSource:
                 model, effort = recorded[0], effort or recorded[1]
                 if model is None:
                     note = IMPORTED_NOTE
-        return {'model': model_label(model), 'modelId': model, 'effort': EFFORT_LABELS.get(effort, effort),
+        return {'model': model_label(model), 'modelId': model, 'effort': CODEX_EFFORT_LABELS.get(effort, effort),
                 'context': context_info(parser.context, parser.window), 'permission': parser.mode, 'note': note}
 
     def usage(self):
@@ -3823,6 +3857,7 @@ class ActionRunner:
         self.actions = {}
         self.client_ids = {}
         self.queue = []
+        self.acting_until = None         # while an action drives a window, then a few seconds after
         self.lock = threading.Condition()
 
     # -- submitting (HTTP thread) --------------------------------------------------------------
@@ -4026,6 +4061,9 @@ class ActionRunner:
     # Actions after which the window that was in front comes back (the user's rule 11/14: a game in
     # front is switched away for the send and back afterwards). Opening a conversation stays open.
     RESTORE_FRONT = ('send', 'new', 'answer', 'permission', 'model', 'effort', 'mode', 'fast', 'stop')
+    # Actions on a conversation's window other than sending and opening (open_conversation sees to
+    # those): a window covered whole shows UI Automation no page, so it comes up first.
+    UNCOVER = ('new', 'answer', 'permission', 'model', 'effort', 'mode', 'fast', 'stop')
 
     def remember_front(self, action):
         get = getattr(self.driver, 'foreground', None)
@@ -4045,8 +4083,15 @@ class ActionRunner:
         if how not in ('already', 'skipped', 'gone', 'hidden'):
             logging.info('%s %s: back to %s by %s', action['kind'], action['app'], name, how)
 
+    def busy(self):
+        """True while an action drives a window and for a few seconds after: the clipboard then
+        holds what the helper pasted (a phone message into Claude or Codex) or what it put back."""
+        until = self.acting_until
+        return until is not None and (until == 0 or time.time() < until)
+
     def run(self, action):
         self.update(action, state='running', message='處理中')
+        self.acting_until = 0
         front = self.remember_front(action)
         handler = {'send': self.do_send, 'permission': self.do_permission, 'new': self.do_new,
                    'open': self.do_open, 'answer': self.do_answer, 'model': self.do_model,
@@ -4054,6 +4099,8 @@ class ActionRunner:
                    'launch': self.do_launch, 'popup': self.do_popup, 'fast': self.do_fast,
                    'update': self.do_update}[action['kind']]
         try:
+            if action['kind'] in self.UNCOVER and self.driver.docs(action['app']) == []:
+                self.uncover(action)  # a full-screen Moonlight in front: no page to work on (11/15)
             handler(action)
         except ActionError as exc:
             logging.warning('%s %s failed: %s %s', action['kind'], action['app'], exc.code, exc.message)
@@ -4074,6 +4121,7 @@ class ActionRunner:
             if front:
                 self.restore_front(action, front)
             self.presence.end_own()
+            self.acting_until = time.time() + CLIPBOARD_OWN_GRACE
 
     def tell(self, action, failed=False):
         """Logged only: the phone that asked shows how each action went (no notification for
@@ -4828,6 +4876,8 @@ CLIPBOARD_PREVIEW = 300            # characters of a long text sent with the lis
 CLIPBOARD_INLINE = 4000            # a text up to this many characters comes whole with the list
 CLIPBOARD_TEXT_LIMIT = 1024 * 1024
 CLIPBOARD_IMAGE_LIMIT = 12 * 1024 * 1024
+CLIPBOARD_OWN_GRACE = 5          # seconds after an action during which a clipboard change is the helper's own
+CLIPBOARD_BOUNCE = 120           # seconds: content stored this recently by any PC is not stored again
 CLIPBOARD_FRESH = 600              # seconds: an older arrival (the PC was off) is listed, not pasted
 CLIPBOARD_ID = re.compile(r'(\d{13})_([^\\/\x00-\x1f]{1,60})')
 CLIPBOARD_PHONE = '手機'
@@ -5209,6 +5259,7 @@ class ClipboardSync:
         newest = store.newest() if store.available() else None
         self.seen_ms = newest[0] if newest else 0     # arrivals up to here were there before the start
         self.applied = None                           # digest of what was last put into or read from the clipboard
+        self.busy = None                              # the action runner's busy(): its own pastes are not copies
         self.failed_at = 0.0
         self.lock = threading.Lock()
 
@@ -5227,6 +5278,10 @@ class ClipboardSync:
         if sequence == self.last_sequence:
             return
         self.last_sequence = sequence
+        if self.busy is not None and self.busy():
+            # The helper pasted a phone message (or put back what was there): not the user's copy.
+            # Before 0.5.69 every message sent from the phone went to the other PC's clipboard too.
+            return
         read = self.clipboard.read()
         if not read or read[0] == 'skip':
             return
@@ -5246,13 +5301,17 @@ class ClipboardSync:
             return  # what this PC was just given
         if not self.store.available():
             return
-        newest = self.store.newest()
-        if newest is not None and self.row_digest(newest) == digest:
-            # The same content is the newest item already: Windows' own cloud clipboard carried
-            # the other PC's copy here before the cloud drive did (home PC 11/9), so one file.
-            self.applied = digest
-            self.seen_ms = max(self.seen_ms, newest[0])
-            return
+        for n, row in enumerate(self.store.entries()):
+            if n and (n >= 10 or self.clock() - row[0] / 1000 > CLIPBOARD_BOUNCE):
+                break
+            if self.row_digest(row) == digest:
+                # The same content is the newest item already: Windows' own cloud clipboard carried
+                # the other PC's copy here before the cloud drive did (home PC 11/9), so one file.
+                # Or one stored moments ago: two contents swapped back and forth between the PCs
+                # (home 11/15, Moonlight's clipboard sharing as well), each stored every few seconds.
+                self.applied = digest
+                self.seen_ms = max(self.seen_ms, row[0])
+                return
         item_id = self.store.put_text(value, self.pc_name) if kind == 'text' else self.store.put_image(value, media, self.pc_name)
         self.applied = digest
         self.seen_ms = max(self.seen_ms, int(item_id[:13]))
@@ -7137,6 +7196,8 @@ def main(argv=None):
         hub.ram = MemoryWatch(pc_name, worker=driver.worker)
         hub.restart = lambda: restart_helper(driver.worker)
     hub.clipboard = clipboard_sync_from_config(cfg, pc_name)
+    if hub.clipboard is not None and runner is not None:
+        hub.clipboard.busy = runner.busy
     if hub.clipboard is not None:
         threading.Thread(target=hub.clipboard.run_forever, daemon=True).start()
     submit = Path((cfg.get('elevate') or {}).get('submit_file') or elevate.submit_file())
