@@ -622,6 +622,8 @@ class DrivingTests(FakeEnvironment):
         # Someone at the PC: not now.
         _, _, _, busy = drive(self.fake, dict(self.fake.cfg['presence'], idleSeconds=5))
         self.assertEqual(busy.submit('selfcheck', None, None, {})[0], 409)
+        # Not even when forced (11/17: the repair's check kept opening the model menu on the user).
+        self.assertEqual(busy.submit('selfcheck', None, None, {'reason': '自動修驗證', 'force': True})[0], 409)
 
     def test_the_self_check_plan_runs_weekly_after_updates_and_after_failed_sends(self):
         folder = Path(tempfile.mkdtemp())
@@ -650,11 +652,14 @@ class DrivingTests(FakeEnvironment):
         self.assertEqual(runner.submitted[-1][3], {'reason': '每週例行'})
         plan.tick()
         self.assertEqual(len(runner.submitted), 1, 'once that night')
-        # Codex updated: checked a few minutes later.
+        # Codex updated: checked at the next Taiwan 03:00, not while someone may use the PC (11/17).
         runner.watcher.versions = {'codex': {'running': '26.1111.2228.0'}}
+        now[0] = h.datetime(2026, 11, 15, 14, 0, tzinfo=h.TAIWAN).timestamp()
         plan.tick()
-        self.assertEqual(len(runner.submitted), 1)
-        now[0] += 200
+        now[0] += 3600
+        plan.tick()
+        self.assertEqual(len(runner.submitted), 1, 'not in the afternoon')
+        now[0] = h.datetime(2026, 11, 16, 3, 0, 5, tzinfo=h.TAIWAN).timestamp()
         plan.tick()
         self.assertEqual(runner.submitted[-1][3], {'reason': 'codex 更新到 26.1111.2228.0'})
         # Busy three times: published as not tested, never as passed.
@@ -713,12 +718,27 @@ class DrivingTests(FakeEnvironment):
         folder = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
         started = []
-        now = [1000000.0]
+        afternoon = h.datetime(2026, 11, 17, 17, 40, tzinfo=h.TAIWAN).timestamp()
+        now = [afternoon]
         watch = h.RepairWatch('repair.ps1', folder, folder, '辦公室', clock=lambda: now[0],
                               start=lambda script, path: started.append(json.loads(path.read_text(encoding='utf-8'))))
         report = {'pc': '家用電腦', 'at': '2026-11-15T19:00:00Z', 'ok': False, 'apps': {}}
         self.assertFalse(watch.consider(dict(report, ok=True)), 'nothing to repair')
-        self.assertTrue(watch.consider(report))
+        # 11/17, the user: at once only when a phone message could not be sent, else at 03:00 Taiwan.
+        menu = dict(report, at='2026-11-17T09:39:00Z',
+                    apps={'claude': {'checks': [{'name': '模型選單', 'status': 'fail'}]}})
+        self.assertFalse(watch.consider(menu), 'a changed menu waits for the night')
+        self.assertFalse(watch.consider(dict(menu, reason='自動修驗證')), "the repair's own check starts nothing")
+        sent = dict(report, at='2026-11-17T09:30:00Z',
+                    apps={'claude': {'checks': [{'name': '手機實際傳訊', 'status': 'fail'}]}})
+        self.assertFalse(watch.consider(dict(sent, at='2026-11-16T22:39:00Z')), 'a send that failed this morning waits')
+        self.assertTrue(watch.consider(sent), 'a send that just failed is repaired at once')
+        self.assertEqual(started[-1]['at'], '2026-11-17T09:30:00Z')
+        started.clear()
+        (folder / 'repair_result.json').write_text('{}', encoding='utf-8')
+        now[0] = h.datetime(2026, 11, 18, 3, 0, 30, tzinfo=h.TAIWAN).timestamp()
+        self.assertFalse(watch.consider(dict(menu, reason='自動修驗證')), 'not even at night')
+        self.assertTrue(watch.consider(report), 'at 03:00 the rest is repaired')
         self.assertFalse(watch.consider(report), 'the same report once')
         self.assertFalse(watch.consider(dict(report, at='2026-11-15T19:30:00Z')), 'one repair at a time')
         (folder / 'repair_result.json').write_text('{}', encoding='utf-8')

@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.78'
+VERSION = '0.5.79'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -4003,8 +4003,10 @@ class ActionRunner:
         if kind == 'stop' and not strings.get('stop'):
             return 400, error('not-supported', '這個 App 還不能從手機停止')
         if kind == 'selfcheck':
-            # Nobody at the PC (it types into the message box), unless asked from the PC itself.
-            denied = self.gate(force, True)
+            # Nobody at the PC (it types into the message box and opens the model menu), never
+            # forced (11/17, the user at the home PC while the repair checked it again and again:
+            # 「剛剛我在使用電腦的時候就一直在干擾我」).
+            denied = self.gate(False, True)
             if denied:
                 return denied
             with self.lock:
@@ -4792,7 +4794,8 @@ class ActionRunner:
         elif menu.get('error') or not listed:
             add('模型選單', 'fail', menu.get('error') or '選單沒有列出模型')
         else:
-            missing = [m for m in known if m not in listed]
+            # Claude 11/17 (home PC) may tag a radio after the model: 'Opus 5.5 預設集'.
+            missing = [m for m in known if not any(x == m or x.startswith(m + ' ') for x in listed)]
             add('模型選單', 'pass' if not missing else 'fail',
                 f"選單有 {'／'.join(listed)}" + (f"；設定裡有但選單沒有：{'／'.join(missing)}" if missing else ''))
         add('開新對話鈕', 'pass' if probe.get('newButton') else 'fail', strings.get('new', ''))
@@ -4991,6 +4994,22 @@ Write-Output ('已按「{button}」' + $(if ($still) {{ '，視窗還在（可�
 """
 
 
+TAIWAN = timezone(timedelta(hours=8))   # the night slot is Taiwan's 03:00 (the user 11/17)
+
+
+def next_night(now, hour=3):
+    """The next Taiwan `hour`:00 after `now` (the night slot for checks and repairs)."""
+    local = datetime.fromtimestamp(now, TAIWAN)
+    slot = local.replace(hour=hour, minute=0, second=0, microsecond=0)
+    if slot <= local:
+        slot += timedelta(days=1)
+    return slot.timestamp()
+
+
+def in_night(now, hour=3):
+    return datetime.fromtimestamp(now, TAIWAN).hour == hour
+
+
 class SelfCheckPlan:
     """When the self-check runs and what follows (11/15, the user: 「桌面版改版了，小幫手自己跟上」):
     every Sunday at 03:00 (the PCs stay on and unlocked for mining), right after a desktop app's
@@ -5032,7 +5051,7 @@ class SelfCheckPlan:
 
     def tick(self):
         now = self.clock()
-        local = datetime.fromtimestamp(now)
+        local = datetime.fromtimestamp(now, TAIWAN)
         day = local.date().isoformat()
         if local.weekday() == self.WEEKDAY and local.hour == self.HOUR and self.state.get('weekly') != day:
             self.state['weekly'] = day
@@ -5048,8 +5067,9 @@ class SelfCheckPlan:
                 self.state['versions'][app] = running
                 self.save()
                 if known:
-                    # Give the new version a few minutes to settle before looking at it.
-                    self.want(f'{app} 更新到 {running}', at=now + 180)
+                    # Checked at the next 03:00, not while someone may use the PC (the user 11/17:
+                    # 「平常的時候只能允許在半夜三點的時候執行」); a failed send still checks at once.
+                    self.want(f'{app} 更新到 {running}', at=next_night(now))
         with self.lock:
             wanted = self.wanted
         if wanted is None or now < wanted[2]:
@@ -5178,8 +5198,30 @@ class RepairWatch:
         except (OSError, ValueError):
             return {'handled': [], 'started': []}
 
+    URGENT_WITHIN = 3600     # seconds a failed phone send still repairs at once
+
+    @staticmethod
+    def failed_send(report):
+        return any(c.get('status') == 'fail' and c.get('name') in ('手機實際傳訊', '手機實際開新對話')
+                   for a in (report.get('apps') or {}).values() for c in (a or {}).get('checks') or [])
+
     def consider(self, report):
         if report.get('ok') is not False:
+            return False
+        if str(report.get('reason') or '').startswith('自動修'):
+            # The repair's own check of its work is reported by the repair; a repair started from it
+            # looped all afternoon on 11/17 (home PC, the user at it).
+            return False
+        now = self.clock()
+        try:
+            at = datetime.fromisoformat(str(report.get('at')).replace('Z', '+00:00')).timestamp()
+        except ValueError:
+            at = None
+        urgent = self.failed_send(report) and at is not None and now - at < self.URGENT_WITHIN
+        if not urgent and not in_night(now):
+            # The user 11/17: 「當我無法從手機發送文字的時候才需要立刻執行自動修理，不然平常的時候
+            # 只能允許在半夜三點的時候執行」. The report stays in the shared folder and is looked
+            # at again at 03:00.
             return False
         key = f"{report.get('pc')}|{report.get('at')}"
         with self.lock:
@@ -5229,8 +5271,7 @@ class RepairWatch:
                 report = json.loads((self.shared_dir / name).read_text(encoding='utf-8'))
             except (OSError, ValueError):
                 continue
-            if report.get('pc') != self.pc_name:
-                self.consider(report)
+            self.consider(report)
 
     def run_forever(self):
         while True:
