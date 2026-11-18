@@ -248,20 +248,39 @@ class CodexQuestionTests(FakeEnvironment):
         self.assertEqual((page['events'][-1]['kind'], page['events'][-1]['text']), ('status', '已回答選項題：B. 水星'))
         self.assertFalse([e for e in page['events'] if 'send_user_message_question_reply' in e['text']])
 
-    def test_a_question_without_options_takes_words_and_a_plain_message_ends_it(self):
+    def test_a_question_without_options_takes_words_and_stays_through_a_plain_message(self):
         transcript = h.Transcript(self.sources['codex'].transcript_path(X), h.CodexParser)
         drain(transcript)
         append_lines(transcript.path, codex_question_lines('call_q2', '兩片板子之間的間距是多少 mm？', ()))
         transcript.refresh()
         question = transcript.page(0, '')['question']
         self.assertEqual((question['questionId'], question['questions'][0]['options']), ('call_q2', []))
-        # The person typed something else instead: the card is no longer what comes next.
+        # The person typed something else meanwhile: Codex keeps the card up (home PC 11/19).
         append_lines(transcript.path, [{'timestamp': '2026-11-04T16:30:00Z', 'type': 'event_msg', 'payload': {
             'type': 'item_completed', 'item': {'type': 'UserMessage', 'content': [{'type': 'text', 'text': '殼上下鎖起來就好'}]}}}])
         transcript.refresh()
         page = transcript.page(0, '')
-        self.assertIsNone(page['question'])
+        self.assertEqual(page['question']['questionId'], 'call_q2')
         self.assertEqual(page['events'][-1]['text'], '殼上下鎖起來就好')
+
+    def test_waiting_cards_come_oldest_first_and_a_card_gone_from_the_pc_is_dropped(self):
+        """Codex pages the cards it waits on ("1 of 2") and shows the oldest (home PC 11/19)."""
+        transcript = h.Transcript(self.sources['codex'].transcript_path(X), h.CodexParser)
+        drain(transcript)
+        append_lines(transcript.path, codex_question_lines('call_a', '分頁檔：已按「是」了嗎？', ('已按「是」', '先不更動')))
+        append_lines(transcript.path, codex_question_lines('call_b', '恢復挖礦的 `elevate` 請求等手機核准', ('已在手機核准', '先保持停止')))
+        transcript.refresh()
+        self.assertEqual(transcript.page(0, '')['question']['questionId'], 'call_a')
+        append_lines(transcript.path, [codex_reply_line('call_a', '分頁檔：已按「是」了嗎？', '先不更動')])
+        transcript.refresh()
+        self.assertEqual(transcript.page(0, '')['question']['questionId'], 'call_b', 'the next card comes up')
+        with transcript.lock:
+            transcript.parser.drop_question('call_b')
+        transcript.refresh()
+        self.assertIsNone(transcript.page(0, '')['question'])
+        # The same card read again (the rollout written once more) does not come back.
+        transcript.parser.add_question({'questionId': 'call_b', 'questions': []})
+        self.assertIsNone(transcript.parser.question)
 
     def test_an_older_rollout_reads_the_question_from_the_tool_call(self):
         parser = h.CodexParser()

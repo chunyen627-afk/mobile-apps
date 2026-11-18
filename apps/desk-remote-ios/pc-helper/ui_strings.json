@@ -47,6 +47,7 @@
     "modes": ["要求核准", "代我核准"],
     "stop": "停止",
     "submit": "傳送",
+    "submit_next": "下一步",
     "question_card": "問題",
     "queue_prefix": "預覽佇列中的第",
     "queue_sep": "：",

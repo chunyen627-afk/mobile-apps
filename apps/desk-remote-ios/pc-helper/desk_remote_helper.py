@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.86'
+VERSION = '0.5.87'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -914,11 +914,30 @@ class CodexParser:
         self.modern = False
         self.calls = {}
         self.status = 'idle'
-        self.question = None  # the card above the composer: one option per question, or words
+        # The cards above the composer, oldest first: Codex keeps every unanswered card and pages
+        # them ("1 of 2"), showing the oldest (home PC 11/19: the phone showed the newer card while
+        # the PC asked the older one, and the answer found no such question on screen).
+        self.pending = []
+        self.dropped = set()
         self.model = self.effort = self.mode = None
         self.turn_ts = None  # when the last turn_context (model, effort, mode) was written
         self.context = self.window = None
         self.rate_limits = self.rate_ts = None
+
+    @property
+    def question(self):
+        """The card the PC shows now (one option per question, or words), or None."""
+        return self.pending[0] if self.pending else None
+
+    def add_question(self, question):
+        if question and question['questionId'] not in self.dropped \
+                and all(q['questionId'] != question['questionId'] for q in self.pending):
+            self.pending.append(question)
+
+    def drop_question(self, question_id):
+        """A card the PC no longer shows (closed with 解除, found when an answer looked for it)."""
+        self.dropped.add(question_id)
+        self.pending = [q for q in self.pending if q['questionId'] != question_id]
 
     def feed(self, obj):
         kind = obj.get('type')
@@ -958,8 +977,6 @@ class CodexParser:
                 if ptype == 'user_message' and codex_reply(text) is not None:
                     return self.answered(codex_reply(text), ts)
                 if text.strip() and not is_noise(text):
-                    if ptype == 'user_message':
-                        self.question = None  # the person moved on; the card is no longer the next thing
                     if ptype == 'agent_message':
                         return [{'kind': 'assistant', 'text': text, 'ts': ts, 'images': text_images(text)}]
                     return [{'kind': 'user', 'text': text, 'ts': ts}]
@@ -976,7 +993,7 @@ class CodexParser:
                 except ValueError:
                     data = raw
                 if name == CODEX_QUESTION_TOOL:
-                    self.question = codex_question_from(payload.get('call_id'), data) or self.question
+                    self.add_question(codex_question_from(payload.get('call_id'), data))
                     return []  # a card on the phone, not a tool row
                 text = summarize_input(name, data) if isinstance(data, dict) else str(raw or '')
                 return [{'kind': 'tool_call', 'tool': name, 'text': text, 'ts': ts}]
@@ -992,8 +1009,8 @@ class CodexParser:
 
     def answered(self, answers, ts):
         """The card's reply (from the PC or the phone): the question is done, shown as a status."""
-        if self.question and any(call_id == self.question['questionId'] for call_id, _ in answers):
-            self.question = None
+        done = {call_id for call_id, _ in answers}
+        self.pending = [q for q in self.pending if q['questionId'] not in done]
         chosen = '、'.join(answer for _, answer in answers if answer.strip())
         return [{'kind': 'status', 'text': f'已回答選項題：{chosen}' if chosen else '已回答選項題', 'ts': ts}]
 
@@ -1007,13 +1024,14 @@ class CodexParser:
             images = images_of(item.get('content'))
             if not (text.strip() and not is_noise(text)):
                 return []
-            self.question = None  # the person moved on; the card is no longer the next thing
+            # A message typed meanwhile leaves the cards up (home PC 11/19: a card stayed through
+            # two messages); only its reply, or its 解除, ends one.
             return [{'kind': 'user', 'text': text, 'ts': ts, 'images': images}]
         if itype == 'AgentMessage':
             if isinstance(item.get('questions'), list):
                 # `request_user_input_async`: the message's text repeats the card's words (title and
                 # options), so the card alone is shown (live 11/5).
-                self.question = codex_question_from(item.get('id'), {'questions': item['questions']}) or self.question
+                self.add_question(codex_question_from(item.get('id'), {'questions': item['questions']}))
                 return []
             text = flatten(item.get('content'))  # Automation heartbeats are echoed back; hide those too.
             return [{'kind': 'assistant', 'text': text, 'ts': ts, 'images': text_images(text)}] \
@@ -4687,8 +4705,17 @@ class ActionRunner:
         self.open_conversation(action)
         self.recheck(action)
         self.presence.begin_own()
-        self.driver.answer_question(app, info['doc'], question, action['answers'])
-        self.presence.end_own()
+        try:
+            self.driver.answer_question(app, info['doc'], question, action['answers'])
+        except ActionError as failed:
+            # Codex's card is gone from the PC (closed there with 解除, which writes nothing): the
+            # phone stops showing it, and the next card, if any, comes up.
+            if failed.code == 'question-changed' and hasattr(transcript.parser, 'drop_question'):
+                with transcript.lock:
+                    transcript.parser.drop_question(question['questionId'])
+            raise
+        finally:
+            self.presence.end_own()
         self.update(action, message='已選好，確認中')
         deadline = self.clock() + self.verify_seconds
         while True:

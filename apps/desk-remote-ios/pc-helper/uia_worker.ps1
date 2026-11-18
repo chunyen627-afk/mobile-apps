@@ -850,6 +850,9 @@ function Find-CodexCard($scope, $s, $question) {
       $box = $walker.GetParent($box)
       if (-not $box) { break }
       if (Find-ByName $box $CT::Button $s.submit) { return $box }
+      # Several cards waiting are paged ("1 of 2", home PC 11/19): each but the last has
+      # submit_next instead of the send button.
+      if ($s.submit_next -and (Find-ByName $box $CT::Button $s.submit_next)) { return $box }
     }
   }
   return $null
@@ -912,6 +915,7 @@ function Answer-CodexQuestions($w, $page, $s, $questions) {
         Scroll-To $edit
         Paste-Text $w $edit $q.other
         $send = Find-ByName $card $CT::Button $s.submit
+        if (-not $send -and $s.submit_next) { $send = Find-ByName $card $CT::Button $s.submit_next }
         if (-not $send) { Fail 'not-found' "no '$($s.submit)' button on the card" }
         if (-not (Invoke-Element $send)) { Click-Element $w $send 'the send button' }
         $hows += 'words:send'
