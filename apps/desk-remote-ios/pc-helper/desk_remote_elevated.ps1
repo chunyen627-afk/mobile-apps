@@ -288,6 +288,22 @@ if ($Ask) {
   exit 0
 }
 
+# Started by hand (Start-ScheduledTask), this administrator's console takes the foreground even
+# hidden, and Windows then lets no ordinary program take it back: the helper could not bring a
+# desktop app up until someone touched the PC (home PC 11/19 06:52, "in front: powershell").
+# Hand the foreground on to whoever asks next.
+try {
+  Add-Type -Namespace DeskElevated -Name Fg -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool AllowSetForegroundWindow(int processId);
+[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern System.IntPtr GetForegroundWindow();
+[System.Runtime.InteropServices.DllImport("kernel32.dll")] public static extern System.IntPtr GetConsoleWindow();
+'@
+  if ([DeskElevated.Fg]::GetForegroundWindow() -eq [DeskElevated.Fg]::GetConsoleWindow()) {
+    $null = [DeskElevated.Fg]::AllowSetForegroundWindow(-1)  # ASFW_ANY
+    Log 'gave the foreground away (this console had it)'
+  }
+} catch { Log "foreground hand-off failed: $($_.Exception.Message)" }
+
 $listener = New-Object Net.Sockets.TcpListener ([Net.IPAddress]::Loopback, [int]$cfg.port)
 $listener.Start()
 Log "listening on 127.0.0.1:$($cfg.port)"

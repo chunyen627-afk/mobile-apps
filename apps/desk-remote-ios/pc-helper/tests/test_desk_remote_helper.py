@@ -282,6 +282,26 @@ class CodexQuestionTests(FakeEnvironment):
         transcript.parser.add_question({'questionId': 'call_b', 'questions': []})
         self.assertIsNone(transcript.parser.question)
 
+    def test_a_card_from_before_the_last_3_mb_is_still_found(self):
+        """The first read starts 3 MB from the end; a card asked before that is still up (home PC
+        11/19: a 23 MB conversation, the older card missing on the phone)."""
+        path = self.sources['codex'].transcript_path(X)
+        append_lines(path, codex_question_lines('call_old_a', '分頁檔：已按「是」了嗎？', ('已按「是」', '先不更動')))
+        append_lines(path, codex_question_lines('call_old_b', '舊的已答題', ('甲', '乙')))
+        append_lines(path, [codex_reply_line('call_old_b', '舊的已答題', '甲')])
+        filler = {'timestamp': '2026-11-04T16:25:00Z', 'type': 'event_msg', 'payload': {'type': 'token_count', 'info': {}}}
+        append_lines(path, [filler] * 400)
+        append_lines(path, codex_question_lines('call_new', '恢復挖礦的 `elevate` 請求等手機核准', ('已在手機核准', '先保持停止')))
+        size = Path(path).stat().st_size
+        tail = len(json.dumps(filler, ensure_ascii=False).encode()) * 50
+        self.assertLess(tail, size)
+        with mock.patch.object(h, 'TAIL_BYTES', tail):
+            transcript = h.Transcript(path, h.CodexParser)
+            transcript.refresh()
+        self.assertTrue(transcript.earlier, 'the read started in the middle')
+        self.assertEqual([q['questionId'] for q in transcript.parser.pending], ['call_old_a', 'call_new'])
+        self.assertEqual(transcript.page(0, '')['question']['questionId'], 'call_old_a')
+
     def test_an_older_rollout_reads_the_question_from_the_tool_call(self):
         parser = h.CodexParser()
         call = {'type': 'response_item', 'payload': {'type': 'function_call', 'name': 'request_user_input_async',

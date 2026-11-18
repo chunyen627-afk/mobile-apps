@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.87'
+VERSION = '0.5.88'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -924,6 +924,10 @@ class CodexParser:
         self.context = self.window = None
         self.rate_limits = self.rate_ts = None
 
+    # The lines a first read from the middle still looks at before it (Transcript.catch_up): the
+    # cards and their replies.
+    catch_up_marks = (b'"questions', CODEX_REPLY_TAG.encode())
+
     @property
     def question(self):
         """The card the PC shows now (one option per question, or words), or None."""
@@ -1110,6 +1114,8 @@ class Transcript:
             if start is None:
                 start = max(0, size - TAIL_BYTES)
                 self.earlier = start > 0
+                if start > 0 and getattr(self.parser, 'catch_up_marks', None):
+                    self.catch_up(start)
             if size == start:
                 self.offset = start
                 return
@@ -1141,6 +1147,29 @@ class Transcript:
                     continue
                 for event in produced:
                     self.add(event)
+
+    def catch_up(self, end):
+        """Before the first read from the middle: the lines with the parser's marks from the part
+        not read, for state that outlives 3 MB of conversation (a Codex card asked 25 minutes and
+        a 20 MB compaction earlier was still up, home PC 11/19). Their events are not shown."""
+        marks = self.parser.catch_up_marks
+        with self.path.open('rb') as handle:
+            while handle.tell() < end:
+                raw = handle.readline()
+                if not raw:
+                    break
+                if not any(mark in raw for mark in marks):
+                    continue
+                try:
+                    obj = json.loads(raw.decode('utf-8'))
+                except (ValueError, UnicodeDecodeError):
+                    continue
+                if not isinstance(obj, dict) or obj.get('type') == 'compacted':
+                    continue
+                try:
+                    self.parser.feed(obj)
+                except (AttributeError, TypeError, KeyError, IndexError):
+                    continue
 
     def add(self, raw):
         self.seq += 1

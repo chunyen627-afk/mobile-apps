@@ -883,7 +883,17 @@ function Answer-CodexQuestions($w, $page, $s, $questions) {
   [DeskWin]::GetCursorPos([ref]$cursor) | Out-Null
   $hows = @()
   try {
-    Bring-Front $w
+    # Picking an option needs no foreground (a UI Automation pattern does it), so a window that
+    # cannot be brought up does not stop it: an administrator's hidden console held the foreground
+    # after the elevated companion restarted, and Windows lets no ordinary program take it from
+    # there (home PC 11/19 06:52, "in front: powershell"). Words still need the window in front.
+    $fronted = $true
+    try { Bring-Front $w } catch {
+      $words = @(@($questions) | Where-Object { -not @(@($_.labels) | Where-Object { $_ }).Count })
+      if ($words.Count -or "$_" -notmatch '^DESK:focus-failed:') { throw }
+      $fronted = $false
+      $hows += 'behind'
+    }
     foreach ($q in @($questions)) {
       $card = $null
       for ($i = 0; $i -lt 12 -and -not $card; $i++) {
@@ -901,8 +911,10 @@ function Answer-CodexQuestions($w, $page, $s, $questions) {
         $p = $null
         if ($option.TryGetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern, [ref]$p)) { $p.Select(); $hows += 'select' }
         elseif (Invoke-Element $option) { $hows += 'invoke' }
-        else { Click-Element $w $option 'the option'; $hows += 'click' }
+        elseif ($fronted) { Click-Element $w $option 'the option'; $hows += 'click' }
+        else { Fail 'focus-failed' 'the option has no pattern and the window cannot come to the front' }
         if (-not (Codex-Card-Gone $page $s $q.question 2000)) {
+          if (-not $fronted) { Fail 'toggle-failed' 'the card stayed after the pick (the window could not come to the front for a click)' }
           # The pattern may be taken without the page reacting: one real click on it.
           $card = Find-CodexCard $page $s $q.question
           $option = if ($card) { Codex-Option $card $labels[0] } else { $null }
