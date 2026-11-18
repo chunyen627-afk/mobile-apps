@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.79'
+VERSION = '0.5.80'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -688,6 +688,15 @@ def codex_reply(text):
             if isinstance(parts, list) else None
         out.append((call_id, str(item.get('answer') or '')))
     return out
+
+
+def suggested_message(hint, usual):
+    """The desktop app's suggested next message: its message box's help text when that is not
+    one of the box's usual hints (11/18). None when the app shows no suggestion."""
+    hint = (hint or '').strip()
+    if not hint or usual is None or hint in usual:
+        return None
+    return hint[:500]
 
 
 def suggestions_from(data):
@@ -2615,6 +2624,9 @@ class Hub:
                 meta['model'], meta['effort'] = label, effort or meta['effort']
             if seen.get('mode'):
                 meta['permission'] = seen['mode']
+            suggestion = suggested_message(seen.get('hint'), (self.strings.get(app) or {}).get('edit_hints'))
+            if suggestion:
+                meta['suggestion'] = suggestion
         return meta
 
     def session_for_doc(self, app, doc):
@@ -2673,7 +2685,7 @@ class Hub:
             if now_waiting != waiting:
                 changed = True
             now_meta = self.meta(app, session_id, transcript)
-            if any(now_meta.get(k) != meta.get(k) for k in ('model', 'effort', 'permission')):
+            if any(now_meta.get(k) != meta.get(k) for k in ('model', 'effort', 'permission', 'suggestion')):
                 changed = True  # a switch made from the phone shows without waiting for a reply
             if page['events'] or page['reset'] or changed or time.monotonic() >= deadline or (stop and stop()):
                 page.update({'ok': True, 'prompt': prompt, 'meta': now_meta})
@@ -3487,9 +3499,11 @@ class UiWatcher:
                                'model': answer.get('model'), 'usage': usage, 'usageAt': usage_at,
                                'card': before.get('card'), 'cardAt': before.get('cardAt'),
                                'mode': answer.get('mode'), 'running': answer.get('running'),
-                               'update': answer.get('update')}
+                               'update': answer.get('update'), 'hint': answer.get('hint')}
             if self.memory and answer.get('usage') and answer['usage'] != before.get('usage'):
                 self.remember_usage()
+        if answer.get('hint') != before.get('hint') and answer.get('window'):
+            logging.info('%s message box hint: %s', app, str(answer.get('hint'))[:80])
         if prompt and (not old or old['promptId'] != prompt['promptId']):
             title = prompt['doc'].removesuffix(' - Claude Code')
             session_id, _ = self.hub.session_for_doc(app, prompt['doc'])
@@ -7269,6 +7283,7 @@ class FakeDriver:
             answer['mode'] = ClaudeSource.PERMISSION_LABELS.get(data.get('permissionMode'), data.get('permissionMode'))
             answer['running'] = self.open_doc.get(app) in self.running
         answer['update'] = (getattr(self, 'fake_update', None) or {}).get(app)
+        answer['hint'] = (getattr(self, 'fake_hint', None) or {}).get(app)
         return answer
 
     def probe(self, app, type=False, menus=False, text=''):

@@ -1792,8 +1792,11 @@ function Run-Command($c) {
           if ($s.stop -and $n -eq $s.stop) { $running = $true }
         }
       }
+      # The message box's help text: Claude puts its suggested next message there (the grey text
+      # Tab accepts; asked 11/18 to show it on the phone and take it like Tab).
+      $hint = if ($edit) { $edit.Current.HelpText } else { $null }
       return @{ ok = $true; window = $true; docs = @(Get-Docs $w); edit = [bool]$edit; prompt = $prompt
-        model = $model; usage = $usage; mode = $mode; running = $running; update = $update }
+        model = $model; usage = $usage; mode = $mode; running = $running; update = $update; hint = $hint }
     }
     'model' {
       $w = Need-Window $c.app

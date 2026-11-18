@@ -736,6 +736,7 @@ class DrivingTests(FakeEnvironment):
         self.assertEqual(started[-1]['at'], '2026-11-17T09:30:00Z')
         started.clear()
         (folder / 'repair_result.json').write_text('{}', encoding='utf-8')
+        os.utime(folder / 'repair_result.json', (afternoon + 60, afternoon + 60))  # not the real clock
         now[0] = h.datetime(2026, 11, 18, 3, 0, 30, tzinfo=h.TAIWAN).timestamp()
         self.assertFalse(watch.consider(dict(menu, reason='自動修驗證')), 'not even at night')
         self.assertTrue(watch.consider(report), 'at 03:00 the rest is repaired')
@@ -2336,6 +2337,22 @@ class PopupTests(FakeEnvironment):
         run_all(runner)
         status = runner.status(body['id'])
         self.assertEqual((status['verified'], status['message']), (False, '已選「要求核准」（下一則回覆起生效）'))
+
+    def test_the_desktop_apps_suggested_message_reaches_the_phone(self):
+        # 11/18, the user: 「app也能有提示文。並能選類似tap鍵接受送出嗎」: the grey text Claude's Tab
+        # accepts is the message box's help text; its usual hint is no suggestion.
+        hub, driver, watcher, _ = drive(self.fake)
+        shown, _ = hub.session_for_doc('claude', driver.open_doc['claude'])
+        other = A if shown != A else B
+        driver.fake_hint = {'claude': '按 Enter 傳送，按 Ctrl+Enter 排入佇列稍後傳送'}
+        watcher.tick()
+        self.assertNotIn('suggestion', hub.events('claude', shown, 0, '', 0)['meta'])
+        driver.fake_hint = {'claude': 'P4 底下說明框改成這週的講法'}
+        watcher.tick()
+        self.assertEqual(hub.events('claude', shown, 0, '', 0)['meta']['suggestion'], 'P4 底下說明框改成這週的講法')
+        self.assertNotIn('suggestion', hub.events('claude', other, 0, '', 0)['meta'], 'only the conversation on screen')
+        self.assertIsNone(h.suggested_message('', ['x']))
+        self.assertIsNone(h.suggested_message('提示', None), 'an app whose usual hints are unknown offers nothing')
 
     def test_a_codex_mode_pick_shows_until_the_next_turn_records_one(self):
         hub, _, watcher, runner = drive(self.fake)
