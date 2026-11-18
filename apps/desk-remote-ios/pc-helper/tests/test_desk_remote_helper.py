@@ -2344,6 +2344,8 @@ class PopupTests(FakeEnvironment):
         hub, driver, watcher, _ = drive(self.fake)
         shown, _ = hub.session_for_doc('claude', driver.open_doc['claude'])
         other = A if shown != A else B
+        key, _ = driver.pending_prompt('claude')
+        driver.answered.add(key)  # no suggestion while a permission prompt waits
         driver.fake_hint = {'claude': '按 Enter 傳送，按 Ctrl+Enter 排入佇列稍後傳送'}
         watcher.tick()
         self.assertNotIn('suggestion', hub.events('claude', shown, 0, '', 0)['meta'])
@@ -2351,6 +2353,17 @@ class PopupTests(FakeEnvironment):
         watcher.tick()
         self.assertEqual(hub.events('claude', shown, 0, '', 0)['meta']['suggestion'], 'P4 底下說明框改成這週的講法')
         self.assertNotIn('suggestion', hub.events('claude', other, 0, '', 0)['meta'], 'only the conversation on screen')
+        # Live 11/18 the suggestion is the placeholder: the help text goes empty and the box is read
+        # with OCR, once while it shows (Windows OCR spaces Chinese characters apart).
+        driver.fake_hint, driver.fake_ocr = {'claude': ''}, {'claude': 'P4 底 下 說 明 框 改 成 這 週 的 講 法'}
+        watcher.tick()
+        watcher.tick()
+        self.assertEqual(hub.events('claude', shown, 0, '', 0)['meta']['suggestion'], 'P4 底下說明框改成這週的講法')
+        self.assertEqual(driver.calls.count(('read_suggestion', 'claude')), 1, 'read once while it shows')
+        driver.fake_hint = {'claude': '輸入 / 以使用指令'}
+        watcher.tick()
+        self.assertNotIn('suggestion', hub.events('claude', shown, 0, '', 0)['meta'], 'gone when the usual hint is back')
+        self.assertEqual(h.ocr_text(' 用 Tab  接 受 A B '), '用 Tab 接受 A B')  # only Chinese-to-Chinese gaps go
         self.assertIsNone(h.suggested_message('', ['x']))
         self.assertIsNone(h.suggested_message('提示', None), 'an app whose usual hints are unknown offers nothing')
 

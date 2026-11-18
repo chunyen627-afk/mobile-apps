@@ -1794,9 +1794,13 @@ function Run-Command($c) {
       }
       # The message box's help text: Claude puts its suggested next message there (the grey text
       # Tab accepts; asked 11/18 to show it on the phone and take it like Tab).
+      # Claude's suggestion itself is drawn as the placeholder, out of reach (live 11/18): the help
+      # text then goes empty, and the helper reads the box with OCR (suggestion_ocr.ps1).
       $hint = if ($edit) { $edit.Current.HelpText } else { $null }
+      $boxEmpty = if ($edit) { [string]::IsNullOrWhiteSpace((Box-Text $edit)) } else { $null }
       return @{ ok = $true; window = $true; docs = @(Get-Docs $w); edit = [bool]$edit; prompt = $prompt
-        model = $model; usage = $usage; mode = $mode; running = $running; update = $update; hint = $hint }
+        model = $model; usage = $usage; mode = $mode; running = $running; update = $update; hint = $hint
+        boxEmpty = $boxEmpty; hwnd = [int64]$w.Current.NativeWindowHandle }
     }
     'model' {
       $w = Need-Window $c.app

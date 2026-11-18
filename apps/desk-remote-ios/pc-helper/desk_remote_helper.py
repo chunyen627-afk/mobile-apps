@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.80'
+VERSION = '0.5.81'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -697,6 +697,15 @@ def suggested_message(hint, usual):
     if not hint or usual is None or hint in usual:
         return None
     return hint[:500]
+
+
+CJK_GAP = re.compile(r'(?<=[^\x00-\x7f]) (?=[^\x00-\x7f])')
+
+
+def ocr_text(text):
+    """Windows OCR's line as written: it puts a space between Chinese characters."""
+    text = ' '.join((text or '').split())
+    return CJK_GAP.sub('', text)[:500] or None
 
 
 def suggestions_from(data):
@@ -2624,9 +2633,8 @@ class Hub:
                 meta['model'], meta['effort'] = label, effort or meta['effort']
             if seen.get('mode'):
                 meta['permission'] = seen['mode']
-            suggestion = suggested_message(seen.get('hint'), (self.strings.get(app) or {}).get('edit_hints'))
-            if suggestion:
-                meta['suggestion'] = suggestion
+            if seen.get('suggestion') and seen.get('suggestionDoc') == docs[0]:
+                meta['suggestion'] = seen['suggestion']
         return meta
 
     def session_for_doc(self, app, doc):
@@ -3016,6 +3024,22 @@ class WindowsDriver:
 
     def inspect(self, app):
         return self.ask(app, cmd='inspect')
+
+    def read_suggestion(self, app, hwnd, timeout=30):
+        """The grey suggested message in the app's empty message box, read with Windows OCR by
+        suggestion_ocr.ps1 (its own DPI-aware process; nothing written to disk); None if unread."""
+        import subprocess
+        try:
+            done = subprocess.run(
+                ['powershell.exe', '-NoProfile', '-NonInteractive', '-STA', '-ExecutionPolicy', 'Bypass', '-File',
+                 str(Path(__file__).with_name('suggestion_ocr.ps1')), '-Hwnd', str(int(hwnd)),
+                 '-EditName', self.strings[app]['edit']],
+                capture_output=True, timeout=timeout, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+            lines = done.stdout.decode('utf-8', 'replace').strip().splitlines()
+            data = json.loads(lines[-1]) if lines else {}
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            return None
+        return ocr_text(data.get('text')) if data.get('ok') else None
 
     def docs(self, app):
         answer = self.ask(app, cmd='docs')
@@ -3489,6 +3513,9 @@ class UiWatcher:
             prompt = {'promptId': prompt_id(app, docs[0], raw['text']), 'text': raw['text'], 'tool': None,
                       'doc': docs[0]}
         with self.lock:
+            before = dict(self.state.get(app) or {})
+        suggestion, suggestion_doc = self.suggestion(app, answer, before, prompt)
+        with self.lock:
             before = self.state.get(app) or {}
             old = before.get('prompt')
             # The usage button is only there while the window is: keep the last reading and when.
@@ -3499,16 +3526,39 @@ class UiWatcher:
                                'model': answer.get('model'), 'usage': usage, 'usageAt': usage_at,
                                'card': before.get('card'), 'cardAt': before.get('cardAt'),
                                'mode': answer.get('mode'), 'running': answer.get('running'),
-                               'update': answer.get('update'), 'hint': answer.get('hint')}
+                               'update': answer.get('update'), 'hint': answer.get('hint'),
+                               'suggestion': suggestion, 'suggestionDoc': suggestion_doc}
             if self.memory and answer.get('usage') and answer['usage'] != before.get('usage'):
                 self.remember_usage()
-        if answer.get('hint') != before.get('hint') and answer.get('window'):
-            logging.info('%s message box hint: %s', app, str(answer.get('hint'))[:80])
         if prompt and (not old or old['promptId'] != prompt['promptId']):
             title = prompt['doc'].removesuffix(' - Claude Code')
             session_id, _ = self.hub.session_for_doc(app, prompt['doc'])
             self.send(f'🔔 {APP_NAMES[app]} 在等你核准', f'{self.pc_name}・「{title}」：{prompt["text"][:120]}', 4, ['bell'],
                       open_link(self.pc_name, app, session_id, title) if session_id else open_link(self.pc_name))
+
+    def suggestion(self, app, answer, before, prompt):
+        """(text, page) of the suggested next message in the app's empty message box, else
+        (None, None). A help text other than the box's usual hints is the suggestion itself; an
+        empty one is Claude's (11/18): the suggestion is drawn as the placeholder, out of UI
+        Automation's reach, and read once with OCR when it appears (each reading about a second,
+        nothing on screen moves)."""
+        docs = answer.get('docs') or []
+        usual = (self.hub.strings.get(app) or {}).get('edit_hints')
+        if usual is None or not answer.get('window') or len(docs) != 1 or prompt or answer.get('running'):
+            return None, None
+        hint = answer.get('hint')
+        offered = suggested_message(hint, usual)
+        if offered:
+            return offered, docs[0]
+        if hint != '' or not answer.get('boxEmpty') or not answer.get('hwnd'):
+            return None, None
+        if before.get('hint') == '' and before.get('suggestionDoc') == docs[0]:
+            return before.get('suggestion'), docs[0]   # read already
+        if not hasattr(self.driver, 'read_suggestion'):
+            return None, docs[0]
+        text = self.driver.read_suggestion(app, answer['hwnd'])
+        logging.info('%s suggestion read: %s', app, (text or '(none)')[:80])
+        return text, docs[0]
 
     def prompt_for(self, app, session_id):
         info = self.hub.info(app, session_id)
@@ -7284,7 +7334,12 @@ class FakeDriver:
             answer['running'] = self.open_doc.get(app) in self.running
         answer['update'] = (getattr(self, 'fake_update', None) or {}).get(app)
         answer['hint'] = (getattr(self, 'fake_hint', None) or {}).get(app)
+        answer['boxEmpty'], answer['hwnd'] = True, 1
         return answer
+
+    def read_suggestion(self, app, hwnd):
+        self.calls.append(('read_suggestion', app))
+        return ocr_text((getattr(self, 'fake_ocr', None) or {}).get(app))
 
     def probe(self, app, type=False, menus=False, text=''):
         """The self-check's look: the fake windows have everything, unless a test took it away."""
