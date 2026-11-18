@@ -2359,13 +2359,52 @@ class PopupTests(FakeEnvironment):
         watcher.tick()
         watcher.tick()
         self.assertEqual(hub.events('claude', shown, 0, '', 0)['meta']['suggestion'], 'P4 底下說明框改成這週的講法')
-        self.assertEqual(driver.calls.count(('read_suggestion', 'claude')), 1, 'read once while it shows')
+        self.assertEqual(getattr(driver, 'ocr_reads', []).count('claude'), 1, 'read once while it shows')
         driver.fake_hint = {'claude': '輸入 / 以使用指令'}
         watcher.tick()
         self.assertNotIn('suggestion', hub.events('claude', shown, 0, '', 0)['meta'], 'gone when the usual hint is back')
         self.assertEqual(h.ocr_text(' 用 Tab  接 受 A B '), '用 Tab 接受 A B')  # only Chinese-to-Chinese gaps go
         self.assertIsNone(h.suggested_message('', ['x']))
         self.assertIsNone(h.suggested_message('提示', None), 'an app whose usual hints are unknown offers nothing')
+
+    def test_codexs_suggested_message_is_read_from_its_idle_box(self):
+        # 11/18, the user: 「好，做 Codex」: Codex predicts the next message too, drawn over its empty
+        # box (data-cumberbatch, hidden from UI Automation); its help text is always empty, so the
+        # idle box is read with OCR and Codex's usual placeholders are no suggestion.
+        hub, driver, watcher, _ = drive(self.fake)
+        shown, _ = hub.session_for_doc('codex', driver.open_doc['codex'])
+        key, _ = driver.pending_prompt('codex')
+        if key:
+            driver.answered.add(key)
+        now = [time.time() + 100]  # the first look (in drive) read it once already
+        watcher.clock = lambda: now[0]
+        reads = lambda: getattr(driver, 'ocr_reads', []).count('codex')
+        driver.fake_ocr = {'codex': '要 求 後 續 跟 進 變 更'}   # Codex has not predicted (yet)
+        before = reads()
+        watcher.tick()
+        self.assertNotIn('suggestion', hub.events('codex', shown, 0, '', 0)['meta'])
+        self.assertEqual(reads(), before + 1)
+        watcher.tick()
+        self.assertEqual(reads(), before + 1, 'read again only after a while')
+        now[0] += 16
+        driver.fake_ocr = {'codex': '幫 我 把 課 文 也 加 進 \\N 。 rd 裡 , 後 面 放 課 文 詳 解 和 考 題 , 存 到 桌 面 。 按 Tab 鍵 接 受'}
+        watcher.tick()
+        self.assertEqual(hub.events('codex', shown, 0, '', 0)['meta']['suggestion'],
+                         '幫我把課文也加進 Word 裡，後面放課文詳解和考題，存到桌面。')
+        now[0] += 60
+        watcher.tick()
+        self.assertEqual(reads(), before + 2, 'kept once read')
+        # A Codex turn that gets no prediction: a few readings, then none until a turn runs.
+        driver.running.add(driver.open_doc['codex'])
+        watcher.tick()
+        self.assertNotIn('suggestion', hub.events('codex', shown, 0, '', 0)['meta'], 'gone while a turn runs')
+        driver.running.discard(driver.open_doc['codex'])
+        driver.fake_ocr = {'codex': '與 Codex 協作'}
+        for _ in range(8):
+            now[0] += 16
+            watcher.tick()
+        self.assertEqual(reads(), before + 2 + watcher.SUGGESTION_TRIES)
+        self.assertNotIn('suggestion', hub.events('codex', shown, 0, '', 0)['meta'])
 
     def test_a_codex_mode_pick_shows_until_the_next_turn_records_one(self):
         hub, _, watcher, runner = drive(self.fake)
