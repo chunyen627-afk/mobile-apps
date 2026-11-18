@@ -262,9 +262,11 @@ public struct ConversationMeta: Codable, Equatable, Sendable {
     public let permissionPending: Bool?
     /// Why nothing is known yet, e.g. a Codex thread imported from another account (helper 0.5.5).
     public let note: String?
+    /// The desktop app's suggested next message, the grey text its Tab key accepts (helper 0.5.80, asked 11/18).
+    public let suggestion: String?
 
     public init(model: String?, modelId: String? = nil, effort: String?, context: Context?, permission: String? = nil,
-                permissionPending: Bool? = nil, note: String? = nil) {
+                permissionPending: Bool? = nil, note: String? = nil, suggestion: String? = nil) {
         self.model = model
         self.modelId = modelId
         self.effort = effort
@@ -272,6 +274,7 @@ public struct ConversationMeta: Codable, Equatable, Sendable {
         self.permission = permission
         self.permissionPending = permissionPending
         self.note = note
+        self.suggestion = suggestion
     }
 }
 

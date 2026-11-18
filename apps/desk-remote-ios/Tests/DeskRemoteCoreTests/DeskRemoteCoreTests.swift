@@ -606,6 +606,20 @@ final class MetaAndUsageTests: XCTestCase {
         XCTAssertEqual(DeskText.permission(seen), "要求核准")
     }
 
+    func testTheDesktopAppsSuggestedMessageComesWithTheMeta() throws {
+        // Helper 0.5.80 (asked 11/18): the grey text the desktop app's Tab key accepts.
+        let page = try HelperClient.decode(EventPage.self, status: 200, data: data("""
+        {"ok":true,"epoch":"e","reset":true,"events":[],"earlier":false,"cursor":0,"status":"idle","prompt":null,
+         "meta":{"model":"Opus 5.5","effort":"高","context":null,"suggestion":"P4 底下說明框改成這週的講法"}}
+        """))
+        XCTAssertEqual(page.meta?.suggestion, "P4 底下說明框改成這週的講法")
+        let older = try HelperClient.decode(EventPage.self, status: 200, data: data("""
+        {"ok":true,"epoch":"e","reset":true,"events":[],"earlier":false,"cursor":0,"status":"idle","prompt":null,
+         "meta":{"model":"Opus 5.5","effort":"高","context":null}}
+        """))
+        XCTAssertNil(older.meta?.suggestion, "helpers before 0.5.80 send none")
+    }
+
     func testLogKeepsMetaWhenAPageHasNone() {
         var log = TranscriptLog()
         let meta = ConversationMeta(model: "Opus 5.5", effort: "高", context: nil)

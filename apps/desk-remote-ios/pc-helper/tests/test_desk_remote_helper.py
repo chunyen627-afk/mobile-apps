@@ -622,6 +622,8 @@ class DrivingTests(FakeEnvironment):
         # Someone at the PC: not now.
         _, _, _, busy = drive(self.fake, dict(self.fake.cfg['presence'], idleSeconds=5))
         self.assertEqual(busy.submit('selfcheck', None, None, {})[0], 409)
+        # Not even when forced (11/17: the repair's check kept opening the model menu on the user).
+        self.assertEqual(busy.submit('selfcheck', None, None, {'reason': '自動修驗證', 'force': True})[0], 409)
 
     def test_the_self_check_plan_runs_weekly_after_updates_and_after_failed_sends(self):
         folder = Path(tempfile.mkdtemp())
@@ -641,20 +643,23 @@ class DrivingTests(FakeEnvironment):
                 self.submitted.append((kind, app, session_id, payload))
                 return self.answers.pop(0) if self.answers else (202, {'id': 'x'})
         runner = Runner()
-        now = [h.datetime(2026, 11, 14, 23, 0).timestamp()]  # a Saturday night
+        now = [h.datetime(2026, 11, 14, 23, 0, tzinfo=h.TAIWAN).timestamp()]  # a Saturday night
         plan = h.SelfCheckPlan(runner, folder, shared, clock=lambda: now[0])
         plan.tick()
         self.assertEqual(runner.submitted, [], 'the first version seen is only remembered')
-        now[0] = h.datetime(2026, 11, 15, 3, 0, 30).timestamp()  # Sunday 03:00
+        now[0] = h.datetime(2026, 11, 15, 3, 0, 30, tzinfo=h.TAIWAN).timestamp()  # Sunday 03:00
         plan.tick()
         self.assertEqual(runner.submitted[-1][3], {'reason': '每週例行'})
         plan.tick()
         self.assertEqual(len(runner.submitted), 1, 'once that night')
-        # Codex updated: checked a few minutes later.
+        # Codex updated: checked at the next Taiwan 03:00, not while someone may use the PC (11/17).
         runner.watcher.versions = {'codex': {'running': '26.1111.2228.0'}}
+        now[0] = h.datetime(2026, 11, 15, 14, 0, tzinfo=h.TAIWAN).timestamp()
         plan.tick()
-        self.assertEqual(len(runner.submitted), 1)
-        now[0] += 200
+        now[0] += 3600
+        plan.tick()
+        self.assertEqual(len(runner.submitted), 1, 'not in the afternoon')
+        now[0] = h.datetime(2026, 11, 16, 3, 0, 5, tzinfo=h.TAIWAN).timestamp()
         plan.tick()
         self.assertEqual(runner.submitted[-1][3], {'reason': 'codex 更新到 26.1111.2228.0'})
         # Busy three times: published as not tested, never as passed.
@@ -713,12 +718,28 @@ class DrivingTests(FakeEnvironment):
         folder = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
         started = []
-        now = [1000000.0]
+        afternoon = h.datetime(2026, 11, 17, 17, 40, tzinfo=h.TAIWAN).timestamp()
+        now = [afternoon]
         watch = h.RepairWatch('repair.ps1', folder, folder, '辦公室', clock=lambda: now[0],
                               start=lambda script, path: started.append(json.loads(path.read_text(encoding='utf-8'))))
         report = {'pc': '家用電腦', 'at': '2026-11-15T19:00:00Z', 'ok': False, 'apps': {}}
         self.assertFalse(watch.consider(dict(report, ok=True)), 'nothing to repair')
-        self.assertTrue(watch.consider(report))
+        # 11/17, the user: at once only when a phone message could not be sent, else at 03:00 Taiwan.
+        menu = dict(report, at='2026-11-17T09:39:00Z',
+                    apps={'claude': {'checks': [{'name': '模型選單', 'status': 'fail'}]}})
+        self.assertFalse(watch.consider(menu), 'a changed menu waits for the night')
+        self.assertFalse(watch.consider(dict(menu, reason='自動修驗證')), "the repair's own check starts nothing")
+        sent = dict(report, at='2026-11-17T09:30:00Z',
+                    apps={'claude': {'checks': [{'name': '手機實際傳訊', 'status': 'fail'}]}})
+        self.assertFalse(watch.consider(dict(sent, at='2026-11-16T22:39:00Z')), 'a send that failed this morning waits')
+        self.assertTrue(watch.consider(sent), 'a send that just failed is repaired at once')
+        self.assertEqual(started[-1]['at'], '2026-11-17T09:30:00Z')
+        started.clear()
+        (folder / 'repair_result.json').write_text('{}', encoding='utf-8')
+        os.utime(folder / 'repair_result.json', (afternoon + 60, afternoon + 60))  # not the real clock
+        now[0] = h.datetime(2026, 11, 18, 3, 0, 30, tzinfo=h.TAIWAN).timestamp()
+        self.assertFalse(watch.consider(dict(menu, reason='自動修驗證')), 'not even at night')
+        self.assertTrue(watch.consider(report), 'at 03:00 the rest is repaired')
         self.assertFalse(watch.consider(report), 'the same report once')
         self.assertFalse(watch.consider(dict(report, at='2026-11-15T19:30:00Z')), 'one repair at a time')
         (folder / 'repair_result.json').write_text('{}', encoding='utf-8')
@@ -1473,6 +1494,43 @@ for line in sys.stdin:
         # ... and read before it, it counts down to that same day's 11:00, not the next day's.
         self.assertEqual(h.merge_claude_usage(None, stale, before, before + 60)['windows'][0]['resetsAt'],
                          h.iso(h.datetime(2026, 11, 15, 11, 0).timestamp()))
+
+    def test_readings_of_the_week_before_are_dropped_and_fresh_ones_carry_their_time(self):
+        # Live 11/15 19:07: the phone showed 75%, Monday 11:00 under the office. The home PC's
+        # button, not yet refreshed after Sunday's 11:00 reset, still said "75% 於 上午11:00" when
+        # read at 14:00 (its card was from 11/13); the office's 4% was sent with its card's time
+        # 13:44 although the button gave it at 18:42, so the phone kept the home PC's as newer.
+        card_at = h.datetime(2026, 11, 13, 16, 45).timestamp()
+        rows = [{'label': '5 小時限制', 'percent': 5, 'reset': '於 下午1:10 重設'},
+                {'label': '每週 · 所有模型', 'percent': 69, 'reset': '週日上午11:00 重設'}]
+        file_at = h.datetime(2026, 11, 14, 20, 53).timestamp()
+        sample = {'windows': [{'label': '每週', 'percent': 73, 'resetsAt': None, 'resetsText': None}],
+                  'sampledAt': h.iso(file_at)}
+        stale = {'label': '每週 · 所有模型', 'percent': 75, 'resetsText': '於 上午11:00 重設'}
+        now = h.datetime(2026, 11, 15, 19, 10).timestamp()
+        self.assertIsNone(h.merge_claude_usage(sample, stale, h.datetime(2026, 11, 15, 14, 0).timestamp(), now, rows, card_at))
+        # The file's 73% alone is gone too: the reset came after it.
+        self.assertIsNone(h.merge_claude_usage(sample, None, None, now, rows, card_at))
+        # Before the reset both stand; the same words read before 11:00 count to that 11:00.
+        before = h.datetime(2026, 11, 15, 10, 0).timestamp()
+        merged = h.merge_claude_usage(sample, stale, before, before + 60, rows, card_at)
+        self.assertEqual([(w['percent'], w['resetsAt']) for w in merged['windows']],
+                         [(75, h.iso(h.datetime(2026, 11, 15, 11, 0).timestamp()))])
+        self.assertEqual(h.merge_claude_usage(sample, None, None, before, rows, card_at)['windows'][0]['percent'], 73)
+        # Without a card the file's week stays (nothing tells when the week resets).
+        self.assertEqual(h.merge_claude_usage(sample, None, None, now)['windows'][0]['percent'], 73)
+        # The office: card at 13:44, the button read at 18:42 gives the week, and its time.
+        office_card = h.datetime(2026, 11, 15, 13, 44).timestamp()
+        office_rows = [{'label': '5 小時限制', 'percent': 0, 'reset': '於 下午5:10 重設'},
+                       {'label': '每週 · 所有模型', 'percent': 0, 'reset': '週日上午11:00 重設'}]
+        button = {'label': '每週 · 所有模型', 'percent': 4, 'resetsText': '週日上午11:00 重設'}
+        read = h.datetime(2026, 11, 15, 18, 42).timestamp()
+        merged = h.merge_claude_usage(None, button, read, now, office_rows, office_card)
+        self.assertEqual(merged['sampledAt'], h.iso(read))
+        self.assertEqual([(w['percent'], w['resetsAt']) for w in merged['windows']],
+                         [(4, h.iso(h.datetime(2026, 11, 22, 11, 0).timestamp()))])
+        # A button the card's week outranks leaves the card's time.
+        self.assertEqual(h.merge_claude_usage(None, stale, read, now, office_rows, office_card)['sampledAt'], h.iso(office_card))
 
     def test_a_per_model_week_on_the_button_does_not_pass_for_the_all_models_week(self):
         # Live 11/2 (Claude 4.29, a Team plan with a Fable week): the button read "每週 · Fable：23%"
@@ -2280,6 +2338,35 @@ class PopupTests(FakeEnvironment):
         status = runner.status(body['id'])
         self.assertEqual((status['verified'], status['message']), (False, '已選「要求核准」（下一則回覆起生效）'))
 
+    def test_the_desktop_apps_suggested_message_reaches_the_phone(self):
+        # 11/18, the user: 「app也能有提示文。並能選類似tap鍵接受送出嗎」: the grey text Claude's Tab
+        # accepts is the message box's help text; its usual hint is no suggestion.
+        hub, driver, watcher, _ = drive(self.fake)
+        shown, _ = hub.session_for_doc('claude', driver.open_doc['claude'])
+        other = A if shown != A else B
+        key, _ = driver.pending_prompt('claude')
+        driver.answered.add(key)  # no suggestion while a permission prompt waits
+        driver.fake_hint = {'claude': '按 Enter 傳送，按 Ctrl+Enter 排入佇列稍後傳送'}
+        watcher.tick()
+        self.assertNotIn('suggestion', hub.events('claude', shown, 0, '', 0)['meta'])
+        driver.fake_hint = {'claude': 'P4 底下說明框改成這週的講法'}
+        watcher.tick()
+        self.assertEqual(hub.events('claude', shown, 0, '', 0)['meta']['suggestion'], 'P4 底下說明框改成這週的講法')
+        self.assertNotIn('suggestion', hub.events('claude', other, 0, '', 0)['meta'], 'only the conversation on screen')
+        # Live 11/18 the suggestion is the placeholder: the help text goes empty and the box is read
+        # with OCR, once while it shows (Windows OCR spaces Chinese characters apart).
+        driver.fake_hint, driver.fake_ocr = {'claude': ''}, {'claude': 'P4 底 下 說 明 框 改 成 這 週 的 講 法'}
+        watcher.tick()
+        watcher.tick()
+        self.assertEqual(hub.events('claude', shown, 0, '', 0)['meta']['suggestion'], 'P4 底下說明框改成這週的講法')
+        self.assertEqual(driver.calls.count(('read_suggestion', 'claude')), 1, 'read once while it shows')
+        driver.fake_hint = {'claude': '輸入 / 以使用指令'}
+        watcher.tick()
+        self.assertNotIn('suggestion', hub.events('claude', shown, 0, '', 0)['meta'], 'gone when the usual hint is back')
+        self.assertEqual(h.ocr_text(' 用 Tab  接 受 A B '), '用 Tab 接受 A B')  # only Chinese-to-Chinese gaps go
+        self.assertIsNone(h.suggested_message('', ['x']))
+        self.assertIsNone(h.suggested_message('提示', None), 'an app whose usual hints are unknown offers nothing')
+
     def test_a_codex_mode_pick_shows_until_the_next_turn_records_one(self):
         hub, _, watcher, runner = drive(self.fake)
         self.assertIsNone(hub.events('codex', Y, 0, '', 0)['meta']['permission'])
@@ -2495,6 +2582,33 @@ class PopupTests(FakeEnvironment):
             {'type': 'input_image', 'image_url': 'data:image/jpeg;base64,' + png, 'detail': 'original'}]}})
         self.assertEqual(out[0]['images'], [{'media': 'image/jpeg', 'data': png}])
         self.assertEqual(h.local_image_path('file:///C:/Users/u/a%20b.png'), Path('C:/Users/u/a b.png'))
+
+    def test_pictures_a_reply_shows_as_markdown_reach_the_phone(self):
+        """Home PC 11/15 (the user: 「家裡這對畫手機看不到照片」): Codex put its generated picture and
+        a downloaded one in a table, "| ![假髮修剪與定型示意](C:/Users/.../exec-1.png) | ![娜娜莉官方
+        原圖](C:/Users/.../official.jpg) |", and the phone showed only the captions."""
+        png = h.FAKE_PNG
+        with tempfile.TemporaryDirectory() as folder:
+            made, official = Path(folder) / 'exec-1.png', Path(folder) / 'official-original.jpg'
+            made.write_bytes(base64.b64decode(png))
+            official.write_bytes(base64.b64decode(png))
+            # A Windows path as Codex writes it; on the Mac CI (no drive letter) a file: URL instead.
+            mine = str(made).replace('\\', '/') if os.name == 'nt' else made.as_uri()
+            theirs = official.as_uri()
+            text = (f'**左邊是示意，右邊是官方原圖。**\n\n| 示意 | 官方 |\n|---|---|\n| ![假髮修剪與定型示意]({mine}) | '
+                    f'![娜娜莉官方原圖]({theirs}) |\n\n要接近[官方造型](https://example.com/)，![網頁圖](https://example.com/a.png) '
+                    f'![不見了](C:/nowhere/x.png) ![再一次]({mine})')
+            pictures = [{'media': 'image/png', 'data': png}, {'media': 'image/jpeg', 'data': png}]
+            self.assertEqual(h.text_images(text), pictures)  # local files only, each once, in order
+            modern = h.CodexParser().feed({'type': 'event_msg', 'payload': {'type': 'item_completed', 'item': {
+                'type': 'AgentMessage', 'content': [{'type': 'Text', 'text': text}]}}})
+            self.assertEqual((modern[0]['kind'], modern[0]['text'], modern[0]['images']), ('assistant', text, pictures))
+            old = h.CodexParser().feed({'type': 'event_msg', 'payload': {'type': 'agent_message', 'message': text}})
+            self.assertEqual(old[0]['images'], pictures)
+            transcript = h.Transcript(Path(folder) / 'none.jsonl', h.CodexParser)
+            transcript.add(modern[0])
+            self.assertEqual(transcript.events[0]['images'], ['g1-0', 'g1-1'])
+        self.assertEqual(h.text_images('沒有圖'), [])
 
     def test_large_pictures_are_shrunk_for_the_phone(self):
         """A 4K picture pasted at the PC is 2-5 MB and the phone decodes it to 33 MB (home PC 11/8:
@@ -3354,6 +3468,70 @@ class LightWatchTests(unittest.TestCase):
         self.assertEqual([l.split(',')[2:] for l in samples[1:]],
                          [[v, ''] for v in ('55.0', '54.0', '170.0', '100.0', '170.0', '175.0', '60.0', '58.0')],
                          'not every look was kept for the calibration')
+
+    def test_a_gap_in_the_watch_is_reported_once_the_light_is_known_again(self):
+        # 11/18, the user chose 「中斷補報」: more than five minutes without a picture inside the
+        # watch window is sent afterwards with the light's state and the picture.
+        self.tick(170)
+        self.tick(172)
+        self.assertEqual(len(self.notes), 1)  # on at start
+        self.now[0] += 2 * 3600  # the PC was off from 09:01 to 11:01
+        self.tick(171, minutes=0)
+        self.assertEqual(len(self.notes), 1, 'reported before the state was confirmed')
+        self.tick(170)
+        self.assertEqual(self.notes[-1][0], '示範電腦：玻璃門監看中斷')
+        self.assertIn('監看中斷 09:01–11:01', self.notes[-1][1])
+        self.assertIn('現在亮', self.notes[-1][1])
+        self.assertTrue(self.notes[-1][2]['picture'].startswith(b'\xff\xd8\xff'))
+        # A gap that ends in a change: one message carries both.
+        self.now[0] += 20 * 60
+        self.tick(60, minutes=0)
+        self.tick(58)
+        self.assertEqual(self.notes[-1][0], '示範電腦：玻璃門暗了')
+        self.assertIn('監看中斷 11:01–11:21', self.notes[-1][1])
+        self.assertEqual(len(self.notes), 3)
+        # Short gaps (a restart for an update) and the night before the window opens are not gaps.
+        self.tick(57, minutes=3)
+        self.assertEqual(len(self.notes), 3)
+        self.now[0] = time.mktime((2026, 11, 12, 8, 0, 20, 3, 316, -1))
+        self.tick(56, minutes=0)
+        self.tick(55)
+        self.assertEqual(len(self.notes), 3, 'the night was taken for a gap')
+
+    def test_a_light_turned_off_while_the_helper_restarted_is_notified(self):
+        # 11/18: the lights went off at 12:32 while the helper restarted for an update; the first
+        # look said off "at start" and no LINE message came, though today's log said on.
+        (self.root / 'light_log.csv').write_text('date,time,state,level,note\n2026-11-11,08:59:48,on,180.0\n',
+                                                 encoding='utf-8')
+        self.tick(85)
+        self.tick(86)
+        self.assertFalse(self.watch.on)
+        self.assertEqual([n[0] for n in self.notes], ['示範電腦：玻璃門暗了'])
+        last = (self.root / 'light_log.csv').read_text(encoding='utf-8').splitlines()[-1].split(',')
+        self.assertEqual(last[2:], ['off', '86.0'], 'a change, not a start')
+        # A restart that finds the light as the log says still says nothing.
+        self.notes.clear()
+        again = h.LightWatch(self.feed, (0.75, 0.4, 0.05, 0.18), self.root / 'light_log.csv',
+                             notify=lambda title, message, **kw: self.notes.append((title, message, kw)),
+                             pc_name='示範電腦', name='玻璃門', interval=30, on_above=130, off_below=90, settle=0,
+                             hours=(8, 18), weekdays_only=True,
+                             measure=lambda jpeg: self.levels.pop(0), clock=lambda: self.now[0], sleep=lambda s: None)
+        self.watch = again
+        self.tick(84)
+        self.tick(85)
+        self.assertEqual(self.notes, [])
+
+    def test_a_dark_start_logged_but_never_sent_does_not_hide_the_change(self):
+        # 11/18 live: on at 08:59 (sent), the 12:31 restart logged 'off ... start' without a
+        # message, and the restarts after it found the log already saying off: never sent.
+        (self.root / 'light_log.csv').write_text(
+            'date,time,state,level,note\n2026-11-11,08:00:39,off,82.2,start\n2026-11-11,08:59:48,on,180.0\n'
+            '2026-11-11,12:33:00,off,86.0,start\n', encoding='utf-8')
+        self.tick(84)
+        self.tick(85)
+        self.assertEqual([n[0] for n in self.notes], ['示範電腦：玻璃門暗了'])
+        last = (self.root / 'light_log.csv').read_text(encoding='utf-8').splitlines()[-1].split(',')
+        self.assertEqual(last[2:], ['off', '85.0'])
         self.assertEqual(self.feed.opened, 1, 'every sample reopened the camera although the feed was still open')
 
     def test_outside_workdays_and_hours_nothing_is_watched_and_the_window_starts_afresh(self):
@@ -3377,6 +3555,7 @@ class LightWatchTests(unittest.TestCase):
         self.assertIsNone(self.watch.on)
         self.tick(182)
         self.assertTrue(self.watch.on)
+        # Today's only row is a dark start, never sent: lit now is the day's first news (11/18).
         self.assertEqual(self.notes[-1][0], '示範電腦：玻璃門亮了（小幫手啟動時已亮）')
         # Restarted the same day with the light still on (0.5.51): the log already ends 'on', so
         # nothing is logged or sent again; a new day is a fresh start.
@@ -3567,7 +3746,8 @@ class CameraHttpTests(FakeEnvironment):
         light = json.loads(body)
         self.assertEqual((code, light['ok'], light['on'], len(light['days'])), (200, True, True, 2))
         self.assertEqual([c['time'] for c in light['days'][0]['changes']], ['08:05:17', '12:01:48'] + [c['time'] for c in light['days'][0]['changes']][2:])
-        self.assertEqual(light['days'][0]['changes'][-1]['start'], True)
+        # Today's log ends off and the first look is on: a change while the helper was away (11/18).
+        self.assertEqual(light['days'][0]['changes'][-1]['start'], False)
         self.assertEqual(len(light['days'][1]['changes']), 4)
         self.assertEqual(light['samples'][-1]['level'], 183.0)
         self.assertEqual(self.fetch(server, '/v1/light', token='wrong')[0], 401)

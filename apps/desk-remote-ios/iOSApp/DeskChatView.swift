@@ -199,7 +199,7 @@ struct DeskChatView: View {
                 .frame(height: min(cardsHeight, 240))
                 .scrollDisabled(cardsHeight <= 240)
                 DeskInputBar(text: $draft, photos: $photos, limit: pcState?.photoLimit ?? 1,
-                             focused: $inputFocused) { submitDraft() }
+                             focused: $inputFocused, suggestion: log.meta?.suggestion) { submitDraft() }
             }
         }
         .alert(confirm?.title ?? "", isPresented: Binding(get: { confirm != nil }, set: { if !$0 { confirm = nil } }),
@@ -1237,6 +1237,9 @@ struct DeskInputBar: View {
     var focused: FocusState<Bool>.Binding
     var inputID = "chat-input"
     var placeholder = "輸入訊息"
+    /// The desktop app's suggested next message: the grey text of an empty box, taken with the Tab
+    /// button like the Tab key on the PC (asked 11/18: 「app也能有提示文。並能選類似tap鍵接受送出嗎」).
+    var suggestion: String? = nil
     /// false on the new-conversation sheet (asked 11/14), which sends from its own toolbar button.
     var sendButton = true
     let send: () -> Void
@@ -1249,6 +1252,11 @@ struct DeskInputBar: View {
     private var canShoot: Bool { Self.uiTest || UIImagePickerController.isSourceTypeAvailable(.camera) }
 
     private var empty: Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && photos.isEmpty }
+    /// The suggestion while the box is empty, else nil.
+    private var offered: String? {
+        guard let suggestion, !suggestion.isEmpty, text.isEmpty, !dictation.listening else { return nil }
+        return suggestion
+    }
     /// With room for one photo only, a new pick replaces the one there.
     private var room: Int { limit <= 0 ? 0 : limit <= 1 ? 1 : max(0, limit - photos.count) }
 
@@ -1372,11 +1380,24 @@ struct DeskInputBar: View {
             }
             .accessibilityLabel(dictation.listening ? "停止語音輸入" : "語音輸入")
             .accessibilityIdentifier("chat-mic")
-            TextField(dictation.listening ? "請說話…" : placeholder, text: $text, axis: .vertical)
+            TextField(dictation.listening ? "請說話…" : offered ?? placeholder, text: $text, axis: .vertical)
                 .lineLimit(sendButton ? 1 ... 6 : 3 ... 12)
                 .textFieldStyle(.roundedBorder)
                 .focused(focused)
                 .accessibilityIdentifier(inputID)
+            if let offered {
+                Button {
+                    text = offered
+                } label: {
+                    Text("Tab")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.accentColor, lineWidth: 1))
+                }
+                .accessibilityLabel("接受建議：\(offered)")
+                .accessibilityIdentifier("chat-accept-suggestion")
+            }
             if sendButton {
                 Button {
                     dictation.cancel()

@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.76'
+VERSION = '0.5.84'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -276,6 +276,7 @@ def merge_claude_usage(from_file, button, button_at, now, card=None, card_at=Non
     21%). A 5-hour figure from the file older than five hours is left out (that window has reset
     since). `sampledAt` is the oldest time behind what is shown."""
     file_at = datetime.fromisoformat(from_file['sampledAt'].replace('Z', '+00:00')).timestamp() if from_file else None
+    anchor = week_anchor(card, card_at) if card and card_at else None
     weekly = None
     if button and button_at and button['label'].startswith('每週'):
         # Its reset moment from when the button was read: Claude leaves the weekday out within a
@@ -285,25 +286,43 @@ def merge_claude_usage(from_file, button, button_at, now, card=None, card_at=Non
                   'resetsAt': iso(at) if at is not None else None, 'resetsText': button['resetsText']}
         if at is not None and at <= now:
             weekly = None  # that week has reset since the button was read: its figure is the old week's
+        elif (at is not None and anchor is not None and weekly['label'] == '每週'
+              and not re.search(r'週[一二三四五六日]', button['resetsText'] or '')
+              and not on_week_grid(at, anchor) and on_week_grid(at - 86400, anchor)):
+            # "於 上午11:00" left on the button from before the weekly reset, read after it (live
+            # 11/15: the home PC's button still said 75% at 14:00, counted to Monday 11:00; the
+            # phone kept that reading as the newest and showed it under both PCs). The week resets
+            # every 7 days from the card's moment: the button meant the day before, now passed.
+            weekly = None
+    if weekly and weekly['label'] == '每週' and anchor is None and weekly.get('resetsAt'):
+        anchor = datetime.fromisoformat(weekly['resetsAt'].replace('Z', '+00:00')).timestamp()
     if card and card_at and (file_at is None or card_at > file_at):
         windows = card_windows(card, card_at, now)
         if windows:
+            sampled = card_at
             if weekly and button_at > card_at and not older_period(weekly, card, card_at):
                 windows = replace_window(windows, weekly)
+                # The week shown is the button's: its time, so the phone takes this over an older
+                # reading another PC sent after the card (live 11/15: the office's 4% read at 18:42
+                # was sent as 13:44, older than the home PC's stale 75% from 14:00).
+                sampled = button_at
             for i, window in enumerate(windows):
                 if not window.get('resetsAt') and window.get('resetsText'):
                     at = reset_moment(window['resetsText'], card_at)
                     if at is not None:
                         windows[i] = dict(window, resetsAt=iso(at))
-            return {'windows': windows, 'sampledAt': iso(card_at)}
+            return {'windows': windows, 'sampledAt': iso(sampled)}
     fresher = weekly is not None and (file_at is None or button_at > file_at)
     same_week = weekly is not None and weekly['label'] == '每週'  # the file only knows the all-models week
+    # The file's week is the week before when a weekly reset came after it (live 11/15: the home
+    # PC's file stopped at 11/14 20:53 with 73%; the reset was 11/15 11:00).
+    file_week_gone = file_at is not None and anchor is not None and next_on_grid(file_at, anchor) <= now
     windows, times = [], []
     for window in (from_file or {}).get('windows') or []:
         if window['label'] == '5 小時' and now - file_at < 5 * 3600:
             windows.append(window)
             times.append(file_at)
-        elif window['label'] == '每週' and not (fresher and same_week):
+        elif window['label'] == '每週' and not (fresher and same_week) and not file_week_gone:
             windows.append(dict(window, resetsText=weekly['resetsText'] if same_week else None))
             times.append(file_at)
     if fresher:
@@ -316,6 +335,29 @@ def reset_moment(text, read_at):
     """The reset moment a usage row's words name, read at `read_at`: '2 小時後重設' or '週日上午11:00 重設'."""
     at = relative_reset(text, read_at)
     return at if at is not None else clock_reset(text, read_at)
+
+
+WEEK_SECONDS = 7 * 86400
+
+
+def week_anchor(card, card_at):
+    """One moment of the all-models weekly reset, from the usage card's row however old the card
+    is: the week resets every 7 days from it."""
+    for row in card or []:
+        if isinstance(row, dict) and card_label(row.get('label')) == '每週':
+            return reset_moment(row.get('reset'), card_at)
+    return None
+
+
+def on_week_grid(at, anchor):
+    """True when `at` is a weekly reset moment (within 2 minutes) of the week that resets at `anchor`."""
+    k = round((at - anchor) / WEEK_SECONDS)
+    return abs(at - (anchor + k * WEEK_SECONDS)) <= 120
+
+
+def next_on_grid(after, anchor):
+    """The first weekly reset moment after `after`."""
+    return anchor + ((after - anchor) // WEEK_SECONDS + 1) * WEEK_SECONDS
 
 
 def older_period(weekly, card, card_at):
@@ -482,6 +524,29 @@ def local_image(path):
         return None
 
 
+MARKDOWN_IMAGE = re.compile(r'!\[[^\]\n]*\]\(\s*<?([^)<>\n]+?)>?(?:\s+"[^"\n]*")?\s*\)')
+LOCAL_PATH = re.compile(r'^(?:[A-Za-z]:[\\/]|file:|\\\\)')
+
+
+def text_images(text):
+    """The pictures a reply shows as Markdown images of files on this PC, "![官方原圖](C:/Users/
+    .../official.jpg)" (live 11/15: Codex put its generated picture and a downloaded one side by
+    side in a table, and the phone showed only the captions). Read while the files are there;
+    web addresses are left to the text. At most 8, each once."""
+    found, seen = [], set()
+    for match in MARKDOWN_IMAGE.finditer(text or ''):
+        path = match.group(1).strip()
+        if path in seen or not LOCAL_PATH.match(path):
+            continue
+        seen.add(path)
+        picture = local_image(path)
+        if picture:
+            found.append(picture)
+            if len(found) >= 8:
+                break
+    return found
+
+
 def flatten(content):
     """Text of a tool result or message body that may be a string or a list of blocks."""
     if content is None:
@@ -623,6 +688,24 @@ def codex_reply(text):
             if isinstance(parts, list) else None
         out.append((call_id, str(item.get('answer') or '')))
     return out
+
+
+def suggested_message(hint, usual):
+    """The desktop app's suggested next message: its message box's help text when that is not
+    one of the box's usual hints (11/18). None when the app shows no suggestion."""
+    hint = (hint or '').strip()
+    if not hint or usual is None or hint in usual:
+        return None
+    return hint[:500]
+
+
+CJK_GAP = re.compile(r'(?<=[^\x00-\x7f]) (?=[^\x00-\x7f])')
+
+
+def ocr_text(text):
+    """Windows OCR's line as written: it puts a space between Chinese characters."""
+    text = ' '.join((text or '').split())
+    return CJK_GAP.sub('', text)[:500] or None
 
 
 def suggestions_from(data):
@@ -777,7 +860,7 @@ class ClaudeParser:
             if not isinstance(block, dict):
                 continue
             if block.get('type') == 'text' and block.get('text', '').strip():
-                out.append({'kind': 'assistant', 'text': block['text'], 'ts': ts})
+                out.append({'kind': 'assistant', 'text': block['text'], 'ts': ts, 'images': text_images(block['text'])})
             elif block.get('type') == 'tool_use':
                 name = block.get('name') or ''
                 self.tool_names[block.get('id')] = name
@@ -854,7 +937,9 @@ class CodexParser:
                 if text.strip() and not is_noise(text):
                     if ptype == 'user_message':
                         self.question = None  # the person moved on; the card is no longer the next thing
-                    return [{'kind': 'user' if ptype == 'user_message' else 'assistant', 'text': text, 'ts': ts}]
+                    if ptype == 'agent_message':
+                        return [{'kind': 'assistant', 'text': text, 'ts': ts, 'images': text_images(text)}]
+                    return [{'kind': 'user', 'text': text, 'ts': ts}]
             return []
         if kind == 'compacted':
             return [{'kind': 'status', 'text': COMPACTED, 'ts': ts}]
@@ -908,7 +993,8 @@ class CodexParser:
                 self.question = codex_question_from(item.get('id'), {'questions': item['questions']}) or self.question
                 return []
             text = flatten(item.get('content'))  # Automation heartbeats are echoed back; hide those too.
-            return [{'kind': 'assistant', 'text': text, 'ts': ts}] if text.strip() and not is_noise(text) else []
+            return [{'kind': 'assistant', 'text': text, 'ts': ts, 'images': text_images(text)}] \
+                if text.strip() and not is_noise(text) else []
         if itype == 'CommandExecution':
             parsed = item.get('parsed_cmd') or []
             command = parsed[0].get('cmd') if parsed and isinstance(parsed[0], dict) else None
@@ -2547,6 +2633,8 @@ class Hub:
                 meta['model'], meta['effort'] = label, effort or meta['effort']
             if seen.get('mode'):
                 meta['permission'] = seen['mode']
+            if seen.get('suggestion') and seen.get('suggestionDoc') == docs[0]:
+                meta['suggestion'] = seen['suggestion']
         return meta
 
     def session_for_doc(self, app, doc):
@@ -2605,7 +2693,7 @@ class Hub:
             if now_waiting != waiting:
                 changed = True
             now_meta = self.meta(app, session_id, transcript)
-            if any(now_meta.get(k) != meta.get(k) for k in ('model', 'effort', 'permission')):
+            if any(now_meta.get(k) != meta.get(k) for k in ('model', 'effort', 'permission', 'suggestion')):
                 changed = True  # a switch made from the phone shows without waiting for a reply
             if page['events'] or page['reset'] or changed or time.monotonic() >= deadline or (stop and stop()):
                 page.update({'ok': True, 'prompt': prompt, 'meta': now_meta})
@@ -2936,6 +3024,22 @@ class WindowsDriver:
 
     def inspect(self, app):
         return self.ask(app, cmd='inspect')
+
+    def read_suggestion(self, app, hwnd, timeout=30):
+        """The grey suggested message in the app's empty message box, read with Windows OCR by
+        suggestion_ocr.ps1 (its own DPI-aware process; nothing written to disk); None if unread."""
+        import subprocess
+        try:
+            done = subprocess.run(
+                ['powershell.exe', '-NoProfile', '-NonInteractive', '-STA', '-ExecutionPolicy', 'Bypass', '-File',
+                 str(Path(__file__).with_name('suggestion_ocr.ps1')), '-Hwnd', str(int(hwnd)),
+                 '-EditName', self.strings[app]['edit']],
+                capture_output=True, timeout=timeout, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+            lines = done.stdout.decode('utf-8', 'replace').strip().splitlines()
+            data = json.loads(lines[-1]) if lines else {}
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            return None
+        return ocr_text(data.get('text')) if data.get('ok') else None
 
     def docs(self, app):
         answer = self.ask(app, cmd='docs')
@@ -3409,6 +3513,9 @@ class UiWatcher:
             prompt = {'promptId': prompt_id(app, docs[0], raw['text']), 'text': raw['text'], 'tool': None,
                       'doc': docs[0]}
         with self.lock:
+            before = dict(self.state.get(app) or {})
+        suggestion, suggestion_doc = self.suggestion(app, answer, before, prompt)
+        with self.lock:
             before = self.state.get(app) or {}
             old = before.get('prompt')
             # The usage button is only there while the window is: keep the last reading and when.
@@ -3419,7 +3526,8 @@ class UiWatcher:
                                'model': answer.get('model'), 'usage': usage, 'usageAt': usage_at,
                                'card': before.get('card'), 'cardAt': before.get('cardAt'),
                                'mode': answer.get('mode'), 'running': answer.get('running'),
-                               'update': answer.get('update')}
+                               'update': answer.get('update'), 'hint': answer.get('hint'),
+                               'suggestion': suggestion, 'suggestionDoc': suggestion_doc}
             if self.memory and answer.get('usage') and answer['usage'] != before.get('usage'):
                 self.remember_usage()
         if prompt and (not old or old['promptId'] != prompt['promptId']):
@@ -3427,6 +3535,30 @@ class UiWatcher:
             session_id, _ = self.hub.session_for_doc(app, prompt['doc'])
             self.send(f'🔔 {APP_NAMES[app]} 在等你核准', f'{self.pc_name}・「{title}」：{prompt["text"][:120]}', 4, ['bell'],
                       open_link(self.pc_name, app, session_id, title) if session_id else open_link(self.pc_name))
+
+    def suggestion(self, app, answer, before, prompt):
+        """(text, page) of the suggested next message in the app's empty message box, else
+        (None, None). A help text other than the box's usual hints is the suggestion itself; an
+        empty one is Claude's (11/18): the suggestion is drawn as the placeholder, out of UI
+        Automation's reach, and read once with OCR when it appears (each reading about a second,
+        nothing on screen moves)."""
+        docs = answer.get('docs') or []
+        usual = (self.hub.strings.get(app) or {}).get('edit_hints')
+        if usual is None or not answer.get('window') or len(docs) != 1 or prompt or answer.get('running'):
+            return None, None
+        hint = answer.get('hint')
+        offered = suggested_message(hint, usual)
+        if offered:
+            return offered, docs[0]
+        if hint != '' or not answer.get('boxEmpty') or not answer.get('hwnd'):
+            return None, None
+        if before.get('hint') == '' and before.get('suggestionDoc') == docs[0]:
+            return before.get('suggestion'), docs[0]   # read already
+        if not hasattr(self.driver, 'read_suggestion'):
+            return None, docs[0]
+        text = self.driver.read_suggestion(app, answer['hwnd'])
+        logging.info('%s suggestion read: %s', app, (text or '(none)')[:80])
+        return text, docs[0]
 
     def prompt_for(self, app, session_id):
         info = self.hub.info(app, session_id)
@@ -3935,8 +4067,10 @@ class ActionRunner:
         if kind == 'stop' and not strings.get('stop'):
             return 400, error('not-supported', '這個 App 還不能從手機停止')
         if kind == 'selfcheck':
-            # Nobody at the PC (it types into the message box), unless asked from the PC itself.
-            denied = self.gate(force, True)
+            # Nobody at the PC (it types into the message box and opens the model menu), never
+            # forced (11/17, the user at the home PC while the repair checked it again and again:
+            # 「剛剛我在使用電腦的時候就一直在干擾我」).
+            denied = self.gate(False, True)
             if denied:
                 return denied
             with self.lock:
@@ -4724,7 +4858,8 @@ class ActionRunner:
         elif menu.get('error') or not listed:
             add('模型選單', 'fail', menu.get('error') or '選單沒有列出模型')
         else:
-            missing = [m for m in known if m not in listed]
+            # Claude 11/17 (home PC) may tag a radio after the model: 'Opus 5.5 預設集'.
+            missing = [m for m in known if not any(x == m or x.startswith(m + ' ') for x in listed)]
             add('模型選單', 'pass' if not missing else 'fail',
                 f"選單有 {'／'.join(listed)}" + (f"；設定裡有但選單沒有：{'／'.join(missing)}" if missing else ''))
         add('開新對話鈕', 'pass' if probe.get('newButton') else 'fail', strings.get('new', ''))
@@ -4923,6 +5058,22 @@ Write-Output ('已按「{button}」' + $(if ($still) {{ '，視窗還在（可�
 """
 
 
+TAIWAN = timezone(timedelta(hours=8))   # the night slot is Taiwan's 03:00 (the user 11/17)
+
+
+def next_night(now, hour=3):
+    """The next Taiwan `hour`:00 after `now` (the night slot for checks and repairs)."""
+    local = datetime.fromtimestamp(now, TAIWAN)
+    slot = local.replace(hour=hour, minute=0, second=0, microsecond=0)
+    if slot <= local:
+        slot += timedelta(days=1)
+    return slot.timestamp()
+
+
+def in_night(now, hour=3):
+    return datetime.fromtimestamp(now, TAIWAN).hour == hour
+
+
 class SelfCheckPlan:
     """When the self-check runs and what follows (11/15, the user: 「桌面版改版了，小幫手自己跟上」):
     every Sunday at 03:00 (the PCs stay on and unlocked for mining), right after a desktop app's
@@ -4964,7 +5115,7 @@ class SelfCheckPlan:
 
     def tick(self):
         now = self.clock()
-        local = datetime.fromtimestamp(now)
+        local = datetime.fromtimestamp(now, TAIWAN)
         day = local.date().isoformat()
         if local.weekday() == self.WEEKDAY and local.hour == self.HOUR and self.state.get('weekly') != day:
             self.state['weekly'] = day
@@ -4980,8 +5131,9 @@ class SelfCheckPlan:
                 self.state['versions'][app] = running
                 self.save()
                 if known:
-                    # Give the new version a few minutes to settle before looking at it.
-                    self.want(f'{app} 更新到 {running}', at=now + 180)
+                    # Checked at the next 03:00, not while someone may use the PC (the user 11/17:
+                    # 「平常的時候只能允許在半夜三點的時候執行」); a failed send still checks at once.
+                    self.want(f'{app} 更新到 {running}', at=next_night(now))
         with self.lock:
             wanted = self.wanted
         if wanted is None or now < wanted[2]:
@@ -5110,8 +5262,30 @@ class RepairWatch:
         except (OSError, ValueError):
             return {'handled': [], 'started': []}
 
+    URGENT_WITHIN = 3600     # seconds a failed phone send still repairs at once
+
+    @staticmethod
+    def failed_send(report):
+        return any(c.get('status') == 'fail' and c.get('name') in ('手機實際傳訊', '手機實際開新對話')
+                   for a in (report.get('apps') or {}).values() for c in (a or {}).get('checks') or [])
+
     def consider(self, report):
         if report.get('ok') is not False:
+            return False
+        if str(report.get('reason') or '').startswith('自動修'):
+            # The repair's own check of its work is reported by the repair; a repair started from it
+            # looped all afternoon on 11/17 (home PC, the user at it).
+            return False
+        now = self.clock()
+        try:
+            at = datetime.fromisoformat(str(report.get('at')).replace('Z', '+00:00')).timestamp()
+        except ValueError:
+            at = None
+        urgent = self.failed_send(report) and at is not None and now - at < self.URGENT_WITHIN
+        if not urgent and not in_night(now):
+            # The user 11/17: 「當我無法從手機發送文字的時候才需要立刻執行自動修理，不然平常的時候
+            # 只能允許在半夜三點的時候執行」. The report stays in the shared folder and is looked
+            # at again at 03:00.
             return False
         key = f"{report.get('pc')}|{report.get('at')}"
         with self.lock:
@@ -5161,8 +5335,7 @@ class RepairWatch:
                 report = json.loads((self.shared_dir / name).read_text(encoding='utf-8'))
             except (OSError, ValueError):
                 continue
-            if report.get('pc') != self.pc_name:
-                self.consider(report)
+            self.consider(report)
 
     def run_forever(self):
         while True:
@@ -6280,6 +6453,7 @@ class LightWatch:
     SETTLE_FRAMES = 6   # frames waited for at most (settle seconds apart) before measuring anyway
 
     KEEP = 30  # recent samples kept for /v1/light (to pick the thresholds)
+    OUTAGE = 300  # seconds without a picture inside the watch window that are reported afterwards
 
     def __init__(self, feed, region, log_path, notify=None, pc_name='', name='', interval=30.0,
                  on_above=160.0, off_below=120.0, settle=1.0, hours=(0, 24), weekdays_only=False,
@@ -6302,6 +6476,9 @@ class LightWatch:
         self.error = None
         self.samples = []     # the last (when, level)
         self.picture = None   # the JPEG the last level was measured on (sent with a change's notification)
+        self.last_seen = None  # when a picture was last measured (from light_samples.csv at start)
+        self.outage = None     # (from, to) of a gap in the watch not yet reported
+        self.outage_looks = 0  # looks since the gap ended
 
     def active(self, when=None):
         """Whether this moment is inside the watch window (hours, and Monday-Friday when
@@ -6329,6 +6506,7 @@ class LightWatch:
                 self.error = f'畫面讀不出來（{exc}）'
             return None
         now = self.clock()
+        self.note_gap(now)
         change = None
         with self.lock:
             self.picture = data
@@ -6361,7 +6539,59 @@ class LightWatch:
         self.keep_sample(now, level)
         if change is not None:
             self.record(now, change[0], level, first=change[1])
+        elif self.outage is not None and self.on is not None:
+            # Reported once a second look agrees on the state: a change during the gap must not
+            # be reported as the old state.
+            if self.pending is None and self.outage_looks >= 1:
+                self.report_outage(now, level)
+            else:
+                self.outage_looks += 1
         return level
+
+    def note_gap(self, now):
+        """A gap of more than OUTAGE seconds inside today's watch window since the last measured
+        picture (the helper stopped, the PC restarted, the camera gave nothing) is kept to be
+        reported once the light's state is known again (the user 11/18, after a change during a
+        restart went unsent: 「要規劃一下以後避免發生誤判漏發」, chose 「中斷補報」)."""
+        if self.last_seen is None:
+            self.last_seen = self.last_sample_time()
+        last, self.last_seen = self.last_seen, now
+        if last is None:
+            return
+        day = datetime.fromtimestamp(now)
+        opened = day.replace(hour=self.hours[0], minute=0, second=0, microsecond=0).timestamp()
+        start = max(last, opened)
+        if now - start > max(self.OUTAGE, 4 * self.interval):
+            begun = self.outage[0] if self.outage else start
+            self.outage, self.outage_looks = (begun, now), 0
+
+    def last_sample_time(self):
+        """When light_samples.csv's last look was taken, or None."""
+        try:
+            with self.samples_path.open('rb') as handle:
+                handle.seek(0, os.SEEK_END)
+                handle.seek(max(0, handle.tell() - 512))
+                tail = handle.read().decode('utf-8', 'replace').strip().splitlines()
+            date, clock = tail[-1].split(',')[:2]
+            return datetime.strptime(f'{date} {clock}', '%Y-%m-%d %H:%M:%S').timestamp()
+        except (OSError, ValueError, IndexError):
+            return None
+
+    def outage_text(self):
+        begun, ended = self.outage
+        return f'監看中斷 {datetime.fromtimestamp(begun):%H:%M}–{datetime.fromtimestamp(ended):%H:%M}（這段時間沒有畫面）'
+
+    def report_outage(self, now, level):
+        text, self.outage = self.outage_text(), None
+        logging.info('light %s: %s, now %s', self.name, text, 'on' if self.on else 'off')
+        if self.notify is None:
+            return
+        state = '亮' if self.on else '暗'
+        try:
+            self.notify(f'{self.pc_name}：{self.name}監看中斷', f'{text}，現在{state}（{datetime.fromtimestamp(now):%H:%M} 亮度 {level:.0f}）',
+                        tags=['bulb'], picture=self.picture, picture_name='light.jpg', shared=True)
+        except OSError as exc:
+            logging.warning('light notification failed: %s', exc)
 
     def keep_sample(self, when, level):
         """Appends one look to light_samples.csv (every sample, not only changes): the level and
@@ -6418,11 +6648,32 @@ class LightWatch:
         parts = rows[-1].split(',')
         return parts[2] if len(parts) >= 3 and parts[0] == date else None
 
+    def last_told(self, date):
+        """The state ('on'/'off') last sent today: the log's last row from `date` that went out
+        as a notification. A dark start ('off' with note 'start') is logged but never sent."""
+        try:
+            rows = [l.split(',') for l in self.log_path.read_text(encoding='utf-8').splitlines()
+                    if l and not l.startswith('date,')]
+        except OSError:
+            return None
+        told = [r[2] for r in rows if len(r) >= 3 and r[0] == date and not (r[2] == 'off' and len(r) > 4 and r[4] == 'start')]
+        return told[-1] if told else None
+
     def record(self, when, on, level, first=False):
         stamp = datetime.fromtimestamp(when)
-        if first and self.last_logged(f'{stamp:%Y-%m-%d}') == ('on' if on else 'off'):
-            logging.info('light %s: %s (level %.0f) at start, as the log already says: a restart', self.name, 'on' if on else 'off', level)
-            return
+        if first:
+            state = 'on' if on else 'off'
+            told = self.last_told(f'{stamp:%Y-%m-%d}')
+            if told is not None and told != state:
+                # The light changed since the last message today, while the helper was restarting
+                # (11/18: lit at 08:59, dark after the 12:31 restart; the dark start was logged but
+                # never sent, and later restarts took that row for the news already told).
+                first = False
+            elif self.last_logged(f'{stamp:%Y-%m-%d}') == state:
+                logging.info('light %s: %s (level %.0f) at start, as the log already says: a restart', self.name, state, level)
+                if self.outage is not None:
+                    self.report_outage(when, level)
+                return
         line = f"{stamp:%Y-%m-%d},{stamp:%H:%M:%S},{'on' if on else 'off'},{level:.1f}"
         if first:
             line += ',start'
@@ -6435,10 +6686,14 @@ class LightWatch:
         except OSError as exc:
             logging.warning('light log could not be written: %s', exc)
         logging.info('light %s: %s (level %.0f%s)', self.name, 'on' if on else 'off', level, ', at start' if first else '')
-        if self.notify is not None and (on or not first):
-            title = f'{self.pc_name}：{self.name}' + ('亮了' if on else '暗了') + ('（小幫手啟動時已亮）' if first else '')
+        extra = ''
+        if self.outage is not None:
+            extra, self.outage = '；' + self.outage_text(), None
+            logging.info('light %s: %s', self.name, extra[1:])
+        if self.notify is not None and (on or not first or extra):
+            title = f'{self.pc_name}：{self.name}' + ('亮了' if on else '暗了') + ('（小幫手啟動時已亮）' if first and on else '')
             try:
-                self.notify(title, f'{stamp:%H:%M} 亮度 {level:.0f}', tags=['bulb'], picture=self.picture, picture_name='light.jpg',
+                self.notify(title, f'{stamp:%H:%M} 亮度 {level:.0f}{extra}', tags=['bulb'], picture=self.picture, picture_name='light.jpg',
                             shared=True)
             except OSError as exc:
                 logging.warning('light notification failed: %s', exc)
@@ -7160,7 +7415,13 @@ class FakeDriver:
             answer['mode'] = ClaudeSource.PERMISSION_LABELS.get(data.get('permissionMode'), data.get('permissionMode'))
             answer['running'] = self.open_doc.get(app) in self.running
         answer['update'] = (getattr(self, 'fake_update', None) or {}).get(app)
+        answer['hint'] = (getattr(self, 'fake_hint', None) or {}).get(app)
+        answer['boxEmpty'], answer['hwnd'] = True, 1
         return answer
+
+    def read_suggestion(self, app, hwnd):
+        self.calls.append(('read_suggestion', app))
+        return ocr_text((getattr(self, 'fake_ocr', None) or {}).get(app))
 
     def probe(self, app, type=False, menus=False, text=''):
         """The self-check's look: the fake windows have everything, unless a test took it away."""

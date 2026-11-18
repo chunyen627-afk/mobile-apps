@@ -1203,6 +1203,24 @@ function Radio-Names($w) {
     ForEach-Object { $_.Current.Name })
 }
 
+# The model's radio button: named exactly $label, or "$label <tag>" (Claude 11/17 on one PC
+# lists "Opus 5.5" with a tag after it).
+function Find-ModelRadio($w, $label) {
+  $hit = Find-InApp $w $CT::RadioButton $label
+  if ($hit) { return $hit }
+  $cond = New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::RadioButton)
+  $roots = @($w)
+  foreach ($other in $AE::RootElement.FindAll($Tree::Children, [System.Windows.Automation.Condition]::TrueCondition)) {
+    if ($other.Current.ProcessId -eq $w.Current.ProcessId -and -not (Same-Element $other $w)) { $roots += $other }
+  }
+  foreach ($root in $roots) {
+    foreach ($r in $root.FindAll($Tree::Descendants, $cond)) {
+      if ($r.Current.Name.StartsWith("$label ")) { return $r }
+    }
+  }
+  return $null
+}
+
 # Picks $label in the model menu of the conversation $page: one checked click opens the menu
 # (read live 10/27: models are radio buttons there), the radio is selected (Select, else one
 # checked click), and only a model button that then names $label counts.
@@ -1220,7 +1238,7 @@ function Set-Model($w, $page, $s, $label) {
     $radio = $null
     for ($i = 0; $i -lt 12 -and -not $radio; $i++) {
       Start-Sleep -Milliseconds 250
-      $radio = Find-InApp $w $CT::RadioButton $label
+      $radio = Find-ModelRadio $w $label
     }
     if (-not $radio) {
       $seen = (Radio-Names $w) -join ' | '
@@ -1236,7 +1254,7 @@ function Set-Model($w, $page, $s, $label) {
       $now = Prefixed-Button $w $s.model_prefix
       if ($now -and (Shows-Model $now $s $label)) { return $how }
     }
-    $radio = Find-InApp $w $CT::RadioButton $label
+    $radio = Find-ModelRadio $w $label
     if ($radio) {
       Click-Element $w $radio 'the model choice'
       $how = 'click'
@@ -1246,12 +1264,12 @@ function Set-Model($w, $page, $s, $label) {
         if ($now -and (Shows-Model $now $s $label)) { return $how }
       }
     }
-    if (Find-InApp $w $CT::RadioButton $label) { [System.Windows.Forms.SendKeys]::SendWait('{ESC}') }
+    if (Find-ModelRadio $w $label) { [System.Windows.Forms.SendKeys]::SendWait('{ESC}') }
     Fail 'model-failed' 'the model button does not show the chosen model'
   } finally {
     # A menu left open would swallow the next keystrokes.
     Start-Sleep -Milliseconds 200
-    if (Find-InApp $w $CT::RadioButton $label) { [System.Windows.Forms.SendKeys]::SendWait('{ESC}') }
+    if (Find-ModelRadio $w $label) { [System.Windows.Forms.SendKeys]::SendWait('{ESC}') }
     [DeskWin]::SetCursorPos($cursor.X, $cursor.Y) | Out-Null
     Restore-Front $before
   }
@@ -1774,8 +1792,15 @@ function Run-Command($c) {
           if ($s.stop -and $n -eq $s.stop) { $running = $true }
         }
       }
+      # The message box's help text: Claude puts its suggested next message there (the grey text
+      # Tab accepts; asked 11/18 to show it on the phone and take it like Tab).
+      # Claude's suggestion itself is drawn as the placeholder, out of reach (live 11/18): the help
+      # text then goes empty, and the helper reads the box with OCR (suggestion_ocr.ps1).
+      $hint = if ($edit) { $edit.Current.HelpText } else { $null }
+      $boxEmpty = if ($edit) { [string]::IsNullOrWhiteSpace((Box-Text $edit)) } else { $null }
       return @{ ok = $true; window = $true; docs = @(Get-Docs $w); edit = [bool]$edit; prompt = $prompt
-        model = $model; usage = $usage; mode = $mode; running = $running; update = $update }
+        model = $model; usage = $usage; mode = $mode; running = $running; update = $update; hint = $hint
+        boxEmpty = $boxEmpty; hwnd = [int64]$w.Current.NativeWindowHandle }
     }
     'model' {
       $w = Need-Window $c.app
