@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.84'
+VERSION = '0.5.85'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -700,12 +700,35 @@ def suggested_message(hint, usual):
 
 
 CJK_GAP = re.compile(r'(?<=[^\x00-\x7f]) (?=[^\x00-\x7f])')
+# The Chinese OCR reads an English word's W as "\N" and its o as "。" (Codex 11/18: "Word" read
+# as "\N 。 rd"); this PC has no English OCR to read it again with.
+OCR_W = re.compile(r'\\N(?= ?(?:。|[A-Za-z]))')
+OCR_O = re.compile(r'(?<=[A-Za-z]) ?。 ?(?=[A-Za-z])')
+OCR_CJK_PUNCT = re.compile(r'(?<=[^\x00-\x7f]) ?([,:;?!]) ?(?=[^\x00-\x7f])')
+FULL_WIDTH = {',': '，', ':': '：', ';': '；', '?': '？', '!': '！'}
+# Codex shows this beside its suggestion until the first one is accepted.
+TAB_CHIP = re.compile(r'\s*按 ?Tab ?鍵 ?接 ?受\s*$')
 
 
 def ocr_text(text):
-    """Windows OCR's line as written: it puts a space between Chinese characters."""
+    """Windows OCR's line as written: it puts a space between Chinese characters, reads Chinese
+    punctuation as ASCII and an English W and o as other things."""
     text = ' '.join((text or '').split())
-    return CJK_GAP.sub('', text)[:500] or None
+    text = OCR_O.sub('o', OCR_W.sub('W', text))
+    text = OCR_CJK_PUNCT.sub(lambda m: FULL_WIDTH[m.group(1)], text)
+    text = TAB_CHIP.sub('', CJK_GAP.sub('', text))
+    return text.strip()[:500] or None
+
+
+def same_text(a, b):
+    """Whether an OCR reading is (near enough) the given text: spaces and punctuation aside, at
+    most one character in six read wrong."""
+    keep = lambda t: re.sub(r'[\s\W_]+', '', t or '')
+    a, b = keep(a), keep(b)
+    if not a or not b:
+        return a == b
+    import difflib
+    return difflib.SequenceMatcher(None, a, b).ratio() >= 0.83
 
 
 def suggestions_from(data):
@@ -3499,6 +3522,7 @@ class UiWatcher:
         self.last_usage_check = 0.0
         self.usage_checked_once = False
         self.last_turn_check = 0.0
+        self.clock = time.time
         self.lock = threading.Lock()
 
     def look(self, app):
@@ -3514,7 +3538,7 @@ class UiWatcher:
                       'doc': docs[0]}
         with self.lock:
             before = dict(self.state.get(app) or {})
-        suggestion, suggestion_doc = self.suggestion(app, answer, before, prompt)
+        suggestion, suggestion_doc, tries = self.suggestion(app, answer, before, prompt)
         with self.lock:
             before = self.state.get(app) or {}
             old = before.get('prompt')
@@ -3527,7 +3551,9 @@ class UiWatcher:
                                'card': before.get('card'), 'cardAt': before.get('cardAt'),
                                'mode': answer.get('mode'), 'running': answer.get('running'),
                                'update': answer.get('update'), 'hint': answer.get('hint'),
-                               'suggestion': suggestion, 'suggestionDoc': suggestion_doc}
+                               'suggestion': suggestion, 'suggestionDoc': suggestion_doc,
+                               'suggestionTries': tries,
+                               'suggestionAt': self.clock() if tries != before.get('suggestionTries') else before.get('suggestionAt')}
             if self.memory and answer.get('usage') and answer['usage'] != before.get('usage'):
                 self.remember_usage()
         if prompt and (not old or old['promptId'] != prompt['promptId']):
@@ -3536,29 +3562,56 @@ class UiWatcher:
             self.send(f'🔔 {APP_NAMES[app]} 在等你核准', f'{self.pc_name}・「{title}」：{prompt["text"][:120]}', 4, ['bell'],
                       open_link(self.pc_name, app, session_id, title) if session_id else open_link(self.pc_name))
 
+    SUGGESTION_TRIES = 4    # Codex: OCR readings of an idle box before giving up until it changes
+    SUGGESTION_EVERY = 15   # seconds between them
+
     def suggestion(self, app, answer, before, prompt):
-        """(text, page) of the suggested next message in the app's empty message box, else
-        (None, None). A help text other than the box's usual hints is the suggestion itself; an
-        empty one is Claude's (11/18): the suggestion is drawn as the placeholder, out of UI
-        Automation's reach, and read once with OCR when it appears (each reading about a second,
-        nothing on screen moves)."""
+        """(text, page, tries) of the suggested next message in the app's empty message box, else
+        (None, None or the page, tries): the grey text the desktop app's Tab accepts (11/18).
+
+        Claude: a help text other than the box's usual hints is the suggestion itself; an empty
+        one means the suggestion is drawn as the placeholder, out of UI Automation's reach, and
+        read once with OCR when it appears.
+        Codex: the help text is always empty, so the idle empty box is read with OCR and its usual
+        placeholders are no suggestion. Codex predicts after a turn ends, a few seconds later, and
+        only for some turns (its sample rate): read up to SUGGESTION_TRIES times SUGGESTION_EVERY
+        seconds apart, then not again until the page, the box or a turn changes. Each reading is
+        about a second and nothing on screen moves."""
         docs = answer.get('docs') or []
-        usual = (self.hub.strings.get(app) or {}).get('edit_hints')
-        if usual is None or not answer.get('window') or len(docs) != 1 or prompt or answer.get('running'):
-            return None, None
+        strings = self.hub.strings.get(app) or {}
+        usual, placeholders = strings.get('edit_hints'), strings.get('edit_placeholders')
+        if (usual is None and placeholders is None) or not answer.get('window') or len(docs) != 1 or prompt \
+                or answer.get('running'):
+            return None, None, 0
         hint = answer.get('hint')
-        offered = suggested_message(hint, usual)
-        if offered:
-            return offered, docs[0]
-        if hint != '' or not answer.get('boxEmpty') or not answer.get('hwnd'):
-            return None, None
-        if before.get('hint') == '' and before.get('suggestionDoc') == docs[0]:
-            return before.get('suggestion'), docs[0]   # read already
+        if usual is not None:
+            offered = suggested_message(hint, usual)
+            if offered:
+                return offered, docs[0], 0
+            if hint != '' or not answer.get('boxEmpty') or not answer.get('hwnd'):
+                return None, None, 0
+            if before.get('hint') == '' and before.get('suggestionDoc') == docs[0]:
+                return before.get('suggestion'), docs[0], 0   # read already
+            return self.read_suggestion(app, answer['hwnd'], placeholders), docs[0], 1
+        if not answer.get('boxEmpty') or not answer.get('hwnd'):
+            return None, None, 0
+        same = before.get('suggestionDoc') == docs[0]
+        tries = (before.get('suggestionTries') or 0) if same else 0
+        if same and before.get('suggestion'):
+            return before['suggestion'], docs[0], tries   # read already
+        now = self.clock()
+        if tries >= self.SUGGESTION_TRIES or (tries and now - (before.get('suggestionAt') or 0) < self.SUGGESTION_EVERY):
+            return None, docs[0], tries
+        return self.read_suggestion(app, answer['hwnd'], placeholders), docs[0], tries + 1
+
+    def read_suggestion(self, app, hwnd, placeholders):
         if not hasattr(self.driver, 'read_suggestion'):
-            return None, docs[0]
-        text = self.driver.read_suggestion(app, answer['hwnd'])
+            return None
+        text = self.driver.read_suggestion(app, hwnd)
+        if text and any(same_text(text, usual) for usual in placeholders or []):
+            text = None   # the box's usual placeholder
         logging.info('%s suggestion read: %s', app, (text or '(none)')[:80])
-        return text, docs[0]
+        return text
 
     def prompt_for(self, app, session_id):
         info = self.hub.info(app, session_id)
@@ -7413,14 +7466,15 @@ class FakeDriver:
         if app == 'claude':
             data = self.session_file(app, self.open_doc.get(app))[1] or {}
             answer['mode'] = ClaudeSource.PERMISSION_LABELS.get(data.get('permissionMode'), data.get('permissionMode'))
-            answer['running'] = self.open_doc.get(app) in self.running
+        answer['running'] = self.open_doc.get(app) in self.running
         answer['update'] = (getattr(self, 'fake_update', None) or {}).get(app)
         answer['hint'] = (getattr(self, 'fake_hint', None) or {}).get(app)
         answer['boxEmpty'], answer['hwnd'] = True, 1
         return answer
 
     def read_suggestion(self, app, hwnd):
-        self.calls.append(('read_suggestion', app))
+        # kept apart from self.calls: a reading changes nothing on screen
+        self.ocr_reads = getattr(self, 'ocr_reads', []) + [app]
         return ocr_text((getattr(self, 'fake_ocr', None) or {}).get(app))
 
     def probe(self, app, type=False, menus=False, text=''):

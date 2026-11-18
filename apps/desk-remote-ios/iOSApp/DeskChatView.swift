@@ -1358,6 +1358,33 @@ struct DeskInputBar: View {
         }
     }
 
+    /// The message box. A suggestion shows whole, wrapped over as many lines as it needs (asked
+    /// 11/18: 「需要可以看到完整的建議文字」): a text field's placeholder keeps to one line and cut
+    /// it off, so the suggestion is grey text drawn behind an empty field, in a box drawn like the
+    /// rounded-border field.
+    private var field: some View {
+        ZStack(alignment: .topLeading) {
+            if let offered, !dictation.listening {
+                Text(offered)
+                    .foregroundStyle(Color(.placeholderText))
+                    .lineLimit(sendButton ? 6 : 12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+            TextField(dictation.listening ? "請說話…" : offered == nil ? placeholder : "", text: $text, axis: .vertical)
+                .lineLimit(sendButton ? 1 ... 6 : 3 ... 12)
+                .focused(focused)
+                .accessibilityIdentifier(inputID)
+        }
+        .padding(.horizontal, 7)
+        .padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color(.systemBackground)))
+        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color(.separator), lineWidth: 0.5))
+        .contentShape(Rectangle())
+        .onTapGesture { focused.wrappedValue = true }
+    }
+
     private var row: some View {
         HStack(alignment: .bottom, spacing: 8) {
             if limit > 0 {
@@ -1380,11 +1407,7 @@ struct DeskInputBar: View {
             }
             .accessibilityLabel(dictation.listening ? "停止語音輸入" : "語音輸入")
             .accessibilityIdentifier("chat-mic")
-            TextField(dictation.listening ? "請說話…" : offered ?? placeholder, text: $text, axis: .vertical)
-                .lineLimit(sendButton ? 1 ... 6 : 3 ... 12)
-                .textFieldStyle(.roundedBorder)
-                .focused(focused)
-                .accessibilityIdentifier(inputID)
+            field
             if let offered {
                 Button {
                     text = offered

@@ -4,7 +4,8 @@
 # from the window (PrintWindow: a covered window still draws) and read. Its own process because
 # it must be DPI aware to see real pixels, which would change the coordinates uia_worker.ps1
 # clicks with. Nothing is written to disk.
-param([long]$Hwnd, [string]$EditName, [string]$Language = 'zh-Hant-TW', [int]$Shots = 2)
+# -ImagePath reads a saved picture of the box instead (for trying changes on real pictures).
+param([long]$Hwnd, [string]$EditName, [string]$Language = 'zh-Hant-TW', [int]$Shots = 2, [string]$ImagePath)
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 Add-Type -AssemblyName System.Drawing, UIAutomationClient, UIAutomationTypes, System.Runtime.WindowsRuntime
@@ -49,6 +50,7 @@ public static class DeskOcrLighten {
 
 function Done($obj) { Write-Output ($obj | ConvertTo-Json -Compress); exit 0 }
 
+if (-not $ImagePath) {
 $h = [IntPtr]$Hwnd
 if ([DeskOcrWin]::IsIconic($h)) { Done @{ ok = $false; error = 'minimized' } }
 $AE = [System.Windows.Automation.AutomationElement]
@@ -65,6 +67,7 @@ $ww = $rect.Right - $rect.Left; $wh = $rect.Bottom - $rect.Top
 $x = [int]($box.X - $rect.Left); $y = [int]($box.Y - $rect.Top)
 $bw = [int][Math]::Min($box.Width, $ww - $x); $bh = [int][Math]::Min($box.Height, $wh - $y)
 if ($ww -le 0 -or $bw -le 8 -or $bh -le 8 -or $x -lt 0 -or $y -lt 0) { Done @{ ok = $false; error = 'no-box' } }
+}
 
 $null = [Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType = WindowsRuntime]
 $null = [Windows.Graphics.Imaging.BitmapDecoder, Windows.Graphics.Imaging, ContentType = WindowsRuntime]
@@ -88,6 +91,12 @@ $attrs.SetColorMatrix($matrix)
 
 # Two shots, each pixel the lighter of them: anything that blinks or moves goes.
 $box = $null
+if ($ImagePath) {
+  $file = [System.Drawing.Bitmap]::FromFile($ImagePath)
+  $bw = $file.Width; $bh = $file.Height
+  $box = $file.Clone((New-Object System.Drawing.Rectangle 0, 0, $bw, $bh), [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+  $file.Dispose(); $Shots = 0
+}
 for ($i = 0; $i -lt $Shots; $i++) {
   if ($i -gt 0) { Start-Sleep -Milliseconds 300 }
   $full = New-Object System.Drawing.Bitmap $ww, $wh
