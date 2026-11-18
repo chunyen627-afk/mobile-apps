@@ -214,6 +214,23 @@ function Get-Prompt($w, $s) {
       ForEach-Object { $_.Current.Name.Trim() } | Where-Object { $_ })
     if ($texts.Count -ge 1) { break }
   }
+  # Codex's computer-use approval ("allow ChatGPT to use systempropertiesadvanced?", home PC 11/19)
+  # puts its buttons in a row of their own and its words in the element just before that row,
+  # both straight in the transcript: the climb above ends at the whole conversation (the phone
+  # showed the transcript as the question). There, the row's previous element is the question.
+  if ($texts.Count -gt 12) {
+    $raw = [System.Windows.Automation.TreeWalker]::RawViewWalker
+    $row = $raw.GetParent($deny)
+    $card = if ($row) { $raw.GetPreviousSibling($row) } else { $null }
+    if ($card) {
+      $near = @($card.FindAll($Tree::Subtree, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Text))) |
+        ForEach-Object { $_.Current.Name.Trim() } | Where-Object { $_ })
+      if ($near.Count -ge 1 -and $near.Count -le 12) {
+        $texts = $near
+        $box = $row
+      }
+    }
+  }
   $buttons = @($box.FindAll($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Button))) |
     ForEach-Object { $_.Current.Name } | Where-Object { $_ })
   return @{ text = ($texts -join "`n"); buttons = $buttons }
@@ -1980,7 +1997,10 @@ function Run-Command($c) {
         return @{ ok = $true; how = 'invoke' }
       }
       if ($c.app -eq 'codex') {
+        # A computer-use approval has no "allow once": its narrowest allow is "allow this
+        # conversation" (allow_conversation); "always allow" is never pressed from the phone (home PC 11/19).
         $b = Find-ByName $w $CT::Button $s.allow_once
+        if (-not $b -and $s.allow_conversation) { $b = Find-ByName $w $CT::Button $s.allow_conversation }
         if (-not $b -or -not (Invoke-Element $b)) { Fail 'not-invokable' 'allow once not invokable' }
         return @{ ok = $true; how = 'invoke' }
       }
