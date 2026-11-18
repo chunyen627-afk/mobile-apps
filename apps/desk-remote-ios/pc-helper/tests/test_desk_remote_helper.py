@@ -643,11 +643,11 @@ class DrivingTests(FakeEnvironment):
                 self.submitted.append((kind, app, session_id, payload))
                 return self.answers.pop(0) if self.answers else (202, {'id': 'x'})
         runner = Runner()
-        now = [h.datetime(2026, 11, 14, 23, 0).timestamp()]  # a Saturday night
+        now = [h.datetime(2026, 11, 14, 23, 0, tzinfo=h.TAIWAN).timestamp()]  # a Saturday night
         plan = h.SelfCheckPlan(runner, folder, shared, clock=lambda: now[0])
         plan.tick()
         self.assertEqual(runner.submitted, [], 'the first version seen is only remembered')
-        now[0] = h.datetime(2026, 11, 15, 3, 0, 30).timestamp()  # Sunday 03:00
+        now[0] = h.datetime(2026, 11, 15, 3, 0, 30, tzinfo=h.TAIWAN).timestamp()  # Sunday 03:00
         plan.tick()
         self.assertEqual(runner.submitted[-1][3], {'reason': '每週例行'})
         plan.tick()
@@ -2579,7 +2579,9 @@ class PopupTests(FakeEnvironment):
             made, official = Path(folder) / 'exec-1.png', Path(folder) / 'official-original.jpg'
             made.write_bytes(base64.b64decode(png))
             official.write_bytes(base64.b64decode(png))
-            mine, theirs = str(made).replace('\\', '/'), str(official).replace('\\', '/')
+            # A Windows path as Codex writes it; on the Mac CI (no drive letter) a file: URL instead.
+            mine = str(made).replace('\\', '/') if os.name == 'nt' else made.as_uri()
+            theirs = official.as_uri()
             text = (f'**左邊是示意，右邊是官方原圖。**\n\n| 示意 | 官方 |\n|---|---|\n| ![假髮修剪與定型示意]({mine}) | '
                     f'![娜娜莉官方原圖]({theirs}) |\n\n要接近[官方造型](https://example.com/)，![網頁圖](https://example.com/a.png) '
                     f'![不見了](C:/nowhere/x.png) ![再一次]({mine})')
