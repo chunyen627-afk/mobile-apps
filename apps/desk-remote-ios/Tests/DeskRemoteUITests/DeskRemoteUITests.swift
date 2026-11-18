@@ -1293,13 +1293,13 @@ final class DeskRemoteUITests: XCTestCase {
     }
 
     private func inside(_ element: XCUIElement, _ area: XCUIElement) -> Bool {
-        guard area.exists, let frame = look(element)?.frame else { return false }
-        return area.frame.contains(CGPoint(x: frame.midX, y: frame.midY))
+        guard let box = look(area)?.frame, let frame = look(element)?.frame else { return false }
+        return box.contains(CGPoint(x: frame.midX, y: frame.midY))
     }
 
     /// The open sheet's list (the chat behind it is a scroll view, not a list).
     private var sheetList: XCUIElement {
-        app.collectionViews.firstMatch.exists ? app.collectionViews.firstMatch : app.tables.firstMatch
+        look(app.collectionViews.firstMatch) != nil ? app.collectionViews.firstMatch : app.tables.firstMatch
     }
 
     /// Flips a switch at its knob and waits for what it starts. A sheet that has just come up
@@ -1355,11 +1355,14 @@ final class DeskRemoteUITests: XCTestCase {
         // Right after the tap that opens the sheet neither list is there yet, and asking the
         // missing table for its frame fails the test outright (iPad run 42758950390, test26:
         // "No matches found for … Descendants matching type Table"): wait for the sheet first.
-        guard poll(timeout: 10, { self.app.collectionViews.firstMatch.exists || self.app.tables.firstMatch.exists }) else {
+        // Looked at, not asked `exists`: on a slow iPad runner `exists` once took too long behind
+        // the chat and failed the test outright (run 44319237149, test26: "Failed to get matching
+        // snapshots: Timed out while evaluating UI query"); a look that times out is only a miss.
+        guard poll(timeout: 10, { self.look(self.app.collectionViews.firstMatch) != nil || self.look(self.app.tables.firstMatch) != nil }) else {
             return false
         }
         let list = sheetList
-        let visible = { element.exists && self.inside(element, list) && element.isHittable }
+        let visible = { self.inside(element, list) && element.isHittable }
         if poll(timeout: 2, visible) { return settled(element) }
         for _ in 0 ..< 10 {
             drag(towardsEnd: true, in: list)
