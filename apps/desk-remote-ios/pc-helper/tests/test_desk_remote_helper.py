@@ -3468,6 +3468,29 @@ class LightWatchTests(unittest.TestCase):
         self.assertEqual([l.split(',')[2:] for l in samples[1:]],
                          [[v, ''] for v in ('55.0', '54.0', '170.0', '100.0', '170.0', '175.0', '60.0', '58.0')],
                          'not every look was kept for the calibration')
+
+    def test_a_light_turned_off_while_the_helper_restarted_is_notified(self):
+        # 11/18: the lights went off at 12:32 while the helper restarted for an update; the first
+        # look said off "at start" and no LINE message came, though today's log said on.
+        (self.root / 'light_log.csv').write_text('date,time,state,level,note\n2026-11-11,08:59:48,on,180.0\n',
+                                                 encoding='utf-8')
+        self.tick(85)
+        self.tick(86)
+        self.assertFalse(self.watch.on)
+        self.assertEqual([n[0] for n in self.notes], ['示範電腦：玻璃門暗了'])
+        last = (self.root / 'light_log.csv').read_text(encoding='utf-8').splitlines()[-1].split(',')
+        self.assertEqual(last[2:], ['off', '86.0'], 'a change, not a start')
+        # A restart that finds the light as the log says still says nothing.
+        self.notes.clear()
+        again = h.LightWatch(self.feed, (0.75, 0.4, 0.05, 0.18), self.root / 'light_log.csv',
+                             notify=lambda title, message, **kw: self.notes.append((title, message, kw)),
+                             pc_name='示範電腦', name='玻璃門', interval=30, on_above=130, off_below=90, settle=0,
+                             hours=(8, 18), weekdays_only=True,
+                             measure=lambda jpeg: self.levels.pop(0), clock=lambda: self.now[0], sleep=lambda s: None)
+        self.watch = again
+        self.tick(84)
+        self.tick(85)
+        self.assertEqual(self.notes, [])
         self.assertEqual(self.feed.opened, 1, 'every sample reopened the camera although the feed was still open')
 
     def test_outside_workdays_and_hours_nothing_is_watched_and_the_window_starts_afresh(self):
@@ -3491,7 +3514,8 @@ class LightWatchTests(unittest.TestCase):
         self.assertIsNone(self.watch.on)
         self.tick(182)
         self.assertTrue(self.watch.on)
-        self.assertEqual(self.notes[-1][0], '示範電腦：玻璃門亮了（小幫手啟動時已亮）')
+        # Today's log already said off: on after the restart is a change (11/18), not a start.
+        self.assertEqual(self.notes[-1][0], '示範電腦：玻璃門亮了')
         # Restarted the same day with the light still on (0.5.51): the log already ends 'on', so
         # nothing is logged or sent again; a new day is a fresh start.
         sent = len(self.notes)
@@ -3681,7 +3705,8 @@ class CameraHttpTests(FakeEnvironment):
         light = json.loads(body)
         self.assertEqual((code, light['ok'], light['on'], len(light['days'])), (200, True, True, 2))
         self.assertEqual([c['time'] for c in light['days'][0]['changes']], ['08:05:17', '12:01:48'] + [c['time'] for c in light['days'][0]['changes']][2:])
-        self.assertEqual(light['days'][0]['changes'][-1]['start'], True)
+        # Today's log ends off and the first look is on: a change while the helper was away (11/18).
+        self.assertEqual(light['days'][0]['changes'][-1]['start'], False)
         self.assertEqual(len(light['days'][1]['changes']), 4)
         self.assertEqual(light['samples'][-1]['level'], 183.0)
         self.assertEqual(self.fetch(server, '/v1/light', token='wrong')[0], 401)

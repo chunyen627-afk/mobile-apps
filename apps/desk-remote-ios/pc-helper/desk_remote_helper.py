@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.81'
+VERSION = '0.5.82'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -6593,9 +6593,15 @@ class LightWatch:
 
     def record(self, when, on, level, first=False):
         stamp = datetime.fromtimestamp(when)
-        if first and self.last_logged(f'{stamp:%Y-%m-%d}') == ('on' if on else 'off'):
-            logging.info('light %s: %s (level %.0f) at start, as the log already says: a restart', self.name, 'on' if on else 'off', level)
-            return
+        if first:
+            logged = self.last_logged(f'{stamp:%Y-%m-%d}')
+            if logged == ('on' if on else 'off'):
+                logging.info('light %s: %s (level %.0f) at start, as the log already says: a restart', self.name, 'on' if on else 'off', level)
+                return
+            if logged is not None:
+                # Today's log says otherwise: the light changed while the helper restarted, a change
+                # like any other (11/18: off at 12:32 during a restart, and no LINE message came).
+                first = False
         line = f"{stamp:%Y-%m-%d},{stamp:%H:%M:%S},{'on' if on else 'off'},{level:.1f}"
         if first:
             line += ',start'
