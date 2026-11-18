@@ -3469,6 +3469,35 @@ class LightWatchTests(unittest.TestCase):
                          [[v, ''] for v in ('55.0', '54.0', '170.0', '100.0', '170.0', '175.0', '60.0', '58.0')],
                          'not every look was kept for the calibration')
 
+    def test_a_gap_in_the_watch_is_reported_once_the_light_is_known_again(self):
+        # 11/18, the user chose 「中斷補報」: more than five minutes without a picture inside the
+        # watch window is sent afterwards with the light's state and the picture.
+        self.tick(170)
+        self.tick(172)
+        self.assertEqual(len(self.notes), 1)  # on at start
+        self.now[0] += 2 * 3600  # the PC was off from 09:01 to 11:01
+        self.tick(171, minutes=0)
+        self.assertEqual(len(self.notes), 1, 'reported before the state was confirmed')
+        self.tick(170)
+        self.assertEqual(self.notes[-1][0], '示範電腦：玻璃門監看中斷')
+        self.assertIn('監看中斷 09:01–11:01', self.notes[-1][1])
+        self.assertIn('現在亮', self.notes[-1][1])
+        self.assertTrue(self.notes[-1][2]['picture'].startswith(b'\xff\xd8\xff'))
+        # A gap that ends in a change: one message carries both.
+        self.now[0] += 20 * 60
+        self.tick(60, minutes=0)
+        self.tick(58)
+        self.assertEqual(self.notes[-1][0], '示範電腦：玻璃門暗了')
+        self.assertIn('監看中斷 11:01–11:21', self.notes[-1][1])
+        self.assertEqual(len(self.notes), 3)
+        # Short gaps (a restart for an update) and the night before the window opens are not gaps.
+        self.tick(57, minutes=3)
+        self.assertEqual(len(self.notes), 3)
+        self.now[0] = time.mktime((2026, 11, 12, 8, 0, 20, 3, 316, -1))
+        self.tick(56, minutes=0)
+        self.tick(55)
+        self.assertEqual(len(self.notes), 3, 'the night was taken for a gap')
+
     def test_a_light_turned_off_while_the_helper_restarted_is_notified(self):
         # 11/18: the lights went off at 12:32 while the helper restarted for an update; the first
         # look said off "at start" and no LINE message came, though today's log said on.

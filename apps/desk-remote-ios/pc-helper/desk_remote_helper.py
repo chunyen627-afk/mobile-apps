@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.82'
+VERSION = '0.5.83'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -6453,6 +6453,7 @@ class LightWatch:
     SETTLE_FRAMES = 6   # frames waited for at most (settle seconds apart) before measuring anyway
 
     KEEP = 30  # recent samples kept for /v1/light (to pick the thresholds)
+    OUTAGE = 300  # seconds without a picture inside the watch window that are reported afterwards
 
     def __init__(self, feed, region, log_path, notify=None, pc_name='', name='', interval=30.0,
                  on_above=160.0, off_below=120.0, settle=1.0, hours=(0, 24), weekdays_only=False,
@@ -6475,6 +6476,9 @@ class LightWatch:
         self.error = None
         self.samples = []     # the last (when, level)
         self.picture = None   # the JPEG the last level was measured on (sent with a change's notification)
+        self.last_seen = None  # when a picture was last measured (from light_samples.csv at start)
+        self.outage = None     # (from, to) of a gap in the watch not yet reported
+        self.outage_looks = 0  # looks since the gap ended
 
     def active(self, when=None):
         """Whether this moment is inside the watch window (hours, and Monday-Friday when
@@ -6502,6 +6506,7 @@ class LightWatch:
                 self.error = f'畫面讀不出來（{exc}）'
             return None
         now = self.clock()
+        self.note_gap(now)
         change = None
         with self.lock:
             self.picture = data
@@ -6534,7 +6539,59 @@ class LightWatch:
         self.keep_sample(now, level)
         if change is not None:
             self.record(now, change[0], level, first=change[1])
+        elif self.outage is not None and self.on is not None:
+            # Reported once a second look agrees on the state: a change during the gap must not
+            # be reported as the old state.
+            if self.pending is None and self.outage_looks >= 1:
+                self.report_outage(now, level)
+            else:
+                self.outage_looks += 1
         return level
+
+    def note_gap(self, now):
+        """A gap of more than OUTAGE seconds inside today's watch window since the last measured
+        picture (the helper stopped, the PC restarted, the camera gave nothing) is kept to be
+        reported once the light's state is known again (the user 11/18, after a change during a
+        restart went unsent: 「要規劃一下以後避免發生誤判漏發」, chose 「中斷補報」)."""
+        if self.last_seen is None:
+            self.last_seen = self.last_sample_time()
+        last, self.last_seen = self.last_seen, now
+        if last is None:
+            return
+        day = datetime.fromtimestamp(now)
+        opened = day.replace(hour=self.hours[0], minute=0, second=0, microsecond=0).timestamp()
+        start = max(last, opened)
+        if now - start > max(self.OUTAGE, 4 * self.interval):
+            begun = self.outage[0] if self.outage else start
+            self.outage, self.outage_looks = (begun, now), 0
+
+    def last_sample_time(self):
+        """When light_samples.csv's last look was taken, or None."""
+        try:
+            with self.samples_path.open('rb') as handle:
+                handle.seek(0, os.SEEK_END)
+                handle.seek(max(0, handle.tell() - 512))
+                tail = handle.read().decode('utf-8', 'replace').strip().splitlines()
+            date, clock = tail[-1].split(',')[:2]
+            return datetime.strptime(f'{date} {clock}', '%Y-%m-%d %H:%M:%S').timestamp()
+        except (OSError, ValueError, IndexError):
+            return None
+
+    def outage_text(self):
+        begun, ended = self.outage
+        return f'監看中斷 {datetime.fromtimestamp(begun):%H:%M}–{datetime.fromtimestamp(ended):%H:%M}（這段時間沒有畫面）'
+
+    def report_outage(self, now, level):
+        text, self.outage = self.outage_text(), None
+        logging.info('light %s: %s, now %s', self.name, text, 'on' if self.on else 'off')
+        if self.notify is None:
+            return
+        state = '亮' if self.on else '暗'
+        try:
+            self.notify(f'{self.pc_name}：{self.name}監看中斷', f'{text}，現在{state}（{datetime.fromtimestamp(now):%H:%M} 亮度 {level:.0f}）',
+                        tags=['bulb'], picture=self.picture, picture_name='light.jpg', shared=True)
+        except OSError as exc:
+            logging.warning('light notification failed: %s', exc)
 
     def keep_sample(self, when, level):
         """Appends one look to light_samples.csv (every sample, not only changes): the level and
@@ -6597,6 +6654,8 @@ class LightWatch:
             logged = self.last_logged(f'{stamp:%Y-%m-%d}')
             if logged == ('on' if on else 'off'):
                 logging.info('light %s: %s (level %.0f) at start, as the log already says: a restart', self.name, 'on' if on else 'off', level)
+                if self.outage is not None:
+                    self.report_outage(when, level)
                 return
             if logged is not None:
                 # Today's log says otherwise: the light changed while the helper restarted, a change
@@ -6614,10 +6673,14 @@ class LightWatch:
         except OSError as exc:
             logging.warning('light log could not be written: %s', exc)
         logging.info('light %s: %s (level %.0f%s)', self.name, 'on' if on else 'off', level, ', at start' if first else '')
-        if self.notify is not None and (on or not first):
-            title = f'{self.pc_name}：{self.name}' + ('亮了' if on else '暗了') + ('（小幫手啟動時已亮）' if first else '')
+        extra = ''
+        if self.outage is not None:
+            extra, self.outage = '；' + self.outage_text(), None
+            logging.info('light %s: %s', self.name, extra[1:])
+        if self.notify is not None and (on or not first or extra):
+            title = f'{self.pc_name}：{self.name}' + ('亮了' if on else '暗了') + ('（小幫手啟動時已亮）' if first and on else '')
             try:
-                self.notify(title, f'{stamp:%H:%M} 亮度 {level:.0f}', tags=['bulb'], picture=self.picture, picture_name='light.jpg',
+                self.notify(title, f'{stamp:%H:%M} 亮度 {level:.0f}{extra}', tags=['bulb'], picture=self.picture, picture_name='light.jpg',
                             shared=True)
             except OSError as exc:
                 logging.warning('light notification failed: %s', exc)
