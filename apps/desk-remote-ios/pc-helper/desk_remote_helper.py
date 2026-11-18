@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.83'
+VERSION = '0.5.84'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -6648,19 +6648,32 @@ class LightWatch:
         parts = rows[-1].split(',')
         return parts[2] if len(parts) >= 3 and parts[0] == date else None
 
+    def last_told(self, date):
+        """The state ('on'/'off') last sent today: the log's last row from `date` that went out
+        as a notification. A dark start ('off' with note 'start') is logged but never sent."""
+        try:
+            rows = [l.split(',') for l in self.log_path.read_text(encoding='utf-8').splitlines()
+                    if l and not l.startswith('date,')]
+        except OSError:
+            return None
+        told = [r[2] for r in rows if len(r) >= 3 and r[0] == date and not (r[2] == 'off' and len(r) > 4 and r[4] == 'start')]
+        return told[-1] if told else None
+
     def record(self, when, on, level, first=False):
         stamp = datetime.fromtimestamp(when)
         if first:
-            logged = self.last_logged(f'{stamp:%Y-%m-%d}')
-            if logged == ('on' if on else 'off'):
-                logging.info('light %s: %s (level %.0f) at start, as the log already says: a restart', self.name, 'on' if on else 'off', level)
+            state = 'on' if on else 'off'
+            told = self.last_told(f'{stamp:%Y-%m-%d}')
+            if told is not None and told != state:
+                # The light changed since the last message today, while the helper was restarting
+                # (11/18: lit at 08:59, dark after the 12:31 restart; the dark start was logged but
+                # never sent, and later restarts took that row for the news already told).
+                first = False
+            elif self.last_logged(f'{stamp:%Y-%m-%d}') == state:
+                logging.info('light %s: %s (level %.0f) at start, as the log already says: a restart', self.name, state, level)
                 if self.outage is not None:
                     self.report_outage(when, level)
                 return
-            if logged is not None:
-                # Today's log says otherwise: the light changed while the helper restarted, a change
-                # like any other (11/18: off at 12:32 during a restart, and no LINE message came).
-                first = False
         line = f"{stamp:%Y-%m-%d},{stamp:%H:%M:%S},{'on' if on else 'off'},{level:.1f}"
         if first:
             line += ',start'

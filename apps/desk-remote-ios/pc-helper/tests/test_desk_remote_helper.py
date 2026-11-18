@@ -3520,6 +3520,18 @@ class LightWatchTests(unittest.TestCase):
         self.tick(84)
         self.tick(85)
         self.assertEqual(self.notes, [])
+
+    def test_a_dark_start_logged_but_never_sent_does_not_hide_the_change(self):
+        # 11/18 live: on at 08:59 (sent), the 12:31 restart logged 'off ... start' without a
+        # message, and the restarts after it found the log already saying off: never sent.
+        (self.root / 'light_log.csv').write_text(
+            'date,time,state,level,note\n2026-11-11,08:00:39,off,82.2,start\n2026-11-11,08:59:48,on,180.0\n'
+            '2026-11-11,12:33:00,off,86.0,start\n', encoding='utf-8')
+        self.tick(84)
+        self.tick(85)
+        self.assertEqual([n[0] for n in self.notes], ['示範電腦：玻璃門暗了'])
+        last = (self.root / 'light_log.csv').read_text(encoding='utf-8').splitlines()[-1].split(',')
+        self.assertEqual(last[2:], ['off', '85.0'])
         self.assertEqual(self.feed.opened, 1, 'every sample reopened the camera although the feed was still open')
 
     def test_outside_workdays_and_hours_nothing_is_watched_and_the_window_starts_afresh(self):
@@ -3543,8 +3555,8 @@ class LightWatchTests(unittest.TestCase):
         self.assertIsNone(self.watch.on)
         self.tick(182)
         self.assertTrue(self.watch.on)
-        # Today's log already said off: on after the restart is a change (11/18), not a start.
-        self.assertEqual(self.notes[-1][0], '示範電腦：玻璃門亮了')
+        # Today's only row is a dark start, never sent: lit now is the day's first news (11/18).
+        self.assertEqual(self.notes[-1][0], '示範電腦：玻璃門亮了（小幫手啟動時已亮）')
         # Restarted the same day with the light still on (0.5.51): the log already ends 'on', so
         # nothing is logged or sent again; a new day is a fresh start.
         sent = len(self.notes)
