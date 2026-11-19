@@ -42,7 +42,7 @@
     "effort_rail": "TickRail",
     "effort_status": "第 {0} 項",
     "effort_status_mark": "項，共",
-    "models": ["GPT-6.1 Sol", "GPT-6.1 Terra", "GPT-6 Sol", "GPT-6 Luna", "GPT-6 Astra", "GPT-5.6 Sol", "GPT-5.6 Terra", "GPT-5.6 Luna"],
+    "models": ["GPT-6.2 Sol", "GPT-6.2 Astra", "GPT-6.1 Sol", "GPT-6.1 Terra", "GPT-6 Sol", "GPT-6 Luna", "GPT-6 Astra", "GPT-5.6 Sol", "GPT-5.6 Terra", "GPT-5.6 Luna"],
     "permission_button": "變更權限",
     "modes": ["要求核准", "代我核准"],
     "stop": "停止",
