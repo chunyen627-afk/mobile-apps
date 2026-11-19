@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.90'
+VERSION = '0.5.91'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -918,6 +918,7 @@ class CodexParser:
         # them ("1 of 2"), showing the oldest (home PC 11/19: the phone showed the newer card while
         # the PC asked the older one, and the answer found no such question on screen).
         self.pending = []
+        self.asked = {}       # questionId -> when it was asked (epoch seconds)
         self.dropped = set()
         self.model = self.effort = self.mode = None
         self.turn_ts = None  # when the last turn_context (model, effort, mode) was written
@@ -928,15 +929,30 @@ class CodexParser:
     # cards and their replies.
     catch_up_marks = (b'"questions', CODEX_REPLY_TAG.encode())
 
+    # A card asked longer ago than this is not shown (home PC 11/19 evening: the 90 MB conversation
+    # had 37 cards from 11/06-11/08 answered by typing instead, which writes no reply; read back by
+    # catch_up they queued up oldest first, and each answered from the phone failed and showed the
+    # next old one: 「一直出現以前的選擇 目前早就沒有這些選擇」).
+    CARD_MAX_AGE = 24 * 3600
+
     @property
     def question(self):
         """The card the PC shows now (one option per question, or words), or None."""
-        return self.pending[0] if self.pending else None
+        now = time.time()
+        for card in self.pending:
+            asked = self.asked.get(card['questionId'])
+            if asked is None or now - asked <= self.CARD_MAX_AGE:
+                return card
+        return None
 
-    def add_question(self, question):
+    def add_question(self, question, ts=None):
         if question and question['questionId'] not in self.dropped \
                 and all(q['questionId'] != question['questionId'] for q in self.pending):
             self.pending.append(question)
+            try:
+                self.asked[question['questionId']] = datetime.fromisoformat(str(ts).replace('Z', '+00:00')).timestamp()
+            except ValueError:
+                pass
 
     def drop_question(self, question_id):
         """A card the PC no longer shows (closed with 解除, found when an answer looked for it)."""
@@ -997,7 +1013,7 @@ class CodexParser:
                 except ValueError:
                     data = raw
                 if name == CODEX_QUESTION_TOOL:
-                    self.add_question(codex_question_from(payload.get('call_id'), data))
+                    self.add_question(codex_question_from(payload.get('call_id'), data), ts)
                     return []  # a card on the phone, not a tool row
                 text = summarize_input(name, data) if isinstance(data, dict) else str(raw or '')
                 return [{'kind': 'tool_call', 'tool': name, 'text': text, 'ts': ts}]
@@ -1014,7 +1030,11 @@ class CodexParser:
     def answered(self, answers, ts):
         """The card's reply (from the PC or the phone): the question is done, shown as a status."""
         done = {call_id for call_id, _ in answers}
-        self.pending = [q for q in self.pending if q['questionId'] not in done]
+        # A reply to a card also ends every card asked before it (the user 11/19: 「選過的一律都要
+        # 砍掉不然會誤發出來」): Codex pages the oldest first, so an older card still listed was
+        # answered by typing, skipped or is gone.
+        last = max((i for i, q in enumerate(self.pending) if q['questionId'] in done), default=-1)
+        self.pending = [q for i, q in enumerate(self.pending) if i > last and q['questionId'] not in done]
         chosen = '、'.join(answer for _, answer in answers if answer.strip())
         return [{'kind': 'status', 'text': f'已回答選項題：{chosen}' if chosen else '已回答選項題', 'ts': ts}]
 
@@ -1035,7 +1055,7 @@ class CodexParser:
             if isinstance(item.get('questions'), list):
                 # `request_user_input_async`: the message's text repeats the card's words (title and
                 # options), so the card alone is shown (live 11/5).
-                self.add_question(codex_question_from(item.get('id'), {'questions': item['questions']}))
+                self.add_question(codex_question_from(item.get('id'), {'questions': item['questions']}), ts)
                 return []
             text = flatten(item.get('content'))  # Automation heartbeats are echoed back; hide those too.
             return [{'kind': 'assistant', 'text': text, 'ts': ts, 'images': text_images(text)}] \

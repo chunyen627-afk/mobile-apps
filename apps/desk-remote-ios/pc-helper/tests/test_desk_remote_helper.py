@@ -227,6 +227,30 @@ class CodexQuestionTests(FakeEnvironment):
     or from the phone, both seen through the reply the card writes (the user asked on 11/5 that
     either place works, since they often sit at the PC)."""
 
+    def setUp(self):
+        super().setUp()
+        # The fixtures' cards are from 11/04; only the age test below looks at the age.
+        patcher = mock.patch.object(h.CodexParser, 'CARD_MAX_AGE', 10 ** 10)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_old_cards_and_cards_before_an_answered_one_are_not_shown(self):
+        """Home PC 11/19: 37 cards from 11/06-11/08 answered by typing came back one after another
+        (「一直出現以前的選擇」「選過的一律都要砍掉不然會誤發出來」)."""
+        transcript = h.Transcript(self.sources['codex'].transcript_path(X), h.CodexParser)
+        drain(transcript)
+        append_lines(transcript.path, codex_question_lines('call_old', '先不要解除封鎖？', ('是', '否')))
+        append_lines(transcript.path, codex_question_lines('call_mid', '熱點看得到嗎？', ('看得到', '看不到')))
+        append_lines(transcript.path, codex_question_lines('call_new', '新熱點連上了嗎？', ('連上了', '仍無法加入')))
+        transcript.refresh()
+        self.assertEqual(transcript.page(0, '')['question']['questionId'], 'call_old')
+        append_lines(transcript.path, [codex_reply_line('call_mid', '熱點看得到嗎？', '看得到')])
+        transcript.refresh()
+        self.assertEqual(transcript.page(0, '')['question']['questionId'], 'call_new',
+                         'the older card goes with the answered one')
+        with mock.patch.object(h.CodexParser, 'CARD_MAX_AGE', 24 * 3600):
+            self.assertIsNone(transcript.page(0, '')['question'], 'a card from 11/04 is long gone')
+
     def test_the_card_is_read_and_its_reply_ends_it(self):
         transcript = h.Transcript(self.sources['codex'].transcript_path(X), h.CodexParser)
         drain(transcript)
@@ -286,9 +310,9 @@ class CodexQuestionTests(FakeEnvironment):
         """The first read starts 3 MB from the end; a card asked before that is still up (home PC
         11/19: a 23 MB conversation, the older card missing on the phone)."""
         path = self.sources['codex'].transcript_path(X)
-        append_lines(path, codex_question_lines('call_old_a', '分頁檔：已按「是」了嗎？', ('已按「是」', '先不更動')))
         append_lines(path, codex_question_lines('call_old_b', '舊的已答題', ('甲', '乙')))
         append_lines(path, [codex_reply_line('call_old_b', '舊的已答題', '甲')])
+        append_lines(path, codex_question_lines('call_old_a', '分頁檔：已按「是」了嗎？', ('已按「是」', '先不更動')))
         filler = {'timestamp': '2026-11-04T16:25:00Z', 'type': 'event_msg', 'payload': {'type': 'token_count', 'info': {}}}
         append_lines(path, [filler] * 400)
         append_lines(path, codex_question_lines('call_new', '恢復挖礦的 `elevate` 請求等手機核准', ('已在手機核准', '先保持停止')))
