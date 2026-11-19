@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.89'
+VERSION = '0.5.90'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -2813,6 +2813,99 @@ class ActionError(Exception):
         self.code, self.message = code, message
 
 
+# A model's name in a desktop app's model menu, without what may follow it ('Opus 5.5 預設集').
+MODEL_NAME = {'claude': re.compile(r'(?:Opus|Sonnet|Haiku|Fable) \d+(?:\.\d+)?'),
+              'codex': re.compile(r'GPT-\d+(?:\.\d+)? [A-Z][a-z]+')}
+
+
+def models_from_menu(app, listed):
+    """The model names among the menu's entries ('對話與 Cowork', 'Code' and the like left out)."""
+    pattern, names = MODEL_NAME.get(app), []
+    for entry in listed or []:
+        found = pattern.match(str(entry).strip()) if pattern else None
+        if found and found.group(0) not in names:
+            names.append(found.group(0))
+    return names
+
+
+def codex_cache_models(path):
+    """Codex's models as its menu lists them, from the list it fetches (~/.codex/models_cache.json):
+    the ones shown ('list'), by priority, 'GPT-6.2-Sol' written as the menu does, 'GPT-6.2 Sol'."""
+    data = json.loads(Path(path).read_text(encoding='utf-8'))
+    shown = [m for m in data.get('models') or [] if isinstance(m, dict) and m.get('visibility') == 'list'
+             and m.get('display_name')]
+    shown.sort(key=lambda m: m.get('priority') if isinstance(m.get('priority'), int) else 999)
+    return models_from_menu('codex', [re.sub(r'(?<=\d)-(?=[A-Za-z])', ' ', m['display_name']) for m in shown])
+
+
+class ModelList:
+    """Keeps the phone's model lists up with the desktop apps (the user 11/19: 「APP好像無法選新的
+    模型了」, Codex had GPT-6.2 Sol and Astra that morning; then: 「可以讓小幫手多久自動檢查一次嗎
+    一樣半夜時間」). Codex's list is a file it fetches, read whenever it changes (no screen
+    touched); Claude's is only in its model menu, opened every night at 03:00 (SelfCheckPlan) and
+    in each self-check. A list seen is kept (models_seen.json) over ui_strings.json's."""
+
+    MIN = 2   # a listing with fewer models is taken for a misread, not for the app's list
+
+    def __init__(self, strings, data_dir=None, codex_cache=None):
+        self.strings = strings
+        self.path = Path(data_dir) / 'models_seen.json' if data_dir else None
+        self.codex_cache = Path(codex_cache) if codex_cache else Path.home() / '.codex' / 'models_cache.json'
+        self.cache_mtime = None
+        self.lock = threading.Lock()
+        try:
+            seen = json.loads(self.path.read_text(encoding='utf-8')) if self.path else {}
+        except (OSError, ValueError):
+            seen = {}
+        for app, entry in (seen if isinstance(seen, dict) else {}).items():
+            if isinstance(entry, dict) and isinstance(entry.get('models'), list):
+                self.adopt(app, entry['models'], entry.get('source') or 'models_seen.json', save=False)
+
+    def adopt(self, app, names, source, save=True):
+        """`names` become the phone's list for `app`; True when that changed it."""
+        names = [n for n in dict.fromkeys(names or []) if isinstance(n, str) and n]
+        with self.lock:
+            entry = self.strings.get(app)
+            if entry is None or len(names) < self.MIN:
+                return False
+            old = list(entry.get('models') or [])
+            if names == old:
+                return False
+            entry['models'] = names  # the dict the status, the checks and the runner all read
+            added = [n for n in names if n not in old]
+            removed = [n for n in old if n not in names]
+            logging.info('models %s from %s: %s%s', app, source, '／'.join(names),
+                         (f"; added {'／'.join(added)}" if added else '')
+                         + (f"; removed {'／'.join(removed)}" if removed else ''))
+            if save and self.path is not None:
+                try:
+                    seen = json.loads(self.path.read_text(encoding='utf-8')) if self.path.exists() else {}
+                except (OSError, ValueError):
+                    seen = {}
+                seen[app] = {'models': names, 'source': source, 'at': iso(time.time())}
+                try:
+                    self.path.write_text(json.dumps(seen, ensure_ascii=False), encoding='utf-8')
+                except OSError:
+                    logging.exception('saving the models seen failed')
+            return True
+
+    def check_codex(self):
+        """Codex's fetched list read again when the file changed; True when the phone's list did."""
+        try:
+            mtime = self.codex_cache.stat().st_mtime
+        except OSError:
+            return False
+        if mtime == self.cache_mtime:
+            return False
+        self.cache_mtime = mtime
+        try:
+            names = codex_cache_models(self.codex_cache)
+        except (OSError, ValueError):
+            logging.warning('reading the Codex model list failed', exc_info=True)
+            return False
+        return self.adopt('codex', names, 'models_cache.json')
+
+
 def load_strings(path=None):
     path = Path(path or Path(__file__).with_name('ui_strings.json'))
     return json.loads(path.read_text(encoding='utf-8'))
@@ -4098,6 +4191,7 @@ class ActionRunner:
         self.on_selfcheck = None         # called with each self-check report
         self.on_send_failed = None       # called with a send or new conversation that failed in the UI
         self.last_selfcheck = None
+        self.models = None                # ModelList: the phone's model lists kept up with the apps
         self.lock = threading.Condition()
 
     # -- submitting (HTTP thread) --------------------------------------------------------------
@@ -4177,6 +4271,7 @@ class ActionRunner:
                 if any(self.actions[i]['kind'] == 'selfcheck' for i in self.queue):
                     return 409, error('busy', '自檢已在排隊')
                 action = {'id': secrets.token_hex(6), 'kind': 'selfcheck', 'app': None, 'sessionId': None,
+                          'modelsOnly': bool(payload.get('modelsOnly')),
                           'info': None, 'text': str(payload.get('reason') or ''), 'images': [], 'force': force,
                           'needsFront': True, 'state': 'queued', 'message': '排隊中', 'error': None,
                           'verified': None, 'created': self.clock()}
@@ -4879,6 +4974,8 @@ class ActionRunner:
         model button and menu (opened and closed, nothing picked), the new-conversation button,
         Claude's usage card. Each item passes, fails or was not tested (11/15, the user: desktop
         app updates must not stop sending from the phone)."""
+        if action.get('modelsOnly'):
+            return self.do_models(action)
         report = {'pc': self.pc_name, 'version': VERSION, 'at': iso(time.time()), 'reason': action.get('text') or '',
                   'apps': {}}
         versions = {}
@@ -4912,6 +5009,22 @@ class ActionRunner:
                 logging.exception('self-check report handling failed')
         self.update(action, state='done', verified=report['ok'],
                     message='自檢全部通過' if report['ok'] else '自檢有項目失敗：' + '、'.join(failed))
+
+    def do_models(self, action):
+        """The nightly look at Claude's model menu (opened and closed, nothing picked)."""
+        if self.models is None:
+            raise ActionError('not-supported', 'no model list kept')
+        found = []
+        for app in ('claude',):
+            if self.driver.docs(app) is None:
+                continue  # not running
+            probe = self.driver.probe(app, type=False, menus=True)
+            listed = (probe.get('menu') or {}).get('models') or []
+            names = models_from_menu(app, listed if isinstance(listed, list) else [listed])
+            changed = self.models.adopt(app, names, 'menu')
+            found.append(f"{app}：{'／'.join(names) or '讀不到'}" + ('（已更新）' if changed else ''))
+        logging.info('model check: %s', '；'.join(found) or 'no app running')
+        self.update(action, state='done', verified=True, message='；'.join(found) or '桌面版沒有開著')
 
     def selfcheck_app(self, action, app):
         checks = []
@@ -4967,6 +5080,8 @@ class ActionRunner:
         elif menu.get('error') or not listed:
             add('模型選單', 'fail', menu.get('error') or '選單沒有列出模型')
         else:
+            if self.models is not None and self.models.adopt(app, models_from_menu(app, listed), 'menu'):
+                known = strings.get('models') or []
             # Claude 11/17 (home PC) may tag a radio after the model: 'Opus 5.5 預設集'.
             missing = [m for m in known if not any(x == m or x.startswith(m + ' ') for x in listed)]
             add('模型選單', 'pass' if not missing else 'fail',
@@ -5202,6 +5317,7 @@ class SelfCheckPlan:
         self.shared_dir = Path(shared_dir) if shared_dir else None
         self.wanted = None            # [reason, tries, not before]
         self.last_send_check = 0.0
+        self.models_retry = 0.0
         self.failed_sends = []        # phone sends the UI refused since the last report
         self.lock = threading.Lock()
         try:
@@ -5230,6 +5346,20 @@ class SelfCheckPlan:
             self.state['weekly'] = day
             self.save()
             self.want('每週例行')
+        models = getattr(self.runner, 'models', None)
+        if models is not None:
+            models.check_codex()
+            # Claude's models every other night at 03:00 (Sunday's self-check looks at them too):
+            # nobody at the PC, as for the self-check; tried again every 10 minutes till 04:00.
+            if (local.hour == self.HOUR and local.weekday() != self.WEEKDAY and self.state.get('models') != day
+                    and now >= self.models_retry):
+                code, body = self.runner.submit('selfcheck', None, None, {'reason': '每日模型檢查', 'modelsOnly': True})
+                if code == 202:
+                    self.state['models'] = day
+                    self.save()
+                else:
+                    self.models_retry = now + 600
+                    logging.info('model check waits: %s %s', code, body.get('error'))
         versions = getattr(getattr(self.runner, 'watcher', None), 'versions', None) or {}
         for app, found in versions.items():
             running = (found or {}).get('running') if isinstance(found, dict) else None
@@ -8064,6 +8194,8 @@ def main(argv=None):
             threading.Thread(target=repair.run_forever, daemon=True, name='repair-watch').start()
         plan = SelfCheckPlan(runner, path.parent, shared, repair)
         runner.data_dir, runner.on_selfcheck, runner.on_send_failed = path.parent, plan.on_report, plan.on_send_failed
+        runner.models = ModelList(hub.strings, path.parent)
+        runner.models.check_codex()
         hub.selfcheck_plan = plan
         threading.Thread(target=plan.run_forever, daemon=True, name='selfcheck').start()
         threading.Timer(90, plan.resend_pending, kwargs={'notify': notify}).start()

@@ -664,6 +664,85 @@ class DrivingTests(FakeEnvironment):
         # Not even when forced (11/17: the repair's check kept opening the model menu on the user).
         self.assertEqual(busy.submit('selfcheck', None, None, {'reason': '自動修驗證', 'force': True})[0], 409)
 
+    def test_the_model_lists_follow_codex_s_file_and_claude_s_menu(self):
+        """11/19, the user: 「APP好像無法選新的模型了」 (Codex had GPT-6.2 Sol and Astra), then
+        「可以讓小幫手多久自動檢查一次嗎 一樣半夜時間」."""
+        hub, driver, _, runner = drive(self.fake)
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        cache = folder / 'models_cache.json'
+
+        def write_cache(models):
+            cache.write_text(json.dumps({'models': [
+                {'slug': slug, 'display_name': name, 'visibility': visibility, 'priority': i}
+                for i, (slug, name, visibility) in enumerate(models)]}), encoding='utf-8')
+        write_cache([('gpt-6.2-sol', 'GPT-6.2-Sol', 'list'), ('gpt-6.2-astra', 'GPT-6.2-Astra', 'list'),
+                     ('gpt-6.1-terra', 'GPT-6.1 Terra', 'list'), ('gpt-reserve', 'GPT-Reserve', 'hide'),
+                     ('gpt-6.1-sol', 'GPT-6.1-Sol', 'list')])
+        models = h.ModelList(hub.strings, folder, codex_cache=cache)
+        runner.models = models
+        self.assertTrue(models.check_codex())
+        self.assertEqual(hub.strings['codex']['models'], ['GPT-6.2 Sol', 'GPT-6.2 Astra', 'GPT-6.1 Terra', 'GPT-6.1 Sol'])
+        self.assertFalse(models.check_codex(), 'the file is read again only when it changed')
+        code, body = runner.submit('new', 'codex', None, {'text': '用新模型', 'model': 'GPT-6.2 Sol', 'force': True})
+        self.assertEqual(code, 202, body)
+        run_all(runner)
+        # A file read wrong (one model or none) leaves the list as it was.
+        write_cache([('gpt-6.2-sol', 'GPT-6.2-Sol', 'list')])
+        os.utime(cache, (time.time() + 5, time.time() + 5))
+        self.assertFalse(models.check_codex())
+        self.assertEqual(len(hub.strings['codex']['models']), 4)
+        # Claude's only in its menu: the nightly look takes it, nothing typed or picked.
+        driver.probe = lambda app, **kw: {'ok': True, 'menu': {'models': [
+            '對話與 Cowork', 'Code', 'Opus 5.6 預設集', 'Opus 5.5', 'Fable 5.2', 'Sonnet 5.5', 'Haiku 5.5']}}
+        before = len(driver.calls)
+        code, body = runner.submit('selfcheck', None, None, {'reason': '每日模型檢查', 'modelsOnly': True})
+        self.assertEqual(code, 202, body)
+        run_all(runner)
+        self.assertEqual(hub.strings['claude']['models'], ['Opus 5.6', 'Opus 5.5', 'Fable 5.2', 'Sonnet 5.5', 'Haiku 5.5'])
+        self.assertIn('已更新', runner.status(body['id'])['message'])
+        self.assertFalse([c for c in driver.calls[before:] if c[0] in ('send', 'new_send', 'set_model')], driver.calls[before:])
+        # Kept over ui_strings.json after a restart.
+        fresh = h.load_strings()
+        h.ModelList(fresh, folder, codex_cache=folder / 'none.json')
+        self.assertEqual(fresh['claude']['models'][0], 'Opus 5.6')
+        self.assertEqual(fresh['codex']['models'][0], 'GPT-6.2 Sol')
+
+    def test_claude_s_models_are_looked_at_every_night_at_3(self):
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+
+        class Runner:
+            pc_name = '家用電腦'
+            answers = []
+            submitted = []
+            watcher = None
+            models = type('M', (), {'check_codex': lambda self: False})()
+
+            def submit(self, kind, app, session_id, payload):
+                self.submitted.append(payload)
+                return self.answers.pop(0) if self.answers else (202, {'id': 'x'})
+        runner = Runner()
+        now = [h.datetime(2026, 11, 19, 14, 0, tzinfo=h.TAIWAN).timestamp()]  # a Thursday afternoon
+        plan = h.SelfCheckPlan(runner, folder, clock=lambda: now[0])
+        plan.tick()
+        self.assertEqual(runner.submitted, [], 'not in the day')
+        now[0] = h.datetime(2026, 11, 20, 3, 0, 30, tzinfo=h.TAIWAN).timestamp()
+        runner.answers = [(409, h.error('busy-user', '電腦有人在用（5 秒前有操作）'))]
+        plan.tick()
+        plan.tick()
+        self.assertEqual(len(runner.submitted), 1, 'someone at the PC: tried again in 10 minutes')
+        now[0] += 600
+        plan.tick()
+        plan.tick()
+        self.assertEqual(runner.submitted[-1], {'reason': '每日模型檢查', 'modelsOnly': True})
+        self.assertEqual(len(runner.submitted), 2, 'once a night')
+        # Sunday 03:00 is the weekly self-check, which looks at the menu too.
+        runner.submitted.clear()
+        now[0] = h.datetime(2026, 11, 22, 3, 0, 30, tzinfo=h.TAIWAN).timestamp()
+        plan.tick()
+        self.assertEqual(runner.submitted, [{'reason': '每週例行'}])
+
     def test_the_self_check_plan_runs_weekly_after_updates_and_after_failed_sends(self):
         folder = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
