@@ -214,6 +214,23 @@ function Get-Prompt($w, $s) {
       ForEach-Object { $_.Current.Name.Trim() } | Where-Object { $_ })
     if ($texts.Count -ge 1) { break }
   }
+  # Codex's computer-use approval ("allow ChatGPT to use systempropertiesadvanced?", home PC 11/19)
+  # puts its buttons in a row of their own and its words in the element just before that row,
+  # both straight in the transcript: the climb above ends at the whole conversation (the phone
+  # showed the transcript as the question). There, the row's previous element is the question.
+  if ($texts.Count -gt 12) {
+    $raw = [System.Windows.Automation.TreeWalker]::RawViewWalker
+    $row = $raw.GetParent($deny)
+    $card = if ($row) { $raw.GetPreviousSibling($row) } else { $null }
+    if ($card) {
+      $near = @($card.FindAll($Tree::Subtree, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Text))) |
+        ForEach-Object { $_.Current.Name.Trim() } | Where-Object { $_ })
+      if ($near.Count -ge 1 -and $near.Count -le 12) {
+        $texts = $near
+        $box = $row
+      }
+    }
+  }
   $buttons = @($box.FindAll($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Button))) |
     ForEach-Object { $_.Current.Name } | Where-Object { $_ })
   return @{ text = ($texts -join "`n"); buttons = $buttons }
@@ -229,6 +246,24 @@ function Pid-Name($id) {
   try { return (Get-Process -Id $id -ErrorAction Stop).ProcessName } catch { return 'unknown' }
 }
 
+# A screen saver owns the input desktop ("Screen-saver"), so no window is in front and none can
+# come there (home PC 11/22 01:25: blank scrnsave.scr after 5 idle minutes, every phone message
+# "in front: none"). One without a password ends at the first input anyway; ending it here does
+# what moving the mouse would. A secure one leads to the lock screen, so it is left alone.
+function Wake-Screen {
+  if ([DeskWin]::GetForegroundWindow() -ne [IntPtr]::Zero) { return $false }
+  foreach ($key in @('HKCU:\Control Panel\Desktop', 'HKCU:\Software\Policies\Microsoft\Windows\Control Panel\Desktop')) {
+    try { if ("$((Get-ItemProperty $key -ErrorAction Stop).ScreenSaverIsSecure)" -eq '1') { return $false } } catch { }
+  }
+  $mine = [Diagnostics.Process]::GetCurrentProcess().SessionId
+  $savers = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -like '*.scr' -and $_.SessionId -eq $mine })
+  if (-not $savers.Count) { return $false }
+  foreach ($saver in $savers) { try { $saver.Kill() } catch { } }
+  for ($i = 0; $i -lt 15 -and [DeskWin]::GetForegroundWindow() -eq [IntPtr]::Zero; $i++) { Start-Sleep -Milliseconds 200 }
+  $script:FrontHow = 'screen saver ended'
+  return $true
+}
+
 # Every way Windows lets a background program take the foreground, in order; returns the one that
 # worked, or $null. A full-screen game refused the first two (home PC 11/14, PBZ), and the user's
 # rule is that the desktop app always comes to the top, whatever runs. $keepPid: never send Alt
@@ -236,6 +271,7 @@ function Pid-Name($id) {
 # then swallowed the paste and the click, found live); $mayMinimize: the last resort minimizes the
 # window in front, which Restore-Front brings back afterwards.
 function Force-Front($hwnd, $keepPid, [bool]$mayMinimize) {
+  $null = Wake-Screen
   if ([DeskWin]::IsIconic($hwnd)) { [DeskWin]::ShowWindow($hwnd, 9) | Out-Null }  # SW_RESTORE
   elseif (-not [DeskWin]::IsWindowVisible($hwnd)) { [DeskWin]::ShowWindow($hwnd, 5) | Out-Null }  # SW_SHOW
   if ([DeskWin]::GetForegroundWindow() -eq $hwnd) { return 'already' }
@@ -343,9 +379,18 @@ function Save-Clipboard {
   $data = [System.Windows.Forms.Clipboard]::GetDataObject()
   if (-not $data) { return $saved }
   $kept = @('UnicodeText', 'Text', 'Rich Text Format', 'HTML Format', 'Bitmap', 'FileDrop')
+  # Handles (metafiles, palettes) and OLE storage cannot be put back as they were.
+  $never = @('EnhancedMetafile', 'MetaFilePict', 'Palette', 'Embed Source', 'Link Source', 'Ole Private Data')
   $formats = @($data.GetFormats($false))
   foreach ($f in $formats) {
-    if ($kept -contains $f) { $saved[$f] = $data.GetData($f) }
+    if ($kept -contains $f) { $saved[$f] = $data.GetData($f); continue }
+    if ($never -contains $f) { continue }
+    # Any other format whose data is plain bytes or text is kept too: a picture copied as 'PNG'
+    # only (home PC 11/21: a phone message was refused while one was on the clipboard).
+    try {
+      $value = $data.GetData($f)
+      if ($value -is [System.IO.MemoryStream] -or $value -is [string] -or $value -is [System.Drawing.Image]) { $saved[$f] = $value }
+    } catch { }
   }
   $saved['__unsafe'] = ($formats.Count -gt 0 -and $saved.Count -eq 0)
   return $saved
@@ -833,6 +878,9 @@ function Find-CodexCard($scope, $s, $question) {
       $box = $walker.GetParent($box)
       if (-not $box) { break }
       if (Find-ByName $box $CT::Button $s.submit) { return $box }
+      # Several cards waiting are paged ("1 of 2", home PC 11/19): each but the last has
+      # submit_next instead of the send button.
+      if ($s.submit_next -and (Find-ByName $box $CT::Button $s.submit_next)) { return $box }
     }
   }
   return $null
@@ -863,7 +911,17 @@ function Answer-CodexQuestions($w, $page, $s, $questions) {
   [DeskWin]::GetCursorPos([ref]$cursor) | Out-Null
   $hows = @()
   try {
-    Bring-Front $w
+    # Picking an option needs no foreground (a UI Automation pattern does it), so a window that
+    # cannot be brought up does not stop it: an administrator's hidden console held the foreground
+    # after the elevated companion restarted, and Windows lets no ordinary program take it from
+    # there (home PC 11/19 06:52, "in front: powershell"). Words still need the window in front.
+    $fronted = $true
+    try { Bring-Front $w } catch {
+      $words = @(@($questions) | Where-Object { -not @(@($_.labels) | Where-Object { $_ }).Count })
+      if ($words.Count -or "$_" -notmatch '^DESK:focus-failed:') { throw }
+      $fronted = $false
+      $hows += 'behind'
+    }
     foreach ($q in @($questions)) {
       $card = $null
       for ($i = 0; $i -lt 12 -and -not $card; $i++) {
@@ -881,8 +939,10 @@ function Answer-CodexQuestions($w, $page, $s, $questions) {
         $p = $null
         if ($option.TryGetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern, [ref]$p)) { $p.Select(); $hows += 'select' }
         elseif (Invoke-Element $option) { $hows += 'invoke' }
-        else { Click-Element $w $option 'the option'; $hows += 'click' }
+        elseif ($fronted) { Click-Element $w $option 'the option'; $hows += 'click' }
+        else { Fail 'focus-failed' 'the option has no pattern and the window cannot come to the front' }
         if (-not (Codex-Card-Gone $page $s $q.question 2000)) {
+          if (-not $fronted) { Fail 'toggle-failed' 'the card stayed after the pick (the window could not come to the front for a click)' }
           # The pattern may be taken without the page reacting: one real click on it.
           $card = Find-CodexCard $page $s $q.question
           $option = if ($card) { Codex-Option $card $labels[0] } else { $null }
@@ -895,6 +955,7 @@ function Answer-CodexQuestions($w, $page, $s, $questions) {
         Scroll-To $edit
         Paste-Text $w $edit $q.other
         $send = Find-ByName $card $CT::Button $s.submit
+        if (-not $send -and $s.submit_next) { $send = Find-ByName $card $CT::Button $s.submit_next }
         if (-not $send) { Fail 'not-found' "no '$($s.submit)' button on the card" }
         if (-not (Invoke-Element $send)) { Click-Element $w $send 'the send button' }
         $hows += 'words:send'
@@ -1980,11 +2041,48 @@ function Run-Command($c) {
         return @{ ok = $true; how = 'invoke' }
       }
       if ($c.app -eq 'codex') {
+        # A computer-use approval has no "allow once": its narrowest allow is "allow this
+        # conversation" (allow_conversation); "always allow" is never pressed from the phone (home PC 11/19).
         $b = Find-ByName $w $CT::Button $s.allow_once
+        if (-not $b -and $s.allow_conversation) { $b = Find-ByName $w $CT::Button $s.allow_conversation }
         if (-not $b -or -not (Invoke-Element $b)) { Fail 'not-invokable' 'allow once not invokable' }
         return @{ ok = $true; how = 'invoke' }
       }
       return @{ ok = $true; how = (Claude-AllowOnce $w $s) }
+    }
+    'cards_on_screen' {
+      # Reads only: which of the given questions a Codex card on the page asks (the helper drops a
+      # card closed on the PC, which writes nothing to the conversation's file).
+      $w = Need-Window $c.app
+      $page = Need-Doc $w $c.doc
+      $found = @()
+      foreach ($q in @($c.questions)) { $found += [bool](Find-CodexCard $page $s $q) }
+      # The message box shows the page is drawn: no card and no box is no answer.
+      $edit = [bool](Find-ByName $w $CT::Edit $s.edit)
+      return @{ ok = $true; found = $found; edit = $edit }
+    }
+    'skip_question' {
+      # Codex's card has its own skip button, one question at a time (live 11/22: previous, next,
+      # dismiss, skip, next step). Pressed through UI Automation; the window need not be in front.
+      $w = Need-Window $c.app
+      $page = Need-Doc $w $c.doc
+      if (-not $s.skip) { Fail 'not-supported' 'no skip button known' }
+      $hows = @()
+      foreach ($q in @($c.questions)) {
+        $card = $null
+        for ($i = 0; $i -lt 12 -and -not $card; $i++) {
+          $card = Find-CodexCard $page $s $q
+          if (-not $card) { Start-Sleep -Milliseconds 250 }
+        }
+        if (-not $card) { continue }  # skipping an earlier question may have ended the card
+        $skip = Find-ByName $card $CT::Button $s.skip
+        if (-not $skip) { Fail 'not-found' "no '$($s.skip)' button on the card" }
+        if (-not (Invoke-Element $skip)) { Fail 'toggle-failed' "'$($s.skip)' could not be pressed" }
+        $hows += 'invoke'
+        if (-not (Codex-Card-Gone $page $s $q 2500)) { Fail 'toggle-failed' "the question stayed after '$($s.skip)'" }
+      }
+      if (-not $hows.Count) { Fail 'question-changed' 'the question is not on screen' }
+      return @{ ok = $true; how = ($hows -join ',') }
     }
     'choose' {
       $w = Need-Window $c.app

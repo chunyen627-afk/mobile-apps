@@ -227,6 +227,30 @@ class CodexQuestionTests(FakeEnvironment):
     or from the phone, both seen through the reply the card writes (the user asked on 11/5 that
     either place works, since they often sit at the PC)."""
 
+    def setUp(self):
+        super().setUp()
+        # The fixtures' cards are from 11/04; only the age test below looks at the age.
+        patcher = mock.patch.object(h.CodexParser, 'CARD_MAX_AGE', 10 ** 10)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_old_cards_and_cards_before_an_answered_one_are_not_shown(self):
+        """Home PC 11/19: 37 cards from 11/06-11/08 answered by typing came back one after another
+        (「一直出現以前的選擇」「選過的一律都要砍掉不然會誤發出來」)."""
+        transcript = h.Transcript(self.sources['codex'].transcript_path(X), h.CodexParser)
+        drain(transcript)
+        append_lines(transcript.path, codex_question_lines('call_old', '先不要解除封鎖？', ('是', '否')))
+        append_lines(transcript.path, codex_question_lines('call_mid', '熱點看得到嗎？', ('看得到', '看不到')))
+        append_lines(transcript.path, codex_question_lines('call_new', '新熱點連上了嗎？', ('連上了', '仍無法加入')))
+        transcript.refresh()
+        self.assertEqual(transcript.page(0, '')['question']['questionId'], 'call_old')
+        append_lines(transcript.path, [codex_reply_line('call_mid', '熱點看得到嗎？', '看得到')])
+        transcript.refresh()
+        self.assertEqual(transcript.page(0, '')['question']['questionId'], 'call_new',
+                         'the older card goes with the answered one')
+        with mock.patch.object(h.CodexParser, 'CARD_MAX_AGE', 24 * 3600):
+            self.assertIsNone(transcript.page(0, '')['question'], 'a card from 11/04 is long gone')
+
     def test_the_card_is_read_and_its_reply_ends_it(self):
         transcript = h.Transcript(self.sources['codex'].transcript_path(X), h.CodexParser)
         drain(transcript)
@@ -248,20 +272,115 @@ class CodexQuestionTests(FakeEnvironment):
         self.assertEqual((page['events'][-1]['kind'], page['events'][-1]['text']), ('status', '已回答選項題：B. 水星'))
         self.assertFalse([e for e in page['events'] if 'send_user_message_question_reply' in e['text']])
 
-    def test_a_question_without_options_takes_words_and_a_plain_message_ends_it(self):
+    def test_a_question_without_options_takes_words_and_stays_through_a_plain_message(self):
         transcript = h.Transcript(self.sources['codex'].transcript_path(X), h.CodexParser)
         drain(transcript)
         append_lines(transcript.path, codex_question_lines('call_q2', '兩片板子之間的間距是多少 mm？', ()))
         transcript.refresh()
         question = transcript.page(0, '')['question']
         self.assertEqual((question['questionId'], question['questions'][0]['options']), ('call_q2', []))
-        # The person typed something else instead: the card is no longer what comes next.
+        # The person typed something else meanwhile: Codex keeps the card up (home PC 11/19).
         append_lines(transcript.path, [{'timestamp': '2026-11-04T16:30:00Z', 'type': 'event_msg', 'payload': {
             'type': 'item_completed', 'item': {'type': 'UserMessage', 'content': [{'type': 'text', 'text': '殼上下鎖起來就好'}]}}}])
         transcript.refresh()
         page = transcript.page(0, '')
-        self.assertIsNone(page['question'])
+        self.assertEqual(page['question']['questionId'], 'call_q2')
         self.assertEqual(page['events'][-1]['text'], '殼上下鎖起來就好')
+
+    def test_waiting_cards_come_oldest_first_and_a_card_gone_from_the_pc_is_dropped(self):
+        """Codex pages the cards it waits on ("1 of 2") and shows the oldest (home PC 11/19)."""
+        transcript = h.Transcript(self.sources['codex'].transcript_path(X), h.CodexParser)
+        drain(transcript)
+        append_lines(transcript.path, codex_question_lines('call_a', '分頁檔：已按「是」了嗎？', ('已按「是」', '先不更動')))
+        append_lines(transcript.path, codex_question_lines('call_b', '恢復挖礦的 `elevate` 請求等手機核准', ('已在手機核准', '先保持停止')))
+        transcript.refresh()
+        self.assertEqual(transcript.page(0, '')['question']['questionId'], 'call_a')
+        append_lines(transcript.path, [codex_reply_line('call_a', '分頁檔：已按「是」了嗎？', '先不更動')])
+        transcript.refresh()
+        self.assertEqual(transcript.page(0, '')['question']['questionId'], 'call_b', 'the next card comes up')
+        with transcript.lock:
+            transcript.parser.drop_question('call_b')
+        transcript.refresh()
+        self.assertIsNone(transcript.page(0, '')['question'])
+        # The same card read again (the rollout written once more) does not come back.
+        transcript.parser.add_question({'questionId': 'call_b', 'questions': []})
+        self.assertIsNone(transcript.parser.question)
+
+    def test_a_card_closed_on_the_pc_leaves_the_phone(self):
+        """Home PC 11/21 20:52: closed on the PC (解除 writes nothing), the card stayed on the phone
+        (「我電腦取消 但app還留著」). Looked for on screen while its conversation is open."""
+        hub = h.Hub('示範電腦', self.sources, h.FixedPresence(self.fake.cfg['presence']))
+        hub.strings = h.load_strings()
+        transcript = hub.transcript('codex', X)
+        drain(transcript)
+        append_lines(transcript.path, codex_question_lines('call_usb', 'USB 偵錯授權允許了嗎？', ()))
+        transcript.refresh()
+        doc = hub.info('codex', X)['doc']
+        screen = {'cards': ['USB 偵錯授權允許了嗎？'], 'asked': []}
+
+        class Screen:
+            def inspect(self, app):
+                return {'ok': True, 'window': True, 'docs': [doc]}
+
+            def cards_on_screen(self, app, page, texts):
+                screen['asked'].append((page, list(texts)))
+                if screen.get('blank'):
+                    return None   # the page not drawn: no card and no message box
+                return [t in screen['cards'] for t in texts]
+
+        watcher = h.UiWatcher(hub, Screen())
+        now = [time.time()]
+        watcher.clock = lambda: now[0]
+        watcher.screen_in_use = lambda: False
+        for _ in range(3):
+            now[0] += 25
+            watcher.check_card_on_screen('codex', {'window': True, 'docs': [doc]})
+        self.assertEqual(transcript.parser.question['questionId'], 'call_usb', 'still on the PC')
+        self.assertEqual(screen['asked'][0], (doc, ['USB 偵錯授權允許了嗎？']))
+        watcher.check_card_on_screen('codex', {'window': True, 'docs': ['另一個對話']})
+        self.assertEqual(len(screen['asked']), 3, 'another conversation open: not looked for')
+        screen['blank'], screen['cards'] = True, []
+        for _ in range(3):
+            now[0] += 25
+            watcher.check_card_on_screen('codex', {'window': True, 'docs': [doc]})
+        self.assertIsNotNone(transcript.parser.question, 'a page not drawn proves nothing')
+        screen['blank'] = False
+        del screen['asked'][3:]
+        with tempfile.TemporaryDirectory() as folder, \
+                mock.patch.object(h.CodexParser, 'DROPPED_FILE', Path(folder) / 'dropped_cards.json'):
+            now[0] += 25
+            watcher.check_card_on_screen('codex', {'window': True, 'docs': [doc]})
+            self.assertIsNotNone(transcript.parser.question, 'one miss is not enough')
+            now[0] += 5
+            watcher.check_card_on_screen('codex', {'window': True, 'docs': [doc]})
+            self.assertEqual(len(screen['asked']), 4, 'not looked for again within 20 seconds')
+            now[0] += 20
+            watcher.check_card_on_screen('codex', {'window': True, 'docs': [doc]})
+            self.assertIsNone(transcript.parser.question)
+            # Started again, the file read anew: the card does not come back.
+            again = h.Transcript(transcript.path, h.CodexParser)
+            again.refresh()
+            self.assertIsNone(again.parser.question)
+
+    def test_a_card_from_before_the_last_3_mb_is_still_found(self):
+        """The first read starts 3 MB from the end; a card asked before that is still up (home PC
+        11/19: a 23 MB conversation, the older card missing on the phone)."""
+        path = self.sources['codex'].transcript_path(X)
+        append_lines(path, codex_question_lines('call_old_b', '舊的已答題', ('甲', '乙')))
+        append_lines(path, [codex_reply_line('call_old_b', '舊的已答題', '甲')])
+        append_lines(path, codex_question_lines('call_old_a', '分頁檔：已按「是」了嗎？', ('已按「是」', '先不更動')))
+        filler = {'timestamp': '2026-11-04T16:25:00Z', 'type': 'event_msg', 'payload': {'type': 'token_count', 'info': {}}}
+        append_lines(path, [filler] * 400)
+        append_lines(path, codex_question_lines('call_new', '恢復挖礦的 `elevate` 請求等手機核准', ('已在手機核准', '先保持停止')))
+        size = Path(path).stat().st_size
+        tail = len(json.dumps(filler, ensure_ascii=False).encode()) * 50
+        self.assertLess(tail, size)
+        with mock.patch.object(h, 'TAIL_BYTES', tail):
+            transcript = h.Transcript(path, h.CodexParser)
+            transcript.refresh()
+        self.assertTrue(transcript.earlier, 'the read started in the middle')
+        self.assertEqual([q['questionId'] for q in transcript.parser.pending], ['call_old_a', 'call_new'])
+        self.assertEqual(transcript.page(0, '')['question']['questionId'], 'call_old_a')
 
     def test_an_older_rollout_reads_the_question_from_the_tool_call(self):
         parser = h.CodexParser()
@@ -307,6 +426,23 @@ class CodexQuestionTests(FakeEnvironment):
         run_all(runner)
         self.assertEqual(runner.status(body['id'])['message'], '已回答')
         self.assertIn('已回答選項題：12 mm', [e['text'] for e in hub.transcript('codex', X).page(0, '')['events']])
+
+    def test_codexs_question_is_skipped_from_the_phone(self):
+        # The user 11/22: 「如果不選的話應該也要提供一個略過的選項」 — Codex's card has its own 略過.
+        hub, driver, _, runner = drive(self.fake)
+        append_lines(hub.sources['codex'].transcript_path(X), codex_question_lines())
+        hub.transcript('codex', X).refresh()
+        self.assertEqual(runner.submit('skip', 'codex', X, {'questionId': 'call_old'})[1]['error'], 'question-changed')
+        code, body = runner.submit('skip', 'codex', X, {'questionId': 'call_q1'})
+        self.assertEqual(code, 202)
+        self.assertFalse(body.get('needsFront', False))
+        run_all(runner)
+        status = runner.status(body['id'])
+        self.assertEqual((status['state'], status['message']), ('done', '已略過'), status)
+        self.assertIn(('skip_question', 'codex', 'call_q1'), driver.calls)
+        self.assertIsNone(hub.transcript('codex', X).page(0, '')['question'])
+        # Claude's card has no 略過 the helper knows of.
+        self.assertEqual(runner.submit('skip', 'claude', A, {'questionId': 'x'})[1]['error'], 'not-supported')
 
     def test_a_new_codex_question_is_notified_once(self):
         sent = []
@@ -624,6 +760,85 @@ class DrivingTests(FakeEnvironment):
         self.assertEqual(busy.submit('selfcheck', None, None, {})[0], 409)
         # Not even when forced (11/17: the repair's check kept opening the model menu on the user).
         self.assertEqual(busy.submit('selfcheck', None, None, {'reason': '自動修驗證', 'force': True})[0], 409)
+
+    def test_the_model_lists_follow_codex_s_file_and_claude_s_menu(self):
+        """11/19, the user: 「APP好像無法選新的模型了」 (Codex had GPT-6.2 Sol and Astra), then
+        「可以讓小幫手多久自動檢查一次嗎 一樣半夜時間」."""
+        hub, driver, _, runner = drive(self.fake)
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        cache = folder / 'models_cache.json'
+
+        def write_cache(models):
+            cache.write_text(json.dumps({'models': [
+                {'slug': slug, 'display_name': name, 'visibility': visibility, 'priority': i}
+                for i, (slug, name, visibility) in enumerate(models)]}), encoding='utf-8')
+        write_cache([('gpt-6.2-sol', 'GPT-6.2-Sol', 'list'), ('gpt-6.2-astra', 'GPT-6.2-Astra', 'list'),
+                     ('gpt-6.1-terra', 'GPT-6.1 Terra', 'list'), ('gpt-reserve', 'GPT-Reserve', 'hide'),
+                     ('gpt-6.1-sol', 'GPT-6.1-Sol', 'list')])
+        models = h.ModelList(hub.strings, folder, codex_cache=cache)
+        runner.models = models
+        self.assertTrue(models.check_codex())
+        self.assertEqual(hub.strings['codex']['models'], ['GPT-6.2 Sol', 'GPT-6.2 Astra', 'GPT-6.1 Terra', 'GPT-6.1 Sol'])
+        self.assertFalse(models.check_codex(), 'the file is read again only when it changed')
+        code, body = runner.submit('new', 'codex', None, {'text': '用新模型', 'model': 'GPT-6.2 Sol', 'force': True})
+        self.assertEqual(code, 202, body)
+        run_all(runner)
+        # A file read wrong (one model or none) leaves the list as it was.
+        write_cache([('gpt-6.2-sol', 'GPT-6.2-Sol', 'list')])
+        os.utime(cache, (time.time() + 5, time.time() + 5))
+        self.assertFalse(models.check_codex())
+        self.assertEqual(len(hub.strings['codex']['models']), 4)
+        # Claude's only in its menu: the nightly look takes it, nothing typed or picked.
+        driver.probe = lambda app, **kw: {'ok': True, 'menu': {'models': [
+            '對話與 Cowork', 'Code', 'Opus 5.6 預設集', 'Opus 5.5', 'Fable 5.2', 'Sonnet 5.5', 'Haiku 5.5']}}
+        before = len(driver.calls)
+        code, body = runner.submit('selfcheck', None, None, {'reason': '每日模型檢查', 'modelsOnly': True})
+        self.assertEqual(code, 202, body)
+        run_all(runner)
+        self.assertEqual(hub.strings['claude']['models'], ['Opus 5.6', 'Opus 5.5', 'Fable 5.2', 'Sonnet 5.5', 'Haiku 5.5'])
+        self.assertIn('已更新', runner.status(body['id'])['message'])
+        self.assertFalse([c for c in driver.calls[before:] if c[0] in ('send', 'new_send', 'set_model')], driver.calls[before:])
+        # Kept over ui_strings.json after a restart.
+        fresh = h.load_strings()
+        h.ModelList(fresh, folder, codex_cache=folder / 'none.json')
+        self.assertEqual(fresh['claude']['models'][0], 'Opus 5.6')
+        self.assertEqual(fresh['codex']['models'][0], 'GPT-6.2 Sol')
+
+    def test_claude_s_models_are_looked_at_every_night_at_3(self):
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+
+        class Runner:
+            pc_name = '家用電腦'
+            answers = []
+            submitted = []
+            watcher = None
+            models = type('M', (), {'check_codex': lambda self: False})()
+
+            def submit(self, kind, app, session_id, payload):
+                self.submitted.append(payload)
+                return self.answers.pop(0) if self.answers else (202, {'id': 'x'})
+        runner = Runner()
+        now = [h.datetime(2026, 11, 19, 14, 0, tzinfo=h.TAIWAN).timestamp()]  # a Thursday afternoon
+        plan = h.SelfCheckPlan(runner, folder, clock=lambda: now[0])
+        plan.tick()
+        self.assertEqual(runner.submitted, [], 'not in the day')
+        now[0] = h.datetime(2026, 11, 20, 3, 0, 30, tzinfo=h.TAIWAN).timestamp()
+        runner.answers = [(409, h.error('busy-user', '電腦有人在用（5 秒前有操作）'))]
+        plan.tick()
+        plan.tick()
+        self.assertEqual(len(runner.submitted), 1, 'someone at the PC: tried again in 10 minutes')
+        now[0] += 600
+        plan.tick()
+        plan.tick()
+        self.assertEqual(runner.submitted[-1], {'reason': '每日模型檢查', 'modelsOnly': True})
+        self.assertEqual(len(runner.submitted), 2, 'once a night')
+        # Sunday 03:00 is the weekly self-check, which looks at the menu too.
+        runner.submitted.clear()
+        now[0] = h.datetime(2026, 11, 22, 3, 0, 30, tzinfo=h.TAIWAN).timestamp()
+        plan.tick()
+        self.assertEqual(runner.submitted, [{'reason': '每週例行'}])
 
     def test_the_self_check_plan_runs_weekly_after_updates_and_after_failed_sends(self):
         folder = Path(tempfile.mkdtemp())

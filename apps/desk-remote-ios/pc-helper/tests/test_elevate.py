@@ -311,5 +311,18 @@ class RealCompanionTests(unittest.TestCase):
         self.assertEqual(self.call(op='decide', id=r['id'], decision='allow', hmac=sig)['error'], 'not-found')
 
 
+    def test_a_program_left_running_with_the_output_open_does_not_lose_the_answer(self):
+        """resume_mining.ps1 (home PC 11/19) started the miner, which kept the output file open:
+        reading it failed, the request was dropped unanswered and the AI waited on it."""
+        content = ("Start-Process powershell.exe -NoNewWindow -ArgumentList '-NoProfile','-Command','Start-Sleep 12'; "
+                   "Write-Output 'miner started'")
+        r = self.call(op='request', kind='command', content=content, cwd=str(self.folder))
+        pending = [p for p in self.call(op='list')['pending'] if p['id'] == r['id']][0]
+        sig = elevate.signature(KEY, r['id'], pending['content'], pending['cwd'], pending['expires'])
+        self.assertTrue(self.call(op='decide', id=r['id'], decision='allow', hmac=sig)['ok'])
+        status = self.wait_done(r['id'])
+        self.assertEqual((status['state'], status['exitCode']), ('done', 0), status)
+        self.assertIn('miner started', status['stdout'])
+
 if __name__ == '__main__':
     unittest.main()

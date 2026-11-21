@@ -78,9 +78,10 @@ struct DeskChatView: View {
                         DeskOpenOnPC(state: openState) { Task { await openOnPC(force: false) } }
                     }
                     if let question = log.question {
-                        DeskQuestionCard(question: question, busy: questionBusy) { answers in
-                            Task { await answerQuestion(question, answers: answers, force: false) }
-                        }
+                        // Codex's card has its own 略過 (the user 11/22: 「如果不選的話應該也要提供一個略過的選項」).
+                        DeskQuestionCard(question: question, busy: questionBusy, appName: app.displayName,
+                                         submit: { answers in Task { await answerQuestion(question, answers: answers, force: false) } },
+                                         skip: app == .codex ? { Task { await skipQuestion(question, force: false) } } : nil)
                         .id("question-\(question.questionId)")
                     }
                     if log.prompt == nil, log.question == nil, let working = DeskText.working(app, status: log.status) {
@@ -531,6 +532,28 @@ struct DeskChatView: View {
                 message: "\(seconds.map { "\($0) 秒前" } ?? "剛剛")有人操作過這台電腦。回答會把視窗切到前面並點選選項。",
                 confirmLabel: "仍要回答",
                 run: { await answerQuestion(question, answers: answers, force: true) },
+                cancel: {})
+        } catch let error as HelperFailure {
+            questionBusy = "沒有成功：\(DeskText.failure(error))"
+        } catch {
+            questionBusy = "沒有成功：\(DeskText.failure(.unreachable))"
+        }
+    }
+
+    private func skipQuestion(_ question: OptionQuestion, force: Bool) async {
+        guard let client = store.client(pcID) else { return }
+        questionBusy = "正在電腦上略過…"
+        do {
+            let start = try await client.skipQuestion(app, session: session.id, questionId: question.questionId, force: force)
+            let end = try await client.follow(start, timeout: 60)
+            questionBusy = end.state == "failed" ? "沒有成功：\(end.message)" : "\(end.message)，等待電腦更新…"
+        } catch HelperFailure.busyUser(let seconds) {
+            questionBusy = nil
+            confirm = DeskConfirm(
+                title: "電腦有人在用",
+                message: "\(seconds.map { "\($0) 秒前" } ?? "剛剛")有人操作過這台電腦。略過會在電腦上按選項卡的「略過」。",
+                confirmLabel: "仍要略過",
+                run: { await skipQuestion(question, force: true) },
                 cancel: {})
         } catch let error as HelperFailure {
             questionBusy = "沒有成功：\(DeskText.failure(error))"
@@ -1011,7 +1034,10 @@ struct DeskPromptCard: View {
 struct DeskQuestionCard: View {
     let question: OptionQuestion
     let busy: String?
+    var appName: String = "Claude"
     let submit: ([QuestionAnswer]) -> Void
+    /// Codex only: its card's own 略過, for a question the user does not want to answer.
+    var skip: (() -> Void)? = nil
     @State private var picks: [Int: [String]] = [:]
     @State private var others: [Int: String] = [:]
 
@@ -1034,7 +1060,7 @@ struct DeskQuestionCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Label("Claude 在等你選擇", systemImage: "list.bullet.circle.fill")
+            Label("\(appName) 在等你選擇", systemImage: "list.bullet.circle.fill")
                 .font(.subheadline.bold())
                 .foregroundStyle(.blue)
             ForEach(Array(question.questions.enumerated()), id: \.offset) { index, item in
@@ -1077,12 +1103,19 @@ struct DeskQuestionCard: View {
                 Text(busy).font(.caption).foregroundStyle(.secondary)
                     .accessibilityIdentifier("question-busy")
             } else {
-                Button { submit(question.questions.indices.map { answer($0) }) } label: {
-                    Text("送出選擇").frame(maxWidth: .infinity)
+                HStack(spacing: 8) {
+                    Button { submit(question.questions.indices.map { answer($0) }) } label: {
+                        Text("送出選擇").frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!complete)
+                    .accessibilityIdentifier("question-submit")
+                    if let skip {
+                        Button(action: skip) { Text("略過").padding(.horizontal, 6) }
+                            .buttonStyle(.bordered)
+                            .accessibilityIdentifier("question-skip")
+                    }
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(!complete)
-                .accessibilityIdentifier("question-submit")
             }
         }
         .padding(12)

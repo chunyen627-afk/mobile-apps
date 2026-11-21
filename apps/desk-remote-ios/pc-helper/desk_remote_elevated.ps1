@@ -160,7 +160,13 @@ function Finish($r, $state, $exitCode, $stdout, $stderr) {
 
 function Read-Capped($path) {
   if (-not (Test-Path $path)) { return '' }
-  $text = [IO.File]::ReadAllText($path, $utf8)
+  # Read shared: a program the command left running (the miner that resume_mining.ps1 starts,
+  # home PC 11/19) keeps the file open, ReadAllText then threw, and the request was dropped
+  # without an answer while the AI waited on it.
+  try {
+    $file = New-Object IO.FileStream($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+    try { $text = (New-Object IO.StreamReader($file, $utf8)).ReadToEnd() } finally { $file.Dispose() }
+  } catch { return "(output could not be read: $($_.Exception.Message))" }
   if ($text.Length -gt $maxOutput) { $text = $text.Substring(0, $maxOutput) + "`n(output cut at $maxOutput characters)" }
   return $text
 }
@@ -189,8 +195,10 @@ function Update-All {
       $requests.Remove($r.id); Finish $r 'expired' 126 '' 'the phone did not approve in time'
     } elseif ($r.state -eq 'running') {
       if ($r.process.HasExited) {
+        $stdout = Read-Capped (Join-Path $work "$($r.id).out")
+        $stderr = Read-Capped (Join-Path $work "$($r.id).err")
         $requests.Remove($r.id)
-        Finish $r 'done' $r.process.ExitCode (Read-Capped (Join-Path $work "$($r.id).out")) (Read-Capped (Join-Path $work "$($r.id).err"))
+        Finish $r 'done' $r.process.ExitCode $stdout $stderr
         Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $work "$($r.id).*")
       } elseif ($now -gt $r.deadline) {
         try { $r.process.Kill() } catch {}
@@ -279,6 +287,22 @@ if ($Ask) {
   Ask-OnPc $Ask
   exit 0
 }
+
+# Started by hand (Start-ScheduledTask), this administrator's console takes the foreground even
+# hidden, and Windows then lets no ordinary program take it back: the helper could not bring a
+# desktop app up until someone touched the PC (home PC 11/19 06:52, "in front: powershell").
+# Hand the foreground on to whoever asks next.
+try {
+  Add-Type -Namespace DeskElevated -Name Fg -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool AllowSetForegroundWindow(int processId);
+[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern System.IntPtr GetForegroundWindow();
+[System.Runtime.InteropServices.DllImport("kernel32.dll")] public static extern System.IntPtr GetConsoleWindow();
+'@
+  if ([DeskElevated.Fg]::GetForegroundWindow() -eq [DeskElevated.Fg]::GetConsoleWindow()) {
+    $null = [DeskElevated.Fg]::AllowSetForegroundWindow(-1)  # ASFW_ANY
+    Log 'gave the foreground away (this console had it)'
+  }
+} catch { Log "foreground hand-off failed: $($_.Exception.Message)" }
 
 $listener = New-Object Net.Sockets.TcpListener ([Net.IPAddress]::Loopback, [int]$cfg.port)
 $listener.Start()

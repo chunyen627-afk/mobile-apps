@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.85'
+VERSION = '0.5.95'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -902,6 +902,34 @@ class ClaudeParser:
         return out
 
 
+DROPPED_CARDS_LOCK = threading.Lock()
+DROPPED_CARDS_KEEP = 3 * 24 * 3600
+
+
+def load_dropped_cards(path):
+    """{questionId: when dropped} from the file the helper keeps them in, {} without one."""
+    if not path:
+        return {}
+    try:
+        data = json.loads(Path(path).read_text(encoding='utf-8'))
+    except (OSError, ValueError, UnicodeDecodeError):
+        return {}
+    return {k: v for k, v in data.items() if isinstance(v, (int, float))} if isinstance(data, dict) else {}
+
+
+def save_dropped_card(path, question_id):
+    if not path:
+        return
+    with DROPPED_CARDS_LOCK:
+        now = time.time()
+        seen = {k: v for k, v in load_dropped_cards(path).items() if now - v < DROPPED_CARDS_KEEP}
+        seen[question_id] = now
+        try:
+            Path(path).write_text(json.dumps(seen), encoding='utf-8')
+        except OSError:
+            pass
+
+
 class CodexParser:
     """`~/.codex/sessions/YYYY/MM/DD/rollout-*-<id>.jsonl` written by the Codex desktop app.
 
@@ -914,11 +942,53 @@ class CodexParser:
         self.modern = False
         self.calls = {}
         self.status = 'idle'
-        self.question = None  # the card above the composer: one option per question, or words
+        # The cards above the composer, oldest first: Codex keeps every unanswered card and pages
+        # them ("1 of 2"), showing the oldest (home PC 11/19: the phone showed the newer card while
+        # the PC asked the older one, and the answer found no such question on screen).
+        self.pending = []
+        self.asked = {}       # questionId -> when it was asked (epoch seconds)
+        # Cards gone from the PC; kept in DROPPED_FILE so a restart does not bring them back.
+        self.dropped = set(load_dropped_cards(self.DROPPED_FILE))
         self.model = self.effort = self.mode = None
         self.turn_ts = None  # when the last turn_context (model, effort, mode) was written
         self.context = self.window = None
         self.rate_limits = self.rate_ts = None
+
+    # The lines a first read from the middle still looks at before it (Transcript.catch_up): the
+    # cards and their replies.
+    catch_up_marks = (b'"questions', CODEX_REPLY_TAG.encode())
+
+    # A card asked longer ago than this is not shown (home PC 11/19 evening: the 90 MB conversation
+    # had 37 cards from 11/06-11/08 answered by typing instead, which writes no reply; read back by
+    # catch_up they queued up oldest first, and each answered from the phone failed and showed the
+    # next old one: 「一直出現以前的選擇 目前早就沒有這些選擇」).
+    CARD_MAX_AGE = 24 * 3600
+    DROPPED_FILE = None   # set by main(): <data dir>/dropped_cards.json
+
+    @property
+    def question(self):
+        """The card the PC shows now (one option per question, or words), or None."""
+        now = time.time()
+        for card in self.pending:
+            asked = self.asked.get(card['questionId'])
+            if asked is None or now - asked <= self.CARD_MAX_AGE:
+                return card
+        return None
+
+    def add_question(self, question, ts=None):
+        if question and question['questionId'] not in self.dropped \
+                and all(q['questionId'] != question['questionId'] for q in self.pending):
+            self.pending.append(question)
+            try:
+                self.asked[question['questionId']] = datetime.fromisoformat(str(ts).replace('Z', '+00:00')).timestamp()
+            except ValueError:
+                pass
+
+    def drop_question(self, question_id):
+        """A card the PC no longer shows (closed with 解除, found when an answer looked for it)."""
+        self.dropped.add(question_id)
+        self.pending = [q for q in self.pending if q['questionId'] != question_id]
+        save_dropped_card(self.DROPPED_FILE, question_id)
 
     def feed(self, obj):
         kind = obj.get('type')
@@ -958,8 +1028,6 @@ class CodexParser:
                 if ptype == 'user_message' and codex_reply(text) is not None:
                     return self.answered(codex_reply(text), ts)
                 if text.strip() and not is_noise(text):
-                    if ptype == 'user_message':
-                        self.question = None  # the person moved on; the card is no longer the next thing
                     if ptype == 'agent_message':
                         return [{'kind': 'assistant', 'text': text, 'ts': ts, 'images': text_images(text)}]
                     return [{'kind': 'user', 'text': text, 'ts': ts}]
@@ -976,7 +1044,7 @@ class CodexParser:
                 except ValueError:
                     data = raw
                 if name == CODEX_QUESTION_TOOL:
-                    self.question = codex_question_from(payload.get('call_id'), data) or self.question
+                    self.add_question(codex_question_from(payload.get('call_id'), data), ts)
                     return []  # a card on the phone, not a tool row
                 text = summarize_input(name, data) if isinstance(data, dict) else str(raw or '')
                 return [{'kind': 'tool_call', 'tool': name, 'text': text, 'ts': ts}]
@@ -992,8 +1060,12 @@ class CodexParser:
 
     def answered(self, answers, ts):
         """The card's reply (from the PC or the phone): the question is done, shown as a status."""
-        if self.question and any(call_id == self.question['questionId'] for call_id, _ in answers):
-            self.question = None
+        done = {call_id for call_id, _ in answers}
+        # A reply to a card also ends every card asked before it (the user 11/19: 「選過的一律都要
+        # 砍掉不然會誤發出來」): Codex pages the oldest first, so an older card still listed was
+        # answered by typing, skipped or is gone.
+        last = max((i for i, q in enumerate(self.pending) if q['questionId'] in done), default=-1)
+        self.pending = [q for i, q in enumerate(self.pending) if i > last and q['questionId'] not in done]
         chosen = '、'.join(answer for _, answer in answers if answer.strip())
         return [{'kind': 'status', 'text': f'已回答選項題：{chosen}' if chosen else '已回答選項題', 'ts': ts}]
 
@@ -1007,13 +1079,14 @@ class CodexParser:
             images = images_of(item.get('content'))
             if not (text.strip() and not is_noise(text)):
                 return []
-            self.question = None  # the person moved on; the card is no longer the next thing
+            # A message typed meanwhile leaves the cards up (home PC 11/19: a card stayed through
+            # two messages); only its reply, or its 解除, ends one.
             return [{'kind': 'user', 'text': text, 'ts': ts, 'images': images}]
         if itype == 'AgentMessage':
             if isinstance(item.get('questions'), list):
                 # `request_user_input_async`: the message's text repeats the card's words (title and
                 # options), so the card alone is shown (live 11/5).
-                self.question = codex_question_from(item.get('id'), {'questions': item['questions']}) or self.question
+                self.add_question(codex_question_from(item.get('id'), {'questions': item['questions']}), ts)
                 return []
             text = flatten(item.get('content'))  # Automation heartbeats are echoed back; hide those too.
             return [{'kind': 'assistant', 'text': text, 'ts': ts, 'images': text_images(text)}] \
@@ -1092,6 +1165,8 @@ class Transcript:
             if start is None:
                 start = max(0, size - TAIL_BYTES)
                 self.earlier = start > 0
+                if start > 0 and getattr(self.parser, 'catch_up_marks', None):
+                    self.catch_up(start)
             if size == start:
                 self.offset = start
                 return
@@ -1123,6 +1198,29 @@ class Transcript:
                     continue
                 for event in produced:
                     self.add(event)
+
+    def catch_up(self, end):
+        """Before the first read from the middle: the lines with the parser's marks from the part
+        not read, for state that outlives 3 MB of conversation (a Codex card asked 25 minutes and
+        a 20 MB compaction earlier was still up, home PC 11/19). Their events are not shown."""
+        marks = self.parser.catch_up_marks
+        with self.path.open('rb') as handle:
+            while handle.tell() < end:
+                raw = handle.readline()
+                if not raw:
+                    break
+                if not any(mark in raw for mark in marks):
+                    continue
+                try:
+                    obj = json.loads(raw.decode('utf-8'))
+                except (ValueError, UnicodeDecodeError):
+                    continue
+                if not isinstance(obj, dict) or obj.get('type') == 'compacted':
+                    continue
+                try:
+                    self.parser.feed(obj)
+                except (AttributeError, TypeError, KeyError, IndexError):
+                    continue
 
     def add(self, raw):
         self.seq += 1
@@ -2766,6 +2864,99 @@ class ActionError(Exception):
         self.code, self.message = code, message
 
 
+# A model's name in a desktop app's model menu, without what may follow it ('Opus 5.5 預設集').
+MODEL_NAME = {'claude': re.compile(r'(?:Opus|Sonnet|Haiku|Fable) \d+(?:\.\d+)?'),
+              'codex': re.compile(r'GPT-\d+(?:\.\d+)? [A-Z][a-z]+')}
+
+
+def models_from_menu(app, listed):
+    """The model names among the menu's entries ('對話與 Cowork', 'Code' and the like left out)."""
+    pattern, names = MODEL_NAME.get(app), []
+    for entry in listed or []:
+        found = pattern.match(str(entry).strip()) if pattern else None
+        if found and found.group(0) not in names:
+            names.append(found.group(0))
+    return names
+
+
+def codex_cache_models(path):
+    """Codex's models as its menu lists them, from the list it fetches (~/.codex/models_cache.json):
+    the ones shown ('list'), by priority, 'GPT-6.2-Sol' written as the menu does, 'GPT-6.2 Sol'."""
+    data = json.loads(Path(path).read_text(encoding='utf-8'))
+    shown = [m for m in data.get('models') or [] if isinstance(m, dict) and m.get('visibility') == 'list'
+             and m.get('display_name')]
+    shown.sort(key=lambda m: m.get('priority') if isinstance(m.get('priority'), int) else 999)
+    return models_from_menu('codex', [re.sub(r'(?<=\d)-(?=[A-Za-z])', ' ', m['display_name']) for m in shown])
+
+
+class ModelList:
+    """Keeps the phone's model lists up with the desktop apps (the user 11/19: 「APP好像無法選新的
+    模型了」, Codex had GPT-6.2 Sol and Astra that morning; then: 「可以讓小幫手多久自動檢查一次嗎
+    一樣半夜時間」). Codex's list is a file it fetches, read whenever it changes (no screen
+    touched); Claude's is only in its model menu, opened every night at 03:00 (SelfCheckPlan) and
+    in each self-check. A list seen is kept (models_seen.json) over ui_strings.json's."""
+
+    MIN = 2   # a listing with fewer models is taken for a misread, not for the app's list
+
+    def __init__(self, strings, data_dir=None, codex_cache=None):
+        self.strings = strings
+        self.path = Path(data_dir) / 'models_seen.json' if data_dir else None
+        self.codex_cache = Path(codex_cache) if codex_cache else Path.home() / '.codex' / 'models_cache.json'
+        self.cache_mtime = None
+        self.lock = threading.Lock()
+        try:
+            seen = json.loads(self.path.read_text(encoding='utf-8')) if self.path else {}
+        except (OSError, ValueError):
+            seen = {}
+        for app, entry in (seen if isinstance(seen, dict) else {}).items():
+            if isinstance(entry, dict) and isinstance(entry.get('models'), list):
+                self.adopt(app, entry['models'], entry.get('source') or 'models_seen.json', save=False)
+
+    def adopt(self, app, names, source, save=True):
+        """`names` become the phone's list for `app`; True when that changed it."""
+        names = [n for n in dict.fromkeys(names or []) if isinstance(n, str) and n]
+        with self.lock:
+            entry = self.strings.get(app)
+            if entry is None or len(names) < self.MIN:
+                return False
+            old = list(entry.get('models') or [])
+            if names == old:
+                return False
+            entry['models'] = names  # the dict the status, the checks and the runner all read
+            added = [n for n in names if n not in old]
+            removed = [n for n in old if n not in names]
+            logging.info('models %s from %s: %s%s', app, source, '／'.join(names),
+                         (f"; added {'／'.join(added)}" if added else '')
+                         + (f"; removed {'／'.join(removed)}" if removed else ''))
+            if save and self.path is not None:
+                try:
+                    seen = json.loads(self.path.read_text(encoding='utf-8')) if self.path.exists() else {}
+                except (OSError, ValueError):
+                    seen = {}
+                seen[app] = {'models': names, 'source': source, 'at': iso(time.time())}
+                try:
+                    self.path.write_text(json.dumps(seen, ensure_ascii=False), encoding='utf-8')
+                except OSError:
+                    logging.exception('saving the models seen failed')
+            return True
+
+    def check_codex(self):
+        """Codex's fetched list read again when the file changed; True when the phone's list did."""
+        try:
+            mtime = self.codex_cache.stat().st_mtime
+        except OSError:
+            return False
+        if mtime == self.cache_mtime:
+            return False
+        self.cache_mtime = mtime
+        try:
+            names = codex_cache_models(self.codex_cache)
+        except (OSError, ValueError):
+            logging.warning('reading the Codex model list failed', exc_info=True)
+            return False
+        return self.adopt('codex', names, 'models_cache.json')
+
+
 def load_strings(path=None):
     path = Path(path or Path(__file__).with_name('ui_strings.json'))
     return json.loads(path.read_text(encoding='utf-8'))
@@ -3251,6 +3442,18 @@ class WindowsDriver:
                  for q, a in zip(question['questions'], answers)]
         return self.ask(app, cmd='choose', doc=doc, questions=items).get('how')
 
+    def skip_question(self, app, doc, question):
+        """Codex: presses the card's own 略過 for each of its questions; how it was pressed."""
+        texts = [q['question'] for q in question['questions'] if q.get('question')]
+        return self.ask(app, cmd='skip_question', doc=doc, questions=texts).get('how')
+
+    def cards_on_screen(self, app, doc, texts):
+        """[bool] per question text: is a Codex card asking it on the page `doc`; None when the
+        page is not drawn (no message box either). Reads only."""
+        answer = self.ask(app, cmd='cards_on_screen', doc=doc, questions=list(texts))
+        found = list(answer.get('found') or [])
+        return found if any(found) or answer.get('edit') else None
+
     def set_model(self, app, doc, label):
         """Picks `label` in the model menu of the open conversation; 'already' if it was chosen."""
         return self.ask(app, cmd='model', doc=doc, model=label).get('how')
@@ -3522,8 +3725,66 @@ class UiWatcher:
         self.last_usage_check = 0.0
         self.usage_checked_once = False
         self.last_turn_check = 0.0
+        self.card_look_at, self.card_misses, self.card_seen = 0.0, {}, set()
         self.clock = time.time
         self.lock = threading.Lock()
+
+    CARD_LOOK_EVERY = 20    # seconds between looks for the Codex card the phone shows
+    CARD_LOOK_AFTER = 30    # a card asked less long ago may not be drawn yet
+    CARD_MISSES = 2         # looks in a row without it before it is dropped
+
+    def check_card_on_screen(self, app, answer):
+        """Codex: a card closed on the PC (解除) writes nothing to the conversation's file, so the
+        phone kept showing it (home PC 11/21 20:52: 「我電腦取消 但app還留著」). While its
+        conversation is the one open on the PC, the card the phone shows is looked for every
+        CARD_LOOK_EVERY seconds; missing CARD_MISSES times in a row, with no older waiting card on
+        screen either (Codex pages them oldest first), it is dropped."""
+        docs = answer.get('docs') or []
+        if app != 'codex' or not answer.get('window') or len(docs) != 1 or not hasattr(self.driver, 'cards_on_screen'):
+            return
+        now = self.clock()
+        if now - self.card_look_at < self.CARD_LOOK_EVERY:
+            return
+        with self.hub.lock:
+            transcripts = [(key[1], t) for key, t in self.hub.transcripts.items() if key[0] == app]
+        for session_id, transcript in transcripts:
+            with transcript.lock:
+                parser = transcript.parser
+                shown = getattr(parser, 'question', None)
+                if not shown or not hasattr(parser, 'drop_question'):
+                    continue
+                asked = parser.asked.get(shown['questionId'])
+                ids = [q['questionId'] for q in parser.pending]
+                cards = parser.pending[:ids.index(shown['questionId']) + 1] if shown['questionId'] in ids else [shown]
+            if asked is not None and now - asked < self.CARD_LOOK_AFTER:
+                continue
+            info = self.hub.info(app, session_id)
+            if not info or info.get('doc') != docs[0]:
+                continue
+            texts = [q['question'] for card in cards for q in card['questions'] if q.get('question')]
+            if not texts:
+                continue
+            self.card_look_at = now
+            try:
+                found = self.driver.cards_on_screen(app, docs[0], texts)
+            except ActionError:
+                return
+            key = shown['questionId']
+            if found is None:
+                return
+            if any(found):
+                if self.card_misses.pop(key, 0) or key not in self.card_seen:
+                    self.card_seen.add(key)
+                    logging.info('codex card on screen: %s', texts[-1][:60])
+                return
+            self.card_misses[key] = self.card_misses.get(key, 0) + 1
+            if self.card_misses[key] < self.CARD_MISSES:
+                return
+            self.card_misses.pop(key, None)
+            with transcript.lock:
+                transcript.parser.drop_question(key)
+            logging.info('codex card gone from the PC, dropped: %s', texts[-1][:60])
+            return
 
     def look(self, app):
         try:
@@ -3539,6 +3800,7 @@ class UiWatcher:
         with self.lock:
             before = dict(self.state.get(app) or {})
         suggestion, suggestion_doc, tries = self.suggestion(app, answer, before, prompt)
+        self.check_card_on_screen(app, answer)
         with self.lock:
             before = self.state.get(app) or {}
             old = before.get('prompt')
@@ -4051,6 +4313,7 @@ class ActionRunner:
         self.on_selfcheck = None         # called with each self-check report
         self.on_send_failed = None       # called with a send or new conversation that failed in the UI
         self.last_selfcheck = None
+        self.models = None                # ModelList: the phone's model lists kept up with the apps
         self.lock = threading.Condition()
 
     # -- submitting (HTTP thread) --------------------------------------------------------------
@@ -4130,6 +4393,7 @@ class ActionRunner:
                 if any(self.actions[i]['kind'] == 'selfcheck' for i in self.queue):
                     return 409, error('busy', '自檢已在排隊')
                 action = {'id': secrets.token_hex(6), 'kind': 'selfcheck', 'app': None, 'sessionId': None,
+                          'modelsOnly': bool(payload.get('modelsOnly')),
                           'info': None, 'text': str(payload.get('reason') or ''), 'images': [], 'force': force,
                           'needsFront': True, 'state': 'queued', 'message': '排隊中', 'error': None,
                           'verified': None, 'created': self.clock()}
@@ -4149,7 +4413,9 @@ class ActionRunner:
             if not isinstance(payload.get('fast'), bool):
                 return 400, error('bad-request', '要說開或關')
         info = None
-        if kind in ('send', 'open', 'permission', 'answer', 'model', 'effort', 'mode', 'stop', 'fast'):
+        if kind == 'skip' and not strings.get('skip'):
+            return 400, error('not-supported', '這個 App 的選項卡不能從手機略過')
+        if kind in ('send', 'open', 'permission', 'answer', 'skip', 'model', 'effort', 'mode', 'stop', 'fast'):
             info = self.hub.info(app, session_id)
             if info is None:
                 return 404, error('not-found', '找不到這個對話')
@@ -4157,6 +4423,10 @@ class ActionRunner:
             problem = self.check_answers(app, session_id, payload)
             if problem:
                 return problem
+        if kind == 'skip':
+            _, question = self.pending_question(app, session_id)
+            if not question or question['questionId'] != payload.get('questionId'):
+                return 409, error('question-changed', '這個選項題已經回答過或換了一題，請重新整理')
         if kind == 'permission':
             decision = payload.get('decision')
             if decision not in ('allow_once', 'deny'):
@@ -4165,7 +4435,7 @@ class ActionRunner:
             if not current or current['promptId'] != payload.get('promptId'):
                 return 409, error('prompt-changed', '電腦上的權限詢問已經不一樣了，請重新整理')
             needs_front = app == 'claude' and decision == 'allow_once'
-        elif kind in ('stop', 'popup', 'fast', 'update') or (app == 'codex' and kind in ('model', 'mode')):
+        elif kind in ('stop', 'popup', 'fast', 'update', 'skip') or (app == 'codex' and kind in ('model', 'mode')):
             # Pressed through UI Automation alone; opening another conversation still checks.
             needs_front = False
         else:
@@ -4275,7 +4545,7 @@ class ActionRunner:
     RESTORE_FRONT = ('send', 'new', 'answer', 'permission', 'model', 'effort', 'mode', 'fast', 'stop', 'selfcheck')
     # Actions on a conversation's window other than sending and opening (open_conversation sees to
     # those): a window covered whole shows UI Automation no page, so it comes up first.
-    UNCOVER = ('new', 'answer', 'permission', 'model', 'effort', 'mode', 'fast', 'stop')
+    UNCOVER = ('new', 'answer', 'skip', 'permission', 'model', 'effort', 'mode', 'fast', 'stop')
 
     def remember_front(self, action):
         get = getattr(self.driver, 'foreground', None)
@@ -4310,7 +4580,7 @@ class ActionRunner:
         action['photoCount'] = len(photos)
         front = self.remember_front(action)
         handler = {'send': self.do_send, 'permission': self.do_permission, 'new': self.do_new,
-                   'open': self.do_open, 'answer': self.do_answer, 'model': self.do_model,
+                   'open': self.do_open, 'answer': self.do_answer, 'skip': self.do_skip, 'model': self.do_model,
                    'effort': self.do_effort, 'mode': self.do_mode, 'stop': self.do_stop,
                    'launch': self.do_launch, 'popup': self.do_popup, 'fast': self.do_fast,
                    'update': self.do_update, 'selfcheck': self.do_selfcheck}[action['kind']]
@@ -4687,8 +4957,17 @@ class ActionRunner:
         self.open_conversation(action)
         self.recheck(action)
         self.presence.begin_own()
-        self.driver.answer_question(app, info['doc'], question, action['answers'])
-        self.presence.end_own()
+        try:
+            self.driver.answer_question(app, info['doc'], question, action['answers'])
+        except ActionError as failed:
+            # Codex's card is gone from the PC (closed there with 解除, which writes nothing): the
+            # phone stops showing it, and the next card, if any, comes up.
+            if failed.code == 'question-changed' and hasattr(transcript.parser, 'drop_question'):
+                with transcript.lock:
+                    transcript.parser.drop_question(question['questionId'])
+            raise
+        finally:
+            self.presence.end_own()
         self.update(action, message='已選好，確認中')
         deadline = self.clock() + self.verify_seconds
         while True:
@@ -4701,6 +4980,32 @@ class ActionRunner:
             if self.clock() >= deadline:
                 raise ActionError('still-asking', '')
             time.sleep(0.5)
+
+    def do_skip(self, action):
+        """Codex: the card's own 略過 (the user 11/22: 「如果不選的話應該也要提供一個略過的選項」).
+        A skipped card may write nothing to the conversation's file, so the phone stops showing it
+        once the worker has seen it leave the screen."""
+        app, info = action['app'], action['info']
+        transcript, question = self.pending_question(app, action['sessionId'])
+        if not question or question['questionId'] != action['questionId']:
+            raise ActionError('question-changed', '')
+        self.open_conversation(action)
+        self.recheck(action, False)
+        self.presence.begin_own()
+        try:
+            how = self.driver.skip_question(app, info['doc'], question)
+        except ActionError as failed:
+            if failed.code == 'question-changed' and hasattr(transcript.parser, 'drop_question'):
+                with transcript.lock:
+                    transcript.parser.drop_question(question['questionId'])
+            raise
+        finally:
+            self.presence.end_own()
+        logging.info('codex card skipped by %s: %s', how, question['questions'][0]['question'][:60])
+        if hasattr(transcript.parser, 'drop_question'):
+            with transcript.lock:
+                transcript.parser.drop_question(question['questionId'])
+        self.update(action, state='done', verified=True, message='已略過')
 
     def do_model(self, action):
         """Picks the model in the conversation's own menu. The worker checks the model button
@@ -4770,7 +5075,7 @@ class ActionRunner:
 
     # -- the self-check (11/15) --------------------------------------------------------------------
 
-    OUTCOME_KINDS = ('send', 'new', 'answer', 'permission', 'model', 'effort', 'mode', 'stop', 'fast', 'open', 'popup')
+    OUTCOME_KINDS = ('send', 'new', 'answer', 'skip', 'permission', 'model', 'effort', 'mode', 'stop', 'fast', 'open', 'popup')
 
     def log_outcome(self, action):
         """One line per phone action in outcomes.jsonl (kind, app, state, error; never the text): the
@@ -4823,6 +5128,8 @@ class ActionRunner:
         model button and menu (opened and closed, nothing picked), the new-conversation button,
         Claude's usage card. Each item passes, fails or was not tested (11/15, the user: desktop
         app updates must not stop sending from the phone)."""
+        if action.get('modelsOnly'):
+            return self.do_models(action)
         report = {'pc': self.pc_name, 'version': VERSION, 'at': iso(time.time()), 'reason': action.get('text') or '',
                   'apps': {}}
         versions = {}
@@ -4856,6 +5163,22 @@ class ActionRunner:
                 logging.exception('self-check report handling failed')
         self.update(action, state='done', verified=report['ok'],
                     message='自檢全部通過' if report['ok'] else '自檢有項目失敗：' + '、'.join(failed))
+
+    def do_models(self, action):
+        """The nightly look at Claude's model menu (opened and closed, nothing picked)."""
+        if self.models is None:
+            raise ActionError('not-supported', 'no model list kept')
+        found = []
+        for app in ('claude',):
+            if self.driver.docs(app) is None:
+                continue  # not running
+            probe = self.driver.probe(app, type=False, menus=True)
+            listed = (probe.get('menu') or {}).get('models') or []
+            names = models_from_menu(app, listed if isinstance(listed, list) else [listed])
+            changed = self.models.adopt(app, names, 'menu')
+            found.append(f"{app}：{'／'.join(names) or '讀不到'}" + ('（已更新）' if changed else ''))
+        logging.info('model check: %s', '；'.join(found) or 'no app running')
+        self.update(action, state='done', verified=True, message='；'.join(found) or '桌面版沒有開著')
 
     def selfcheck_app(self, action, app):
         checks = []
@@ -4911,6 +5234,8 @@ class ActionRunner:
         elif menu.get('error') or not listed:
             add('模型選單', 'fail', menu.get('error') or '選單沒有列出模型')
         else:
+            if self.models is not None and self.models.adopt(app, models_from_menu(app, listed), 'menu'):
+                known = strings.get('models') or []
             # Claude 11/17 (home PC) may tag a radio after the model: 'Opus 5.5 預設集'.
             missing = [m for m in known if not any(x == m or x.startswith(m + ' ') for x in listed)]
             add('模型選單', 'pass' if not missing else 'fail',
@@ -5146,6 +5471,7 @@ class SelfCheckPlan:
         self.shared_dir = Path(shared_dir) if shared_dir else None
         self.wanted = None            # [reason, tries, not before]
         self.last_send_check = 0.0
+        self.models_retry = 0.0
         self.failed_sends = []        # phone sends the UI refused since the last report
         self.lock = threading.Lock()
         try:
@@ -5174,6 +5500,20 @@ class SelfCheckPlan:
             self.state['weekly'] = day
             self.save()
             self.want('每週例行')
+        models = getattr(self.runner, 'models', None)
+        if models is not None:
+            models.check_codex()
+            # Claude's models every other night at 03:00 (Sunday's self-check looks at them too):
+            # nobody at the PC, as for the self-check; tried again every 10 minutes till 04:00.
+            if (local.hour == self.HOUR and local.weekday() != self.WEEKDAY and self.state.get('models') != day
+                    and now >= self.models_retry):
+                code, body = self.runner.submit('selfcheck', None, None, {'reason': '每日模型檢查', 'modelsOnly': True})
+                if code == 202:
+                    self.state['models'] = day
+                    self.save()
+                else:
+                    self.models_retry = now + 600
+                    logging.info('model check waits: %s %s', code, body.get('error'))
         versions = getattr(getattr(self.runner, 'watcher', None), 'versions', None) or {}
         for app, found in versions.items():
             running = (found or {}).get('running') if isinstance(found, dict) else None
@@ -7047,7 +7387,7 @@ def handler_for(hub, gate, networks, runner=None):
                 app = parts[0]
                 if len(parts) == 2:
                     return self.send_json(*runner.submit('new', app, None, body))
-                kinds = {'messages': 'send', 'permission': 'permission', 'open': 'open', 'answer': 'answer',
+                kinds = {'messages': 'send', 'permission': 'permission', 'open': 'open', 'answer': 'answer', 'skip': 'skip',
                          'model': 'model', 'effort': 'effort', 'mode': 'mode', 'stop': 'stop', 'fast': 'fast'}
                 if len(parts) == 4 and parts[3] in kinds and hub.sources[app].id_pattern.match(parts[2]):
                     return self.send_json(*runner.submit(kinds[parts[3]], app, parts[2], body))
@@ -7713,6 +8053,12 @@ class FakeDriver:
         self.write(app, path, 'assistant', '已補上分號並存檔（示範）' if decision == 'allow_once' else '好的，先不修改。')
         return 'fake'
 
+    def skip_question(self, app, doc, question):
+        self.calls.append(('skip_question', app, question['questionId']))
+        if self.open_doc.get(app) != doc:
+            raise ActionError('title-mismatch', '')
+        return 'fake'
+
     def answer_question(self, app, doc, question, answers):
         self.calls.append(('answer_question', app, question['questionId']))
         if self.open_doc.get(app) != doc:
@@ -7990,6 +8336,7 @@ def main(argv=None):
     hub.light = light_watch_from_config(cfg, hub.camera, notify, pc_name, path.parent)
     if hub.light is not None:
         threading.Thread(target=hub.light.run_forever, daemon=True, name='light-watch').start()
+    CodexParser.DROPPED_FILE = path.parent / 'dropped_cards.json'
     runner = None
     if cfg.get('drive_windows', True):
         driver = WindowsDriver(load_strings())
@@ -8008,6 +8355,8 @@ def main(argv=None):
             threading.Thread(target=repair.run_forever, daemon=True, name='repair-watch').start()
         plan = SelfCheckPlan(runner, path.parent, shared, repair)
         runner.data_dir, runner.on_selfcheck, runner.on_send_failed = path.parent, plan.on_report, plan.on_send_failed
+        runner.models = ModelList(hub.strings, path.parent)
+        runner.models.check_codex()
         hub.selfcheck_plan = plan
         threading.Thread(target=plan.run_forever, daemon=True, name='selfcheck').start()
         threading.Timer(90, plan.resend_pending, kwargs={'notify': notify}).start()
