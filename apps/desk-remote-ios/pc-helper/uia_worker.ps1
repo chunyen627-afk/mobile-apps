@@ -246,6 +246,24 @@ function Pid-Name($id) {
   try { return (Get-Process -Id $id -ErrorAction Stop).ProcessName } catch { return 'unknown' }
 }
 
+# A screen saver owns the input desktop ("Screen-saver"), so no window is in front and none can
+# come there (home PC 11/22 01:25: blank scrnsave.scr after 5 idle minutes, every phone message
+# "in front: none"). One without a password ends at the first input anyway; ending it here does
+# what moving the mouse would. A secure one leads to the lock screen, so it is left alone.
+function Wake-Screen {
+  if ([DeskWin]::GetForegroundWindow() -ne [IntPtr]::Zero) { return $false }
+  foreach ($key in @('HKCU:\Control Panel\Desktop', 'HKCU:\Software\Policies\Microsoft\Windows\Control Panel\Desktop')) {
+    try { if ("$((Get-ItemProperty $key -ErrorAction Stop).ScreenSaverIsSecure)" -eq '1') { return $false } } catch { }
+  }
+  $mine = [Diagnostics.Process]::GetCurrentProcess().SessionId
+  $savers = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -like '*.scr' -and $_.SessionId -eq $mine })
+  if (-not $savers.Count) { return $false }
+  foreach ($saver in $savers) { try { $saver.Kill() } catch { } }
+  for ($i = 0; $i -lt 15 -and [DeskWin]::GetForegroundWindow() -eq [IntPtr]::Zero; $i++) { Start-Sleep -Milliseconds 200 }
+  $script:FrontHow = 'screen saver ended'
+  return $true
+}
+
 # Every way Windows lets a background program take the foreground, in order; returns the one that
 # worked, or $null. A full-screen game refused the first two (home PC 11/14, PBZ), and the user's
 # rule is that the desktop app always comes to the top, whatever runs. $keepPid: never send Alt
@@ -253,6 +271,7 @@ function Pid-Name($id) {
 # then swallowed the paste and the click, found live); $mayMinimize: the last resort minimizes the
 # window in front, which Restore-Front brings back afterwards.
 function Force-Front($hwnd, $keepPid, [bool]$mayMinimize) {
+  $null = Wake-Screen
   if ([DeskWin]::IsIconic($hwnd)) { [DeskWin]::ShowWindow($hwnd, 9) | Out-Null }  # SW_RESTORE
   elseif (-not [DeskWin]::IsWindowVisible($hwnd)) { [DeskWin]::ShowWindow($hwnd, 5) | Out-Null }  # SW_SHOW
   if ([DeskWin]::GetForegroundWindow() -eq $hwnd) { return 'already' }
