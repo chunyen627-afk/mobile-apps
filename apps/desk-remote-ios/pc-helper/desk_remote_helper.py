@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.94'
+VERSION = '0.5.95'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -3442,6 +3442,11 @@ class WindowsDriver:
                  for q, a in zip(question['questions'], answers)]
         return self.ask(app, cmd='choose', doc=doc, questions=items).get('how')
 
+    def skip_question(self, app, doc, question):
+        """Codex: presses the card's own 略過 for each of its questions; how it was pressed."""
+        texts = [q['question'] for q in question['questions'] if q.get('question')]
+        return self.ask(app, cmd='skip_question', doc=doc, questions=texts).get('how')
+
     def cards_on_screen(self, app, doc, texts):
         """[bool] per question text: is a Codex card asking it on the page `doc`; None when the
         page is not drawn (no message box either). Reads only."""
@@ -4408,7 +4413,9 @@ class ActionRunner:
             if not isinstance(payload.get('fast'), bool):
                 return 400, error('bad-request', '要說開或關')
         info = None
-        if kind in ('send', 'open', 'permission', 'answer', 'model', 'effort', 'mode', 'stop', 'fast'):
+        if kind == 'skip' and not strings.get('skip'):
+            return 400, error('not-supported', '這個 App 的選項卡不能從手機略過')
+        if kind in ('send', 'open', 'permission', 'answer', 'skip', 'model', 'effort', 'mode', 'stop', 'fast'):
             info = self.hub.info(app, session_id)
             if info is None:
                 return 404, error('not-found', '找不到這個對話')
@@ -4416,6 +4423,10 @@ class ActionRunner:
             problem = self.check_answers(app, session_id, payload)
             if problem:
                 return problem
+        if kind == 'skip':
+            _, question = self.pending_question(app, session_id)
+            if not question or question['questionId'] != payload.get('questionId'):
+                return 409, error('question-changed', '這個選項題已經回答過或換了一題，請重新整理')
         if kind == 'permission':
             decision = payload.get('decision')
             if decision not in ('allow_once', 'deny'):
@@ -4424,7 +4435,7 @@ class ActionRunner:
             if not current or current['promptId'] != payload.get('promptId'):
                 return 409, error('prompt-changed', '電腦上的權限詢問已經不一樣了，請重新整理')
             needs_front = app == 'claude' and decision == 'allow_once'
-        elif kind in ('stop', 'popup', 'fast', 'update') or (app == 'codex' and kind in ('model', 'mode')):
+        elif kind in ('stop', 'popup', 'fast', 'update', 'skip') or (app == 'codex' and kind in ('model', 'mode')):
             # Pressed through UI Automation alone; opening another conversation still checks.
             needs_front = False
         else:
@@ -4534,7 +4545,7 @@ class ActionRunner:
     RESTORE_FRONT = ('send', 'new', 'answer', 'permission', 'model', 'effort', 'mode', 'fast', 'stop', 'selfcheck')
     # Actions on a conversation's window other than sending and opening (open_conversation sees to
     # those): a window covered whole shows UI Automation no page, so it comes up first.
-    UNCOVER = ('new', 'answer', 'permission', 'model', 'effort', 'mode', 'fast', 'stop')
+    UNCOVER = ('new', 'answer', 'skip', 'permission', 'model', 'effort', 'mode', 'fast', 'stop')
 
     def remember_front(self, action):
         get = getattr(self.driver, 'foreground', None)
@@ -4569,7 +4580,7 @@ class ActionRunner:
         action['photoCount'] = len(photos)
         front = self.remember_front(action)
         handler = {'send': self.do_send, 'permission': self.do_permission, 'new': self.do_new,
-                   'open': self.do_open, 'answer': self.do_answer, 'model': self.do_model,
+                   'open': self.do_open, 'answer': self.do_answer, 'skip': self.do_skip, 'model': self.do_model,
                    'effort': self.do_effort, 'mode': self.do_mode, 'stop': self.do_stop,
                    'launch': self.do_launch, 'popup': self.do_popup, 'fast': self.do_fast,
                    'update': self.do_update, 'selfcheck': self.do_selfcheck}[action['kind']]
@@ -4970,6 +4981,32 @@ class ActionRunner:
                 raise ActionError('still-asking', '')
             time.sleep(0.5)
 
+    def do_skip(self, action):
+        """Codex: the card's own 略過 (the user 11/22: 「如果不選的話應該也要提供一個略過的選項」).
+        A skipped card may write nothing to the conversation's file, so the phone stops showing it
+        once the worker has seen it leave the screen."""
+        app, info = action['app'], action['info']
+        transcript, question = self.pending_question(app, action['sessionId'])
+        if not question or question['questionId'] != action['questionId']:
+            raise ActionError('question-changed', '')
+        self.open_conversation(action)
+        self.recheck(action, False)
+        self.presence.begin_own()
+        try:
+            how = self.driver.skip_question(app, info['doc'], question)
+        except ActionError as failed:
+            if failed.code == 'question-changed' and hasattr(transcript.parser, 'drop_question'):
+                with transcript.lock:
+                    transcript.parser.drop_question(question['questionId'])
+            raise
+        finally:
+            self.presence.end_own()
+        logging.info('codex card skipped by %s: %s', how, question['questions'][0]['question'][:60])
+        if hasattr(transcript.parser, 'drop_question'):
+            with transcript.lock:
+                transcript.parser.drop_question(question['questionId'])
+        self.update(action, state='done', verified=True, message='已略過')
+
     def do_model(self, action):
         """Picks the model in the conversation's own menu. The worker checks the model button
         afterwards; the conversation file then has to show the new model too."""
@@ -5038,7 +5075,7 @@ class ActionRunner:
 
     # -- the self-check (11/15) --------------------------------------------------------------------
 
-    OUTCOME_KINDS = ('send', 'new', 'answer', 'permission', 'model', 'effort', 'mode', 'stop', 'fast', 'open', 'popup')
+    OUTCOME_KINDS = ('send', 'new', 'answer', 'skip', 'permission', 'model', 'effort', 'mode', 'stop', 'fast', 'open', 'popup')
 
     def log_outcome(self, action):
         """One line per phone action in outcomes.jsonl (kind, app, state, error; never the text): the
@@ -7350,7 +7387,7 @@ def handler_for(hub, gate, networks, runner=None):
                 app = parts[0]
                 if len(parts) == 2:
                     return self.send_json(*runner.submit('new', app, None, body))
-                kinds = {'messages': 'send', 'permission': 'permission', 'open': 'open', 'answer': 'answer',
+                kinds = {'messages': 'send', 'permission': 'permission', 'open': 'open', 'answer': 'answer', 'skip': 'skip',
                          'model': 'model', 'effort': 'effort', 'mode': 'mode', 'stop': 'stop', 'fast': 'fast'}
                 if len(parts) == 4 and parts[3] in kinds and hub.sources[app].id_pattern.match(parts[2]):
                     return self.send_json(*runner.submit(kinds[parts[3]], app, parts[2], body))
@@ -8014,6 +8051,12 @@ class FakeDriver:
         self.answered.add(key)
         path = self.hub.sources[app].transcript_path(key.split('/', 1)[1])
         self.write(app, path, 'assistant', '已補上分號並存檔（示範）' if decision == 'allow_once' else '好的，先不修改。')
+        return 'fake'
+
+    def skip_question(self, app, doc, question):
+        self.calls.append(('skip_question', app, question['questionId']))
+        if self.open_doc.get(app) != doc:
+            raise ActionError('title-mismatch', '')
         return 'fake'
 
     def answer_question(self, app, doc, question, answers):

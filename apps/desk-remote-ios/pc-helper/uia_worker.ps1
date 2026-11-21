@@ -2061,6 +2061,29 @@ function Run-Command($c) {
       $edit = [bool](Find-ByName $w $CT::Edit $s.edit)
       return @{ ok = $true; found = $found; edit = $edit }
     }
+    'skip_question' {
+      # Codex's card has its own skip button, one question at a time (live 11/22: previous, next,
+      # dismiss, skip, next step). Pressed through UI Automation; the window need not be in front.
+      $w = Need-Window $c.app
+      $page = Need-Doc $w $c.doc
+      if (-not $s.skip) { Fail 'not-supported' 'no skip button known' }
+      $hows = @()
+      foreach ($q in @($c.questions)) {
+        $card = $null
+        for ($i = 0; $i -lt 12 -and -not $card; $i++) {
+          $card = Find-CodexCard $page $s $q
+          if (-not $card) { Start-Sleep -Milliseconds 250 }
+        }
+        if (-not $card) { continue }  # skipping an earlier question may have ended the card
+        $skip = Find-ByName $card $CT::Button $s.skip
+        if (-not $skip) { Fail 'not-found' "no '$($s.skip)' button on the card" }
+        if (-not (Invoke-Element $skip)) { Fail 'toggle-failed' "'$($s.skip)' could not be pressed" }
+        $hows += 'invoke'
+        if (-not (Codex-Card-Gone $page $s $q 2500)) { Fail 'toggle-failed' "the question stayed after '$($s.skip)'" }
+      }
+      if (-not $hows.Count) { Fail 'question-changed' 'the question is not on screen' }
+      return @{ ok = $true; how = ($hows -join ',') }
+    }
     'choose' {
       $w = Need-Window $c.app
       $page = Need-Doc $w $c.doc

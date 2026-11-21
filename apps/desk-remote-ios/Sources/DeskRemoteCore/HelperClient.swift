@@ -189,6 +189,13 @@ public struct HelperClient: Sendable {
                        ActionRequest(questionId: questionId, answers: answers, force: force ? true : nil))
     }
 
+    /// Codex: presses the card's own 略過 on the PC (helper 0.5.95; an older one answers 404).
+    public func skipQuestion(_ app: DeskApp, session id: String, questionId: String,
+                             force: Bool = false) async throws -> ActionStatus {
+        try await post(["v1", app.rawValue, "sessions", id, "skip"],
+                       ActionRequest(questionId: questionId, force: force ? true : nil))
+    }
+
     /// Full text of an event the helper shortened.
     public func item(_ app: DeskApp, session id: String, item itemId: String) async throws -> String {
         let body: ItemText = try await get(["v1", app.rawValue, "sessions", id, "items", itemId], timeout: 15)

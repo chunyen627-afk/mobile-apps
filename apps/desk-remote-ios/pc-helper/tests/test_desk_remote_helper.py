@@ -427,6 +427,23 @@ class CodexQuestionTests(FakeEnvironment):
         self.assertEqual(runner.status(body['id'])['message'], '已回答')
         self.assertIn('已回答選項題：12 mm', [e['text'] for e in hub.transcript('codex', X).page(0, '')['events']])
 
+    def test_codexs_question_is_skipped_from_the_phone(self):
+        # The user 11/22: 「如果不選的話應該也要提供一個略過的選項」 — Codex's card has its own 略過.
+        hub, driver, _, runner = drive(self.fake)
+        append_lines(hub.sources['codex'].transcript_path(X), codex_question_lines())
+        hub.transcript('codex', X).refresh()
+        self.assertEqual(runner.submit('skip', 'codex', X, {'questionId': 'call_old'})[1]['error'], 'question-changed')
+        code, body = runner.submit('skip', 'codex', X, {'questionId': 'call_q1'})
+        self.assertEqual(code, 202)
+        self.assertFalse(body.get('needsFront', False))
+        run_all(runner)
+        status = runner.status(body['id'])
+        self.assertEqual((status['state'], status['message']), ('done', '已略過'), status)
+        self.assertIn(('skip_question', 'codex', 'call_q1'), driver.calls)
+        self.assertIsNone(hub.transcript('codex', X).page(0, '')['question'])
+        # Claude's card has no 略過 the helper knows of.
+        self.assertEqual(runner.submit('skip', 'claude', A, {'questionId': 'x'})[1]['error'], 'not-supported')
+
     def test_a_new_codex_question_is_notified_once(self):
         sent = []
         hub, _, watcher, _ = drive(self.fake, notify=lambda *a: sent.append(a))

@@ -48,6 +48,7 @@
     "stop": "停止",
     "submit": "傳送",
     "submit_next": "下一步",
+    "skip": "略過",
     "question_card": "問題",
     "queue_prefix": "預覽佇列中的第",
     "queue_sep": "：",
