@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.91'
+VERSION = '0.5.92'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 

@@ -360,9 +360,18 @@ function Save-Clipboard {
   $data = [System.Windows.Forms.Clipboard]::GetDataObject()
   if (-not $data) { return $saved }
   $kept = @('UnicodeText', 'Text', 'Rich Text Format', 'HTML Format', 'Bitmap', 'FileDrop')
+  # Handles (metafiles, palettes) and OLE storage cannot be put back as they were.
+  $never = @('EnhancedMetafile', 'MetaFilePict', 'Palette', 'Embed Source', 'Link Source', 'Ole Private Data')
   $formats = @($data.GetFormats($false))
   foreach ($f in $formats) {
-    if ($kept -contains $f) { $saved[$f] = $data.GetData($f) }
+    if ($kept -contains $f) { $saved[$f] = $data.GetData($f); continue }
+    if ($never -contains $f) { continue }
+    # Any other format whose data is plain bytes or text is kept too: a picture copied as 'PNG'
+    # only (home PC 11/21: a phone message was refused while one was on the clipboard).
+    try {
+      $value = $data.GetData($f)
+      if ($value -is [System.IO.MemoryStream] -or $value -is [string] -or $value -is [System.Drawing.Image]) { $saved[$f] = $value }
+    } catch { }
   }
   $saved['__unsafe'] = ($formats.Count -gt 0 -and $saved.Count -eq 0)
   return $saved
