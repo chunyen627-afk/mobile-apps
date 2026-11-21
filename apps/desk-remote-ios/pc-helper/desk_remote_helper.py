@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.92'
+VERSION = '0.5.93'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -902,6 +902,34 @@ class ClaudeParser:
         return out
 
 
+DROPPED_CARDS_LOCK = threading.Lock()
+DROPPED_CARDS_KEEP = 3 * 24 * 3600
+
+
+def load_dropped_cards(path):
+    """{questionId: when dropped} from the file the helper keeps them in, {} without one."""
+    if not path:
+        return {}
+    try:
+        data = json.loads(Path(path).read_text(encoding='utf-8'))
+    except (OSError, ValueError, UnicodeDecodeError):
+        return {}
+    return {k: v for k, v in data.items() if isinstance(v, (int, float))} if isinstance(data, dict) else {}
+
+
+def save_dropped_card(path, question_id):
+    if not path:
+        return
+    with DROPPED_CARDS_LOCK:
+        now = time.time()
+        seen = {k: v for k, v in load_dropped_cards(path).items() if now - v < DROPPED_CARDS_KEEP}
+        seen[question_id] = now
+        try:
+            Path(path).write_text(json.dumps(seen), encoding='utf-8')
+        except OSError:
+            pass
+
+
 class CodexParser:
     """`~/.codex/sessions/YYYY/MM/DD/rollout-*-<id>.jsonl` written by the Codex desktop app.
 
@@ -919,7 +947,8 @@ class CodexParser:
         # the PC asked the older one, and the answer found no such question on screen).
         self.pending = []
         self.asked = {}       # questionId -> when it was asked (epoch seconds)
-        self.dropped = set()
+        # Cards gone from the PC; kept in DROPPED_FILE so a restart does not bring them back.
+        self.dropped = set(load_dropped_cards(self.DROPPED_FILE))
         self.model = self.effort = self.mode = None
         self.turn_ts = None  # when the last turn_context (model, effort, mode) was written
         self.context = self.window = None
@@ -934,6 +963,7 @@ class CodexParser:
     # catch_up they queued up oldest first, and each answered from the phone failed and showed the
     # next old one: 「一直出現以前的選擇 目前早就沒有這些選擇」).
     CARD_MAX_AGE = 24 * 3600
+    DROPPED_FILE = None   # set by main(): <data dir>/dropped_cards.json
 
     @property
     def question(self):
@@ -958,6 +988,7 @@ class CodexParser:
         """A card the PC no longer shows (closed with 解除, found when an answer looked for it)."""
         self.dropped.add(question_id)
         self.pending = [q for q in self.pending if q['questionId'] != question_id]
+        save_dropped_card(self.DROPPED_FILE, question_id)
 
     def feed(self, obj):
         kind = obj.get('type')
@@ -3411,6 +3442,13 @@ class WindowsDriver:
                  for q, a in zip(question['questions'], answers)]
         return self.ask(app, cmd='choose', doc=doc, questions=items).get('how')
 
+    def cards_on_screen(self, app, doc, texts):
+        """[bool] per question text: is a Codex card asking it on the page `doc`; None when the
+        page is not drawn (no message box either). Reads only."""
+        answer = self.ask(app, cmd='cards_on_screen', doc=doc, questions=list(texts))
+        found = list(answer.get('found') or [])
+        return found if any(found) or answer.get('edit') else None
+
     def set_model(self, app, doc, label):
         """Picks `label` in the model menu of the open conversation; 'already' if it was chosen."""
         return self.ask(app, cmd='model', doc=doc, model=label).get('how')
@@ -3682,8 +3720,66 @@ class UiWatcher:
         self.last_usage_check = 0.0
         self.usage_checked_once = False
         self.last_turn_check = 0.0
+        self.card_look_at, self.card_misses, self.card_seen = 0.0, {}, set()
         self.clock = time.time
         self.lock = threading.Lock()
+
+    CARD_LOOK_EVERY = 20    # seconds between looks for the Codex card the phone shows
+    CARD_LOOK_AFTER = 30    # a card asked less long ago may not be drawn yet
+    CARD_MISSES = 2         # looks in a row without it before it is dropped
+
+    def check_card_on_screen(self, app, answer):
+        """Codex: a card closed on the PC (解除) writes nothing to the conversation's file, so the
+        phone kept showing it (home PC 11/21 20:52: 「我電腦取消 但app還留著」). While its
+        conversation is the one open on the PC, the card the phone shows is looked for every
+        CARD_LOOK_EVERY seconds; missing CARD_MISSES times in a row, with no older waiting card on
+        screen either (Codex pages them oldest first), it is dropped."""
+        docs = answer.get('docs') or []
+        if app != 'codex' or not answer.get('window') or len(docs) != 1 or not hasattr(self.driver, 'cards_on_screen'):
+            return
+        now = self.clock()
+        if now - self.card_look_at < self.CARD_LOOK_EVERY:
+            return
+        with self.hub.lock:
+            transcripts = [(key[1], t) for key, t in self.hub.transcripts.items() if key[0] == app]
+        for session_id, transcript in transcripts:
+            with transcript.lock:
+                parser = transcript.parser
+                shown = getattr(parser, 'question', None)
+                if not shown or not hasattr(parser, 'drop_question'):
+                    continue
+                asked = parser.asked.get(shown['questionId'])
+                ids = [q['questionId'] for q in parser.pending]
+                cards = parser.pending[:ids.index(shown['questionId']) + 1] if shown['questionId'] in ids else [shown]
+            if asked is not None and now - asked < self.CARD_LOOK_AFTER:
+                continue
+            info = self.hub.info(app, session_id)
+            if not info or info.get('doc') != docs[0]:
+                continue
+            texts = [q['question'] for card in cards for q in card['questions'] if q.get('question')]
+            if not texts:
+                continue
+            self.card_look_at = now
+            try:
+                found = self.driver.cards_on_screen(app, docs[0], texts)
+            except ActionError:
+                return
+            key = shown['questionId']
+            if found is None:
+                return
+            if any(found):
+                if self.card_misses.pop(key, 0) or key not in self.card_seen:
+                    self.card_seen.add(key)
+                    logging.info('codex card on screen: %s', texts[-1][:60])
+                return
+            self.card_misses[key] = self.card_misses.get(key, 0) + 1
+            if self.card_misses[key] < self.CARD_MISSES:
+                return
+            self.card_misses.pop(key, None)
+            with transcript.lock:
+                transcript.parser.drop_question(key)
+            logging.info('codex card gone from the PC, dropped: %s', texts[-1][:60])
+            return
 
     def look(self, app):
         try:
@@ -3699,6 +3795,7 @@ class UiWatcher:
         with self.lock:
             before = dict(self.state.get(app) or {})
         suggestion, suggestion_doc, tries = self.suggestion(app, answer, before, prompt)
+        self.check_card_on_screen(app, answer)
         with self.lock:
             before = self.state.get(app) or {}
             old = before.get('prompt')
@@ -8196,6 +8293,7 @@ def main(argv=None):
     hub.light = light_watch_from_config(cfg, hub.camera, notify, pc_name, path.parent)
     if hub.light is not None:
         threading.Thread(target=hub.light.run_forever, daemon=True, name='light-watch').start()
+    CodexParser.DROPPED_FILE = path.parent / 'dropped_cards.json'
     runner = None
     if cfg.get('drive_windows', True):
         driver = WindowsDriver(load_strings())

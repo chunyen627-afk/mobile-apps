@@ -306,6 +306,62 @@ class CodexQuestionTests(FakeEnvironment):
         transcript.parser.add_question({'questionId': 'call_b', 'questions': []})
         self.assertIsNone(transcript.parser.question)
 
+    def test_a_card_closed_on_the_pc_leaves_the_phone(self):
+        """Home PC 11/21 20:52: closed on the PC (解除 writes nothing), the card stayed on the phone
+        (「我電腦取消 但app還留著」). Looked for on screen while its conversation is open."""
+        hub = h.Hub('示範電腦', self.sources, h.FixedPresence(self.fake.cfg['presence']))
+        hub.strings = h.load_strings()
+        transcript = hub.transcript('codex', X)
+        drain(transcript)
+        append_lines(transcript.path, codex_question_lines('call_usb', 'USB 偵錯授權允許了嗎？', ()))
+        transcript.refresh()
+        doc = hub.info('codex', X)['doc']
+        screen = {'cards': ['USB 偵錯授權允許了嗎？'], 'asked': []}
+
+        class Screen:
+            def inspect(self, app):
+                return {'ok': True, 'window': True, 'docs': [doc]}
+
+            def cards_on_screen(self, app, page, texts):
+                screen['asked'].append((page, list(texts)))
+                if screen.get('blank'):
+                    return None   # the page not drawn: no card and no message box
+                return [t in screen['cards'] for t in texts]
+
+        watcher = h.UiWatcher(hub, Screen())
+        now = [time.time()]
+        watcher.clock = lambda: now[0]
+        watcher.screen_in_use = lambda: False
+        for _ in range(3):
+            now[0] += 25
+            watcher.check_card_on_screen('codex', {'window': True, 'docs': [doc]})
+        self.assertEqual(transcript.parser.question['questionId'], 'call_usb', 'still on the PC')
+        self.assertEqual(screen['asked'][0], (doc, ['USB 偵錯授權允許了嗎？']))
+        watcher.check_card_on_screen('codex', {'window': True, 'docs': ['另一個對話']})
+        self.assertEqual(len(screen['asked']), 3, 'another conversation open: not looked for')
+        screen['blank'], screen['cards'] = True, []
+        for _ in range(3):
+            now[0] += 25
+            watcher.check_card_on_screen('codex', {'window': True, 'docs': [doc]})
+        self.assertIsNotNone(transcript.parser.question, 'a page not drawn proves nothing')
+        screen['blank'] = False
+        del screen['asked'][3:]
+        with tempfile.TemporaryDirectory() as folder, \
+                mock.patch.object(h.CodexParser, 'DROPPED_FILE', Path(folder) / 'dropped_cards.json'):
+            now[0] += 25
+            watcher.check_card_on_screen('codex', {'window': True, 'docs': [doc]})
+            self.assertIsNotNone(transcript.parser.question, 'one miss is not enough')
+            now[0] += 5
+            watcher.check_card_on_screen('codex', {'window': True, 'docs': [doc]})
+            self.assertEqual(len(screen['asked']), 4, 'not looked for again within 20 seconds')
+            now[0] += 20
+            watcher.check_card_on_screen('codex', {'window': True, 'docs': [doc]})
+            self.assertIsNone(transcript.parser.question)
+            # Started again, the file read anew: the card does not come back.
+            again = h.Transcript(transcript.path, h.CodexParser)
+            again.refresh()
+            self.assertIsNone(again.parser.question)
+
     def test_a_card_from_before_the_last_3_mb_is_still_found(self):
         """The first read starts 3 MB from the end; a card asked before that is still up (home PC
         11/19: a 23 MB conversation, the older card missing on the phone)."""

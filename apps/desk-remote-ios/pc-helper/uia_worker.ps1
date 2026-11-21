@@ -2031,6 +2031,17 @@ function Run-Command($c) {
       }
       return @{ ok = $true; how = (Claude-AllowOnce $w $s) }
     }
+    'cards_on_screen' {
+      # Reads only: which of the given questions a Codex card on the page asks (the helper drops a
+      # card closed on the PC, which writes nothing to the conversation's file).
+      $w = Need-Window $c.app
+      $page = Need-Doc $w $c.doc
+      $found = @()
+      foreach ($q in @($c.questions)) { $found += [bool](Find-CodexCard $page $s $q) }
+      # The message box shows the page is drawn: no card and no box is no answer.
+      $edit = [bool](Find-ByName $w $CT::Edit $s.edit)
+      return @{ ok = $true; found = $found; edit = $edit }
+    }
     'choose' {
       $w = Need-Window $c.app
       $page = Need-Doc $w $c.doc
