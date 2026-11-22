@@ -641,10 +641,17 @@ function Click-Point($w, $x, $y, $what) {
 # Claude 3.6556 shows "allow once" as a button of its own (checked live 10/27); earlier builds
 # kept it in the "more allow options" dropdown. Prefer the button: Invoke, else one checked click.
 # Without it, open the dropdown with one checked click and invoke its menu item.
+# Gone only when neither deny nor allow once is found for 1.25 s in a row: Chromium's tree can
+# miss an element for one read, and a single miss passed an invoke that did nothing (home PC
+# 11/22: Claude's browser approval card "allow Claude on <site>", four phone taps "answered" while
+# the question stayed).
 function Prompt-Gone($w, $s, $seconds) {
-  for ($i = 0; $i -lt ($seconds * 4); $i++) {
+  $missing = 0
+  for ($i = 0; $i -lt ($seconds * 4 + 5); $i++) {
     Start-Sleep -Milliseconds 250
-    if (-not (Find-ByName $w $CT::Button $s.deny)) { return $true }
+    if ((Find-ByName $w $CT::Button $s.deny) -or (Find-ByName $w $CT::Button $s.allow_once)) { $missing = 0; continue }
+    $missing++
+    if ($missing -ge 5) { return $true }
   }
   return $false
 }
@@ -664,7 +671,13 @@ function Claude-AllowOnce($w, $s) {
   try {
     Bring-Front $w
     if ($direct) {
-      Click-Element $w (Find-ByName $w $CT::Button $s.allow_once) 'the allow button'
+      # Left part of the button: the browser approval card puts a "Ctrl Enter" badge on its right
+      # half (a click 30 px from the left edge answered it live 11/22).
+      $e = Find-ByName $w $CT::Button $s.allow_once
+      if (-not $e) { Fail 'prompt-changed' 'the allow button went away' }
+      $r = $e.Current.BoundingRectangle
+      if ($r.IsEmpty -or $r.Width -lt 2) { Fail 'menu-failed' 'the allow button has no position on screen' }
+      Click-Point $w ($r.X + [Math]::Min($r.Width / 2, 30)) ($r.Y + $r.Height / 2) 'the allow button'
       if (-not (Prompt-Gone $w $s 4)) { Fail 'still-asking' 'the question is still on screen after the click' }
       return 'click'
     }

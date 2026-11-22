@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.95'
+VERSION = '0.5.96'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -4937,11 +4937,14 @@ class ActionRunner:
         logging.info('permission %s %s answered by %s', action['decision'], app, how)
         self.presence.end_own()
         # Only a question that goes away counts as answered (a button once reported success live
-        # without doing anything).
+        # without doing anything), and away on two reads in a row: one read can miss it (home PC
+        # 11/22, Claude's browser approval card stayed while the phone was told 已允許一次).
         deadline = self.clock() + 8
+        missing = 0
         while True:
             self.watcher.look(app)
-            if not self.watcher.prompt_for(app, action['sessionId']):
+            missing = 0 if self.watcher.prompt_for(app, action['sessionId']) else missing + 1
+            if missing >= 2:
                 break
             if self.clock() >= deadline:
                 raise ActionError('still-asking', '')
