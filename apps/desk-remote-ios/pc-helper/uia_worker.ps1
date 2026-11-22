@@ -641,10 +641,17 @@ function Click-Point($w, $x, $y, $what) {
 # Claude 3.6556 shows "allow once" as a button of its own (checked live 10/27); earlier builds
 # kept it in the "more allow options" dropdown. Prefer the button: Invoke, else one checked click.
 # Without it, open the dropdown with one checked click and invoke its menu item.
+# Gone only when neither deny nor allow once is found for 1.25 s in a row: Chromium's tree can
+# miss an element for one read, and a single miss passed an invoke that did nothing (home PC
+# 11/22: Claude's browser approval card "allow Claude on <site>", four phone taps "answered" while
+# the question stayed).
 function Prompt-Gone($w, $s, $seconds) {
-  for ($i = 0; $i -lt ($seconds * 4); $i++) {
+  $missing = 0
+  for ($i = 0; $i -lt ($seconds * 4 + 5); $i++) {
     Start-Sleep -Milliseconds 250
-    if (-not (Find-ByName $w $CT::Button $s.deny)) { return $true }
+    if ((Find-ByName $w $CT::Button $s.deny) -or (Find-ByName $w $CT::Button $s.allow_once)) { $missing = 0; continue }
+    $missing++
+    if ($missing -ge 5) { return $true }
   }
   return $false
 }
@@ -664,7 +671,13 @@ function Claude-AllowOnce($w, $s) {
   try {
     Bring-Front $w
     if ($direct) {
-      Click-Element $w (Find-ByName $w $CT::Button $s.allow_once) 'the allow button'
+      # Left part of the button: the browser approval card puts a "Ctrl Enter" badge on its right
+      # half (a click 30 px from the left edge answered it live 11/22).
+      $e = Find-ByName $w $CT::Button $s.allow_once
+      if (-not $e) { Fail 'prompt-changed' 'the allow button went away' }
+      $r = $e.Current.BoundingRectangle
+      if ($r.IsEmpty -or $r.Width -lt 2) { Fail 'menu-failed' 'the allow button has no position on screen' }
+      Click-Point $w ($r.X + [Math]::Min($r.Width / 2, 30)) ($r.Y + $r.Height / 2) 'the allow button'
       if (-not (Prompt-Gone $w $s 4)) { Fail 'still-asking' 'the question is still on screen after the click' }
       return 'click'
     }
@@ -1424,31 +1437,47 @@ function Set-Effort($w, $page, $s, $label) {
   }
 }
 
-# Claude's permission mode button is named after the current mode.
+# The names a mode goes by on screen: the phone's label and its newer spellings (mode_aliases,
+# e.g. Claude 11/22 renamed one mode in the menu).
+function Mode-Spellings($s, $label) {
+  $names = @($label)
+  if ($s.mode_aliases -and $s.mode_aliases.$label) { $names += @($s.mode_aliases.$label) }
+  return $names
+}
+
+# Claude's permission mode button is named after the current mode, which can also be one the
+# menu does not offer (mode_extra_buttons: home PC 11/22 showed one set outside the menu).
 function Mode-Button($scope, $s) {
+  $known = @($s.modes) + @($s.mode_extra_buttons)
+  foreach ($m in @($s.modes)) { $known += @(Mode-Spellings $s $m) }
   $buttons = $scope.FindAll($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Button)))
-  foreach ($b in $buttons) { if (@($s.modes) -contains $b.Current.Name) { return $b } }
+  foreach ($b in $buttons) { if ($known -contains $b.Current.Name) { return $b } }
   return $null
 }
 
 function Set-ClaudeMode($w, $page, $s, $label) {
+  $want = @(Mode-Spellings $s $label)
   $button = Mode-Button $page $s
   if (-not $button) { $button = Mode-Button $w $s }
   if (-not $button) { Fail 'not-found' 'no permission mode button on screen' }
-  if ($button.Current.Name -eq $label) { return 'already' }
+  if ($want -contains $button.Current.Name) { return 'already' }
   $before = [DeskWin]::GetForegroundWindow()
   $cursor = New-Object DeskWin+POINT
   [DeskWin]::GetCursorPos([ref]$cursor) | Out-Null
   try {
     Bring-Front $w
     Open-Menu $w $button 'the permission mode button'
-    $radio = Wait-Labelled $w $CT::RadioButton $label 12
+    $radio = $null
+    for ($i = 0; $i -lt 12 -and -not $radio; $i++) {
+      foreach ($name in $want) { if (-not $radio) { $radio = Find-Labelled $w $CT::RadioButton $name } }
+      if (-not $radio) { Start-Sleep -Milliseconds 250 }
+    }
     if (-not $radio) { Fail 'model-failed' ("the mode is not in the menu; radio buttons: " + ((Radio-Names $w) -join ' | ')) }
     if (-not (Invoke-Element $radio)) { Fail 'not-invokable' 'the mode could not be chosen' }
     for ($i = 0; $i -lt 12; $i++) {
       Start-Sleep -Milliseconds 250
       $now = Mode-Button $w $s
-      if ($now -and $now.Current.Name -eq $label) { return 'invoke' }
+      if ($now -and ($want -contains $now.Current.Name)) { return 'invoke' }
     }
     Fail 'model-failed' 'the permission mode button does not show the chosen mode'
   } finally {
@@ -1849,7 +1878,10 @@ function Run-Command($c) {
           if (-not $model -and $s.model_prefix -and $n.StartsWith($s.model_prefix)) { $model = $n }
           if (-not $usage -and $s.usage_prefix -and $n.StartsWith($s.usage_prefix)) { $usage = $n }
           if (-not $update -and (Is-UpdateButton $s $n)) { $update = $n }
-          if (-not $mode -and $s.modes -and -not $s.permission_button -and (@($s.modes) -contains $n)) { $mode = $n }
+          if (-not $mode -and $s.modes -and -not $s.permission_button) {
+            if (@($s.modes) -contains $n) { $mode = $n }
+            else { foreach ($m in @($s.modes)) { if (-not $mode -and (@(Mode-Spellings $s $m) -contains $n)) { $mode = $m } } }
+          }
           if ($s.stop -and $n -eq $s.stop) { $running = $true }
         }
       }
@@ -2022,6 +2054,9 @@ function Run-Command($c) {
       }
       if ($c.effort) {
         $picked.effort = if ($c.app -eq 'codex') { Set-CodexEffort $w $w $s $c.effort } else { Set-Effort $w $w $s $c.effort }
+      }
+      if ($c.mode) {
+        $picked.mode = if ($c.app -eq 'codex') { Set-CodexMode $w $w $s $c.mode } else { Set-ClaudeMode $w $w $s $c.mode }
       }
       # Codex names its new-conversation box differently from a conversation's (read live 10/27).
       $editName = $s.edit

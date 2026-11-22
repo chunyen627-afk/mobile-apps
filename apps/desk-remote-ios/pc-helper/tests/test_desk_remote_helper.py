@@ -1220,6 +1220,18 @@ class DrivingTests(FakeEnvironment):
         self.assertEqual(runner.status(body['id'])['message'], '已開新對話（推理強度 極高）')
         self.assertEqual(driver.calls[-1], ('set_effort', 'codex', '極高'))
 
+    def test_a_new_conversation_starts_with_the_chosen_permission_mode(self):
+        """11/22: 「在新對話裡面也要讓我可以選擇權限略過」: the mode is set on the empty page
+        too, and only a mode of that app is taken."""
+        _, driver, _, runner = drive(self.fake)
+        self.assertEqual(runner.submit('new', 'claude', None, {'text': 'x', 'mode': '代我核准'})[0], 400)
+        body = runner.submit('new', 'claude', None, {'text': '查一下', 'mode': '略過權限確認'})[1]
+        run_all(runner)
+        status = runner.status(body['id'])
+        self.assertEqual((status['state'], status['verified']), ('done', True), status)
+        self.assertEqual(status['message'], '已開新對話（權限 略過權限確認）')
+        self.assertEqual(driver.calls[-2:], [('new_send', 'claude', '新增'), ('set_mode', 'claude', '略過權限確認')])
+
     def test_codexs_effort_is_switched_from_the_phone(self):
         """Codex's effort is a slider in its model menu (11/8): clicked at the effort's tick, and
         reported as taking effect from the next reply, like its model."""
