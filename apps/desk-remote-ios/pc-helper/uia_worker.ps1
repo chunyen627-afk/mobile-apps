@@ -1035,12 +1035,33 @@ function Collapse-Named($w, $name) {
   }
 }
 
+# Codex's model button, named "GPT-...". While its menu is left open the button is named after
+# the menu (effort_menu) instead (home PC 11/22: after one pick from the phone the menu stayed
+# open behind Claude, and every later pick failed with "no model button"): close that menu (its
+# Collapse, else Escape with Codex in front) and look again.
+function Codex-ModelButton($w, $page, $s) {
+  $button = Prefixed-Button $page $s.model_prefix
+  if (-not $button) { $button = Prefixed-Button $w $s.model_prefix }
+  if ($button -or -not $s.effort_menu) { return $button }
+  $open = Find-InApp $w $CT::Button $s.effort_menu
+  if (-not $open) { return $null }
+  $p = $null
+  if ($open.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$p)) { try { $p.Collapse() } catch { } }
+  for ($i = 0; $i -lt 8 -and -not $button; $i++) { Start-Sleep -Milliseconds 250; $button = Prefixed-Button $w $s.model_prefix }
+  if ($button) { return $button }
+  Bring-Front $w
+  for ($k = 0; $k -lt 3 -and -not $button; $k++) {
+    [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+    for ($i = 0; $i -lt 4 -and -not $button; $i++) { Start-Sleep -Milliseconds 250; $button = Prefixed-Button $w $s.model_prefix }
+  }
+  return $button
+}
+
 # Codex: UI Automation only, no mouse or keys, works with the window minimized (read live 10/27):
 # Expand the model button, Invoke "select model", Invoke the model's radio button, then the
 # button must name it; menus left open are collapsed by their own buttons.
 function Set-CodexModel($w, $page, $s, $label) {
-  $button = Prefixed-Button $page $s.model_prefix
-  if (-not $button) { $button = Prefixed-Button $w $s.model_prefix }
+  $button = Codex-ModelButton $w $page $s
   if (-not $button) { Fail 'not-found' 'no model button on screen' }
   if (Shows-Model $button $s $label) { return 'already' }
   $p = $null
@@ -1080,8 +1101,7 @@ function Set-CodexModel($w, $page, $s, $label) {
 # (10/27), so the tick is clicked by position: the ticks sit evenly between half the rail's
 # height from each end. The menu's status line ("item 2 of 4", effort_status) confirms the pick.
 function Set-CodexEffort($w, $page, $s, $label) {
-  $button = Prefixed-Button $page $s.model_prefix
-  if (-not $button) { $button = Prefixed-Button $w $s.model_prefix }
+  $button = Codex-ModelButton $w $page $s
   if (-not $button) { Fail 'not-found' 'no model button on screen' }
   if (Shows-Effort $button $label) { return 'already' }
   $k = [array]::IndexOf(@($s.efforts), $label)
