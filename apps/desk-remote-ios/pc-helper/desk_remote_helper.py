@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.96'
+VERSION = '0.5.97'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -3325,11 +3325,11 @@ class WindowsDriver:
         self.queued = bool(answer.get('queued'))
         return answer.get('replaced') or None
 
-    def new_send(self, app, button, text, model=None, effort=None, images=None):
-        """Opens a new conversation, picks `model` and `effort` on its empty page when given,
-        then pastes each of `images` (file paths) and sends `text`."""
+    def new_send(self, app, button, text, model=None, effort=None, images=None, mode=None):
+        """Opens a new conversation, picks `model`, `effort` and permission `mode` on its empty
+        page when given, then pastes each of `images` (file paths) and sends `text`."""
         self.ask(app, cmd='new_send', name=button, text=text, model=model or '', effort=effort or '',
-                 images=list(images or []))
+                 mode=mode or '', images=list(images or []))
 
     def foreground(self):
         """The window in front now (a handle), before an action brings its app up."""
@@ -4369,8 +4369,9 @@ class ActionRunner:
         strings = self.strings.get(app) or {}
         choice_keys = {'model': ('models', '模型'), 'effort': ('efforts', '推理強度'), 'mode': ('modes', '權限模式')}
         if kind == 'new':
-            # A new conversation may start with a model and effort (the phone's sheet, 11/8).
-            for choice in ('model', 'effort'):
+            # A new conversation may start with a model, effort and permission mode (the phone's
+            # sheet, 11/8; the mode 11/22: 「在新對話裡面也要讓我可以選擇權限略過」).
+            for choice in ('model', 'effort', 'mode'):
                 key, what = choice_keys[choice]
                 if payload.get(choice) and payload[choice] not in (strings.get(key) or []):
                     return 400, error('bad-request', f'沒有這個{what}')
@@ -5335,6 +5336,7 @@ class ActionRunner:
     def do_new(self, action):
         app, text, project = action['app'], action['text'], action.get('project')
         model, effort = action.get('model') or None, action.get('effort') or None
+        mode = action.get('mode') or None
         source = self.hub.sources[app]
         before = {row['id'] for row in source.list_sessions(50)}
         strings = self.strings.get(app) or {}
@@ -5357,11 +5359,12 @@ class ActionRunner:
         paths = []
         try:
             self.photo_files(action, paths)
-            self.driver.new_send(app, button, text, model, effort, paths)
+            self.driver.new_send(app, button, text, model, effort, paths, mode=mode)
         finally:
             self.drop_photos(action, paths)
         self.presence.end_own()
-        picked = '、'.join(part for part in ((f'模型 {model}' if model else ''), (f'推理強度 {effort}' if effort else '')) if part)
+        picked = '、'.join(part for part in ((f'模型 {model}' if model else ''), (f'推理強度 {effort}' if effort else ''),
+                                             (f'權限 {mode}' if mode else '')) if part)
         opened = f'已開新對話（{picked}）' if picked else '已開新對話'
         if photos:
             opened += f'，附 {photos} 張照片'
@@ -8032,7 +8035,7 @@ class FakeDriver:
         self.later(app, path, reply, delay, doc)
         return replaced
 
-    def new_send(self, app, button, text, model=None, effort=None, images=None):
+    def new_send(self, app, button, text, model=None, effort=None, images=None, mode=None):
         self.calls.append(('new_send', app, button) + tuple(('image', Path(path).stat().st_size) for path in images or []))
         session_id, path = self.setup.create_session(app, text[:24] or '照片')
         self.open_doc[app] = self.hub.sources[app].info(session_id)['doc']
@@ -8040,6 +8043,8 @@ class FakeDriver:
             self.set_model(app, self.open_doc[app], model)
         if effort:
             self.set_effort(app, self.open_doc[app], effort)
+        if mode:
+            self.set_mode(app, self.open_doc[app], mode)
         if images:
             self.write(app, path, 'user-image', text, len(images))
         else:

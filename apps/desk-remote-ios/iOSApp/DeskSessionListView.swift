@@ -201,6 +201,7 @@ struct DeskNewSessionView: View {
     @State private var pcState: HelperState?
     @State private var model: String?
     @State private var effort: String?
+    @State private var mode: String?
     private let clientId = UUID().uuidString
 
     var body: some View {
@@ -217,7 +218,7 @@ struct DeskNewSessionView: View {
                 }
                 // The model and effort are picked on the new conversation's empty page before the
                 // first message (helper 0.5.36; the user 11/8: choose them when opening, not after).
-                if let pcState, !pcState.models(app).isEmpty || !pcState.efforts(app).isEmpty {
+                if let pcState, !pcState.models(app).isEmpty || !pcState.efforts(app).isEmpty || !pcState.modes(app).isEmpty {
                     Section {
                         if !pcState.models(app).isEmpty {
                             DeskNewSessionPick(title: "模型", options: pcState.models(app), choice: $model)
@@ -226,6 +227,11 @@ struct DeskNewSessionView: View {
                         if !pcState.efforts(app).isEmpty {
                             DeskNewSessionPick(title: "推理強度", options: pcState.efforts(app), choice: $effort)
                                 .accessibilityIdentifier("new-session-effort")
+                        }
+                        // The permission mode too (11/22: 「在新對話裡面也要讓我可以選擇權限略過」).
+                        if !pcState.modes(app).isEmpty {
+                            DeskNewSessionPick(title: "權限模式", options: pcState.modes(app), choice: $mode)
+                                .accessibilityIdentifier("new-session-mode")
                         }
                     } footer: {
                         Text("沒選就照桌面版目前的設定。")
@@ -268,7 +274,7 @@ struct DeskNewSessionView: View {
         do {
             focused = false
             let first = try await client.newSession(app, text: text, clientMsgId: clientId, model: model, effort: effort,
-                                                    images: photos, force: force)
+                                                    mode: mode, images: photos, force: force)
             let end = try await client.follow(first, timeout: 60) { status = $0.message }
             status = end.message
             if end.state == "done", let id = end.sessionId {

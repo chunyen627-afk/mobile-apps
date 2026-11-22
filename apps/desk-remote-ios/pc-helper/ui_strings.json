@@ -18,6 +18,8 @@
     "effort_item": "投入程度",
     "efforts": ["低", "中", "高", "超高", "最高", "Ultracode"],
     "modes": ["手動", "接受編輯", "計畫", "自動", "略過權限確認"],
+    "mode_aliases": {"計畫": ["規劃"]},
+    "mode_extra_buttons": ["不詢問"],
     "stop": "停止",
     "update_prefix": "重新啟動以更新",
     "menu_suffix": "^的更多選項$"
