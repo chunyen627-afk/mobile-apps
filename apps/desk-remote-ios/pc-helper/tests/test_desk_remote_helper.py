@@ -755,6 +755,16 @@ class DrivingTests(FakeEnvironment):
         self.assertTrue(reports[-1]['busy'])
         skipped = [c['name'] for c in reports[-1]['apps']['codex']['checks'] if c['status'] == 'skip']
         self.assertEqual(skipped, ['打字測試（不送出）', '模型選單'])
+        # Codex left on a page that is not a conversation (office 11/23: its profile page 「你的 dot」):
+        # the latest conversation is opened and looked at again, as a phone message opens its own.
+        driver.probe = lambda app, **kw: (dict(real_probe(app, **kw), edit=False, model=None, menu=None, typed=None)
+                                          if app == 'codex' and not any(c[:2] == ('open', 'codex') for c in driver.calls)
+                                          else real_probe(app, **kw))
+        runner.submit('selfcheck', None, None, {'reason': '每週例行'})
+        run_all(runner)
+        self.assertTrue(reports[-1]['ok'], reports[-1])
+        self.assertIn('已打開最近的對話再測', reports[-1]['apps']['codex']['checks'][2]['detail'])
+        driver.probe = real_probe
         # Someone at the PC: not now.
         _, _, _, busy = drive(self.fake, dict(self.fake.cfg['presence'], idleSeconds=5))
         self.assertEqual(busy.submit('selfcheck', None, None, {})[0], 409)
@@ -928,6 +938,14 @@ class DrivingTests(FakeEnvironment):
         self.assertEqual(status['state'], 'failed')
         self.assertTrue(status['message'].endswith('；已請求自動檢查修復，修好後會自動重送這則'), status['message'])
         self.assertEqual(noted, [('no-prompt-box', 1)], 'the photo is kept to be sent again (lost live 11/15)')
+        # The repair's own request is not kept: sent again after the next deploy it started a
+        # second repair next to the first (office 11/23).
+        body = runner.submit('send', 'claude', A, {'text': '修理請求', 'force': True, 'automatic': True})[1]
+        run_all(runner)
+        status = runner.status(body['id'])
+        self.assertEqual(status['state'], 'failed')
+        self.assertNotIn('重送', status['message'])
+        self.assertEqual(len(noted), 1)
 
     def test_a_failed_self_check_starts_one_repair(self):
         folder = Path(tempfile.mkdtemp())

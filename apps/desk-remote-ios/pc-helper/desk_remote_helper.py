@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.98'
+VERSION = '0.5.100'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -4460,7 +4460,7 @@ class ActionRunner:
                       'questionId': payload.get('questionId'), 'answers': payload.get('answers'),
                       'project': payload.get('project'), 'model': payload.get('model'), 'effort': payload.get('effort'),
                       'mode': payload.get('mode'), 'images': images, 'button': payload.get('button'),
-                      'fast': payload.get('fast'),
+                      'fast': payload.get('fast'), 'automatic': bool(payload.get('automatic')),
                       'needsFront': needs_front, 'force': force, 'state': 'queued', 'message': '排隊中',
                       'error': None, 'verified': None, 'created': self.clock()}
             self.actions[action['id']] = action
@@ -4596,7 +4596,10 @@ class ActionRunner:
                 message += '；' + UAC_TEXT  # a prompt that came up while this ran
             elif exc.code in ('focus-failed', 'paste-failed', 'paste-failed-photos', 'no-prompt-box') and self.watcher.popup_list():
                 message += '；電腦上有跳出的視窗擋著，可在電腦頁按掉後再送'
-            repairable = action['kind'] in ('send', 'new') and exc.code in SELFCHECK_CODES and self.on_send_failed
+            # Not the repair's own request (11/23: a repair request that failed was sent again after the
+            # next deploy and started a second repair next to the first): the repair has its own fallback.
+            repairable = (action['kind'] in ('send', 'new') and exc.code in SELFCHECK_CODES and self.on_send_failed
+                          and not action.get('automatic'))
             if repairable:
                 # What the phone shows (the user 11/15: 「因為某某原因無法送出，已請求你檢查修復」).
                 message += '；已請求自動檢查修復，修好後會自動重送這則'
@@ -5191,6 +5194,7 @@ class ActionRunner:
             checks.append({'name': name, 'status': status, 'detail': detail})
         strings = self.strings.get(app) or {}
         source = self.hub.sources.get(app)
+        rows = []
         try:
             rows = source.list_sessions(5) if source else []
             add('對話列表', 'pass' if rows else 'fail', f'{len(rows)} 則' if rows else '讀不到任何對話')
@@ -5211,10 +5215,23 @@ class ActionRunner:
                 return {'checks': checks, 'busy': True}
             add('視窗', 'fail', f'{exc.code} {exc.message}'.strip())
             return {'checks': checks}
+        moved = ''
+        if not probe.get('running') and not probe.get('edit') and not probe.get('model') and rows:
+            # The app left on a page that is not a conversation (office Codex 11/23 on 「你的 dot」, its
+            # profile page): nothing to type into there, yet a phone message opens its own
+            # conversation first. The latest conversation is opened and looked at instead.
+            info = self.hub.info(app, rows[0]['id'])
+            if info is not None:
+                try:
+                    self.open_conversation(dict(action, app=app, sessionId=rows[0]['id'], info=info, needsFront=True))
+                    probe = self.driver.probe(app, type=True, menus=True, text=SELFCHECK_TEXT)
+                    moved = f"（原本停在非對話頁「{'、'.join(docs or [])}」，已打開最近的對話再測）"
+                except ActionError as exc:
+                    logging.info('self-check %s: the latest conversation did not open: %s', app, exc.code)
         if probe.get('running'):
             add('輸入與選單', 'skip', '對話正在跑，沒測到')
             return {'checks': checks, 'busy': True}
-        add('輸入框', 'pass' if probe.get('edit') else 'fail', probe.get('editName') or '')
+        add('輸入框', 'pass' if probe.get('edit') else 'fail', (probe.get('editName') or '') + moved)
         typed = probe.get('typed') or {}
         busy = False
         if probe.get('edit') and typed.get('error') in SELFCHECK_FRONT:
@@ -5594,7 +5611,8 @@ class SelfCheckPlan:
             keep = {'at': self.clock(), 'version': VERSION, 'kind': action['kind'], 'app': action['app'],
                     'sessionId': action.get('sessionId'), 'text': action.get('text') or '', 'error': code,
                     'images': [base64.b64encode(image).decode() for image in action.get('images') or []],
-                    'model': action.get('model'), 'effort': action.get('effort'), 'project': action.get('project')}
+                    'model': action.get('model'), 'effort': action.get('effort'), 'project': action.get('project'),
+                    'mode': action.get('mode')}
             try:
                 path = self.data_dir / 'pending_resend.json'
                 path.write_text(json.dumps(keep, ensure_ascii=False), encoding='utf-8')
@@ -5623,7 +5641,7 @@ class SelfCheckPlan:
             return None  # not repaired yet
         path.unlink(missing_ok=True)
         payload = {'text': keep.get('text') or '', 'force': True}
-        for key in ('model', 'effort', 'project'):
+        for key in ('model', 'effort', 'project', 'mode'):
             if keep.get(key):
                 payload[key] = keep[key]
         if keep.get('images'):

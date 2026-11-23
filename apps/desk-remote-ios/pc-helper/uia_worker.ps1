@@ -1471,8 +1471,15 @@ function Mode-Button($scope, $s) {
   $known = @($s.modes) + @($s.mode_extra_buttons)
   foreach ($m in @($s.modes)) { $known += @(Mode-Spellings $s $m) }
   $buttons = $scope.FindAll($Tree::Descendants, (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, $CT::Button)))
-  foreach ($b in $buttons) { if ($known -contains $b.Current.Name) { return $b } }
+  foreach ($b in $buttons) { if ($known -contains (Mode-Name $s $b.Current.Name)) { return $b } }
   return $null
+}
+
+# The mode a mode button shows: on a new conversation's page it reads "<mode_prefix><mode>"
+# (office 11/23, the repair's new conversation failed on it), in a conversation just "<mode>".
+function Mode-Name($s, $name) {
+  if ($s.mode_prefix -and $name -and $name.StartsWith($s.mode_prefix)) { return $name.Substring($s.mode_prefix.Length) }
+  return $name
 }
 
 function Set-ClaudeMode($w, $page, $s, $label) {
@@ -1480,7 +1487,7 @@ function Set-ClaudeMode($w, $page, $s, $label) {
   $button = Mode-Button $page $s
   if (-not $button) { $button = Mode-Button $w $s }
   if (-not $button) { Fail 'not-found' 'no permission mode button on screen' }
-  if ($want -contains $button.Current.Name) { return 'already' }
+  if ($want -contains (Mode-Name $s $button.Current.Name)) { return 'already' }
   $before = [DeskWin]::GetForegroundWindow()
   $cursor = New-Object DeskWin+POINT
   [DeskWin]::GetCursorPos([ref]$cursor) | Out-Null
@@ -1497,7 +1504,7 @@ function Set-ClaudeMode($w, $page, $s, $label) {
     for ($i = 0; $i -lt 12; $i++) {
       Start-Sleep -Milliseconds 250
       $now = Mode-Button $w $s
-      if ($now -and ($want -contains $now.Current.Name)) { return 'invoke' }
+      if ($now -and ($want -contains (Mode-Name $s $now.Current.Name))) { return 'invoke' }
     }
     Fail 'model-failed' 'the permission mode button does not show the chosen mode'
   } finally {
@@ -1899,8 +1906,9 @@ function Run-Command($c) {
           if (-not $usage -and $s.usage_prefix -and $n.StartsWith($s.usage_prefix)) { $usage = $n }
           if (-not $update -and (Is-UpdateButton $s $n)) { $update = $n }
           if (-not $mode -and $s.modes -and -not $s.permission_button) {
-            if (@($s.modes) -contains $n) { $mode = $n }
-            else { foreach ($m in @($s.modes)) { if (-not $mode -and (@(Mode-Spellings $s $m) -contains $n)) { $mode = $m } } }
+            $mn = Mode-Name $s $n
+            if (@($s.modes) -contains $mn) { $mode = $mn }
+            else { foreach ($m in @($s.modes)) { if (-not $mode -and (@(Mode-Spellings $s $m) -contains $mn)) { $mode = $m } } }
           }
           if ($s.stop -and $n -eq $s.stop) { $running = $true }
         }
