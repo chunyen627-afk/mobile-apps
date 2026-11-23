@@ -463,7 +463,15 @@ function Paste-Send($w, $scope, $editName, $text, $imagePaths = @()) {
         try { Set-PrivateImage $image } finally { $image.Dispose() }
         [System.Windows.Forms.SendKeys]::SendWait('^v')
         Start-Sleep -Milliseconds 1500
-        if ([DeskWin]::GetForegroundWindow() -ne [IntPtr]$w.Current.NativeWindowHandle) { Fail 'focus-failed' 'focus moved after pasting the image' }
+        if ([DeskWin]::GetForegroundWindow() -ne [IntPtr]$w.Current.NativeWindowHandle) {
+          # Someone at the PC clicked another window while the photo went in (home PC 11/23 22:46,
+          # Chrome): the paste went to the app (it was in front, its box focused, right before), so
+          # the window is brought back once and the send goes on; only if it stays away does it stop.
+          Bring-Front $w
+          $edit.SetFocus()
+          Start-Sleep -Milliseconds 300
+          if ([DeskWin]::GetForegroundWindow() -ne [IntPtr]$w.Current.NativeWindowHandle) { Fail 'focus-failed' 'focus moved after pasting the image' }
+        }
       }
       if (-not $text.Trim()) {
         [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')

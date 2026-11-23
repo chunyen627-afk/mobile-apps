@@ -911,6 +911,12 @@ class DrivingTests(FakeEnvironment):
         self.assertEqual(base64.b64decode(payload['images'][0]), b'\x89PNG\r\n\x1a\nx')
         self.assertFalse((folder / 'pending_resend.json').exists())
         self.assertIn('自動重送', told[0][1])
+        # The phone's own retry went through first (home PC 11/23): the kept one is dropped.
+        plan.on_send_failed(action, 'focus-failed')
+        plan.on_send_done(dict(action, text='別的訊息'))
+        self.assertTrue((folder / 'pending_resend.json').exists(), 'another message keeps it')
+        plan.on_send_done(action)
+        self.assertFalse((folder / 'pending_resend.json').exists())
         # The self-check after a failed send passes (one conversation would not open): the send itself
         # is a failed item, so the repair starts all the same.
         repairs = []

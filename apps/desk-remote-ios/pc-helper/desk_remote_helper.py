@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.100'
+VERSION = '0.5.102'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -4312,6 +4312,7 @@ class ActionRunner:
         self.data_dir = None             # where outcomes.jsonl and selfcheck.json go
         self.on_selfcheck = None         # called with each self-check report
         self.on_send_failed = None       # called with a send or new conversation that failed in the UI
+        self.on_send_done = None         # called with a send or new conversation that went through
         self.last_selfcheck = None
         self.models = None                # ModelList: the phone's model lists kept up with the apps
         self.lock = threading.Condition()
@@ -4616,6 +4617,11 @@ class ActionRunner:
             self.tell(action, failed=True)
         else:
             self.tell(action)
+            if action['kind'] in ('send', 'new') and self.on_send_done:
+                try:
+                    self.on_send_done(action)
+                except Exception:
+                    logging.exception('noting the sent message failed')
         finally:
             if front:
                 self.restore_front(action, front)
@@ -5626,6 +5632,20 @@ class SelfCheckPlan:
         if self.clock() - self.last_send_check >= self.SEND_DEBOUNCE:
             self.last_send_check = self.clock()
             self.want(f"手機{'傳訊' if action.get('kind') == 'send' else '開新對話'}失敗（{code}）")
+
+    def on_send_done(self, action):
+        """The phone sent the kept message again itself and it went through (home PC 11/23: the user's
+        retry at 22:49 worked, then the repaired helper sent the same five photos once more at 22:56):
+        nothing is left to send again."""
+        path = self.data_dir / 'pending_resend.json'
+        try:
+            keep = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            return
+        same = (keep.get('kind'), keep.get('app'), keep.get('sessionId'), keep.get('text') or '') ==             (action.get('kind'), action.get('app'), action.get('sessionId'), action.get('text') or '')
+        if same:
+            path.unlink(missing_ok=True)
+            logging.info('the kept %s %s went through on its own; not sent again', keep.get('kind'), keep.get('app'))
 
     def resend_pending(self, notify=None):
         """At start: a message that failed under an older helper is sent again (once, within an hour)."""
@@ -8381,6 +8401,7 @@ def main(argv=None):
             threading.Thread(target=repair.run_forever, daemon=True, name='repair-watch').start()
         plan = SelfCheckPlan(runner, path.parent, shared, repair)
         runner.data_dir, runner.on_selfcheck, runner.on_send_failed = path.parent, plan.on_report, plan.on_send_failed
+        runner.on_send_done = plan.on_send_done
         runner.models = ModelList(hub.strings, path.parent)
         runner.models.check_codex()
         hub.selfcheck_plan = plan
