@@ -39,7 +39,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # elevate.py sits next to this file, also under -I
 import elevate  # noqa: E402
 
-VERSION = '0.5.102'
+VERSION = '0.5.103'
 APPS = ('claude', 'codex')
 UTC = timezone.utc
 
@@ -6596,12 +6596,26 @@ class CameraFeed:
     for in `idle` seconds. So the camera is on only while that page is open (the user 11/10:
     「有打開才啟動」)."""
 
-    def __init__(self, open_device, idle=5.0):
+    # 0.5.103: on 2026-11-26 13:06 OpenCV's open of the office webcam never returned. The thread stayed
+    # "on" with no frame, every request waited 3 s for nothing, and the light watch went blind until the
+    # helper was restarted 11 hours later. A camera thread with no progress (opened, or a new frame) for
+    # `stuck` seconds is now abandoned: its generation is retired, so whatever it does when (if) it
+    # returns touches nothing, and a fresh thread opens the camera again. A Python thread cannot be
+    # killed, so after `max_abandoned` such threads in a row (each may still hold a hung driver call)
+    # no more are started until a frame arrives or the helper restarts; requests then say so.
+    STUCK_SECONDS = 20.0
+    MAX_ABANDONED = 3
+
+    def __init__(self, open_device, idle=5.0, stuck=None):
         self.open_device = open_device   # () -> device with grab_jpeg() -> bytes|None and close()
         self.idle = idle
+        self.stuck = self.STUCK_SECONDS if stuck is None else stuck
         self.lock = threading.Lock()
         self.ready = threading.Condition(self.lock)
         self.thread = None
+        self.generation = 0              # the live camera thread's number; older threads are ignored
+        self.progress_at = 0.0           # when the live thread last made progress (started, opened, a frame)
+        self.abandoned = 0               # stuck threads given up on since the last frame
         self.last_request = 0.0
         self.frame = None
         self.frames = 0                  # frames read since the camera was last opened
@@ -6621,13 +6635,24 @@ class CameraFeed:
         frame newer than the one handed out before, so the phone asking again and again gets the
         camera's own pace (about 10–30 a second) and never the same picture twice."""
         with self.lock:
-            self.last_request = time.monotonic()
+            now = time.monotonic()
+            self.last_request = now
             self.profile = profile
+            if self.thread is not None and now - self.progress_at > self.stuck:
+                self.abandoned += 1
+                logging.warning('camera stuck for %.0f s (no picture from the driver): giving up on that thread (%d in a row)',
+                                now - self.progress_at, self.abandoned)
+                self.generation += 1
+                self.thread = None
             if self.thread is None:
+                if self.abandoned >= self.MAX_ABANDONED:
+                    return None, '鏡頭卡住了，要重開小幫手才會恢復'
+                self.generation += 1
                 self.error = None
                 self.frame = None
                 self.frames = self.served = 0
-                self.thread = threading.Thread(target=self._run, name='camera', daemon=True)
+                self.progress_at = now
+                self.thread = threading.Thread(target=self._run, args=(self.generation,), name='camera', daemon=True)
                 self.thread.start()
             deadline = time.monotonic() + wait
             while (self.frame is None or self.frames <= self.served) and self.error is None:
@@ -6640,39 +6665,54 @@ class CameraFeed:
             self.served = self.frames
             return self.frame, None
 
-    def _run(self):
+    def _run(self, generation=None):
         device = None
         count = 0
         started = time.monotonic()
+        if generation is None:            # called directly (tests): adopt the current generation
+            generation = self.generation
+
+        def live():                       # this thread has not been given up on (call with the lock held)
+            return generation == self.generation
+
         try:
             try:
                 device = self.open_device()
             except Exception as exc:  # in use by another program, unplugged, or OpenCV missing
                 logging.warning('camera could not be opened: %s', exc)
                 with self.lock:
-                    self.error = f'鏡頭打不開（{exc}）'
-                    self.ready.notify_all()
+                    if live():
+                        self.error = f'鏡頭打不開（{exc}）'
+                        self.ready.notify_all()
                 return
             with self.lock:
+                if not live():
+                    logging.info('a camera thread given up on finally opened the camera; closing it')
+                    return
                 self.opened += 1
+                self.progress_at = time.monotonic()
             logging.info('camera opened for the phone')
             while True:
                 with self.lock:
-                    if time.monotonic() - self.last_request > self.idle:
+                    if not live() or time.monotonic() - self.last_request > self.idle:
                         break
-                with self.lock:
                     profile = self.profile
                 data = device.grab_jpeg(profile)
                 if not data:
                     logging.warning('camera gave no frame')
                     with self.lock:
-                        self.error = '鏡頭讀不到畫面'
-                        self.ready.notify_all()
+                        if live():
+                            self.error = '鏡頭讀不到畫面'
+                            self.ready.notify_all()
                     break
                 count += 1
                 with self.lock:
+                    if not live():
+                        break
                     self.frame = data
                     self.frames = count
+                    self.progress_at = time.monotonic()
+                    self.abandoned = 0
                     self.ready.notify_all()
             logging.info('camera closed after %d frames in %.0f s', count, time.monotonic() - started)
         finally:
@@ -6682,7 +6722,8 @@ class CameraFeed:
                 except Exception:
                     logging.exception('camera close failed')
             with self.lock:
-                self.thread = None
+                if live():
+                    self.thread = None
                 self.ready.notify_all()
 
 

@@ -3575,6 +3575,59 @@ class CameraFeedTests(unittest.TestCase):
         self.assertEqual((data, why), (None, '鏡頭還沒給出畫面'))
         self.assertLess(time.monotonic() - started, 2)
 
+    def test_a_hung_open_is_given_up_on_and_the_camera_opened_again(self):
+        """0.5.103 (11/26 13:06 the office webcam's open never returned, blind for 11 hours): a camera
+        thread with no progress for `stuck` seconds is abandoned and a new one opens the camera; the old
+        thread, if it ever returns, closes its device and changes nothing."""
+        release = threading.Event()
+        opened = []
+        late = []
+
+        def open_device():
+            opened.append(len(opened))
+            if len(opened) == 1:          # the first open hangs in the driver
+                release.wait(5)
+                late.append(CountingCamera())
+                return late[-1]
+            return CountingCamera()
+        feed = h.CameraFeed(open_device, idle=0.5, stuck=0.3)
+        self.assertEqual(feed.frame_bytes(wait=0.2), (None, '鏡頭還沒給出畫面'))
+        time.sleep(0.35)
+        data, why = feed.frame_bytes(wait=1.0)        # past `stuck`: a fresh thread, a working camera
+        self.assertIsNone(why)
+        self.assertEqual(frame_number(data), 1)
+        self.assertEqual(len(opened), 2)
+        live_thread = feed.thread
+        release.set()                                  # the hung open returns at last
+        deadline = time.monotonic() + 2
+        while not (late and late[0].closed) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertEqual(late[0].closed, 1, 'the late device was not closed')
+        self.assertIs(feed.thread, live_thread, 'the old thread cleared the live one')
+        more, why = feed.frame_bytes(wait=1.0)
+        self.assertIsNone(why)
+        self.assertGreater(frame_number(more), frame_number(data))
+        self.assertEqual(feed.abandoned, 0, 'a frame did not reset the stuck count')
+
+    def test_stops_starting_threads_after_three_stuck_opens(self):
+        release = threading.Event()
+        calls = []
+
+        def hangs():
+            calls.append(1)
+            release.wait(5)
+            raise RuntimeError('driver gave up')
+        feed = h.CameraFeed(hangs, idle=0.5, stuck=0.1)
+        try:
+            for _ in range(h.CameraFeed.MAX_ABANDONED + 1):
+                feed.frame_bytes(wait=0.05)
+                time.sleep(0.15)
+            data, why = feed.frame_bytes(wait=0.05)
+            self.assertEqual((data, why), (None, '鏡頭卡住了，要重開小幫手才會恢復'))
+            self.assertEqual(len(calls), h.CameraFeed.MAX_ABANDONED, 'kept starting threads on a hung driver')
+        finally:
+            release.set()
+
     def test_config_decides_whether_the_phone_gets_a_camera(self):
         with mock.patch.dict(sys.modules, {'cv2': mock.MagicMock()}):
             self.assertIsNone(h.camera_from_config({'camera': False}, names=['USB2.0 FHD UVC WebCam']))
