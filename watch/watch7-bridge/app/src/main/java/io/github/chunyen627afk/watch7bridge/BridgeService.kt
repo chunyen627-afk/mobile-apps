@@ -28,6 +28,8 @@ class BridgeService : Service(), LinkListener {
     private lateinit var rules: AppRules
     private lateinit var media: MediaBridge
 
+    internal lateinit var tripDisplay: TripDisplay
+        private set
     private val navUids = HashSet<Long>()
 
     var stateText = "啟動中"
@@ -55,6 +57,7 @@ class BridgeService : Service(), LinkListener {
         super.onCreate()
         nm = getSystemService(NotificationManager::class.java)
         createChannels()
+        tripDisplay = TripDisplay(this)
         startForeground(
             ID_LINK,
             linkNotification("啟動中"),
@@ -79,6 +82,7 @@ class BridgeService : Service(), LinkListener {
     }
 
     override fun onDestroy() {
+        tripDisplay.clear()
         link.stop()
         media.release()
         instance = null
@@ -94,6 +98,7 @@ class BridgeService : Service(), LinkListener {
     }
 
     override fun onSessionReset() {
+        tripDisplay.clear()
         // 斷線後 iPhone 會在重連時重送仍存在的通知，舊的先清掉
         nm.activeNotifications.filter { it.tag == TAG_ANCS }.forEach { nm.cancel(TAG_ANCS, it.id) }
         battery = -1
@@ -188,6 +193,8 @@ class BridgeService : Service(), LinkListener {
     override fun onSnapshot(json: String) {
         runCatching {
             val o = org.json.JSONObject(json)
+            if (o.optString("t") == "navigation") { tripDisplay.receive(o); return }
+            if (o.optString("t") != "snapshot") return
             val w = o.optJSONObject("weather")
             weatherText = if (w == null) "" else
                 "%s %s %.0f°C\n高 %.0f° 低 %.0f° 降雨 %d%%".format(

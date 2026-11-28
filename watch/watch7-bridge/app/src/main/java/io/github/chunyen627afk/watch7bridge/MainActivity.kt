@@ -41,6 +41,14 @@ class MainActivity : Activity() {
         col.addView(row)
 
         button(col, "同步天氣與行程") { svc()?.link?.requestSync() }
+        button(col, "自動顯示導航") {
+            if (android.provider.Settings.canDrawOverlays(this)) svc()?.tripDisplay?.showCurrent()
+            else {
+                val access = Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION, android.net.Uri.parse("package:$packageName"))
+                if (access.resolveActivity(packageManager) != null) startActivity(access)
+                else android.widget.Toast.makeText(this, "請在系統設定允許顯示在其他 App 上層", android.widget.Toast.LENGTH_LONG).show()
+            }
+        }
         button(col, "通知開關") { startActivity(Intent(this, AppsActivity::class.java)) }
         button(col, "重新連線") { svc()?.link?.kick() }
         button(col, "配對 iPhone") { svc()?.link?.startPairing() }
@@ -52,8 +60,22 @@ class MainActivity : Activity() {
         setContentView(ScrollView(this).apply { addView(col) })
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        showRequestedTrip()
+    }
+
+    private fun showRequestedTrip() {
+        if (intent.getBooleanExtra("showTrip", false)) {
+            intent.removeExtra("showTrip")
+            svc()?.tripDisplay?.showCurrent()
+        }
+    }
+
     override fun onResume() {
         super.onResume()
+        showRequestedTrip()
         if (BridgeService.hasPermissions(this)) {
             BridgeService.start(this)
         } else {

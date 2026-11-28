@@ -9,10 +9,11 @@ android {
 
     defaultConfig {
         applicationId = "io.github.chunyen627afk.watch7bridge"
+        testInstrumentationRunner = "io.github.chunyen627afk.watch7bridge.TripSmoke"
         minSdk = 33
         targetSdk = 36
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.3.0"
     }
 
     buildTypes {
