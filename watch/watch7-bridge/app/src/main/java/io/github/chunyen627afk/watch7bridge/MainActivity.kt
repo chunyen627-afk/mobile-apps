@@ -19,6 +19,7 @@ class MainActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var info: TextView
     private lateinit var media: TextView
+    private lateinit var companion: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -31,6 +32,7 @@ class MainActivity : Activity() {
         status = text(col, 16f)
         info = text(col, 13f)
         media = text(col, 13f)
+        companion = text(col, 13f)
 
         val row = LinearLayout(this).apply { gravity = Gravity.CENTER }
         button(row, "⏮") { svc()?.link?.mediaCommand(Ams.CMD_PREVIOUS) }
@@ -38,6 +40,7 @@ class MainActivity : Activity() {
         button(row, "⏭") { svc()?.link?.mediaCommand(Ams.CMD_NEXT) }
         col.addView(row)
 
+        button(col, "同步天氣與行程") { svc()?.link?.requestSync() }
         button(col, "通知開關") { startActivity(Intent(this, AppsActivity::class.java)) }
         button(col, "重新連線") { svc()?.link?.kick() }
         button(col, "配對 iPhone") { svc()?.link?.startPairing() }
@@ -79,6 +82,7 @@ class MainActivity : Activity() {
             status.text = if (BridgeService.hasPermissions(this)) "啟動中" else "需要藍牙與通知權限"
             info.text = ""
             media.text = ""
+            companion.text = ""
             return
         }
         status.text = s.stateText
@@ -86,6 +90,11 @@ class MainActivity : Activity() {
         info.text = buildString {
             if (s.battery >= 0) append("iPhone 電量 ${s.battery}%\n")
             if (last > 0) append("上次連線 " + SimpleDateFormat("MM/dd HH:mm", Locale.TAIWAN).format(Date(last)))
+        }
+        companion.text = when {
+            !s.companionAvailable && s.lastSnapshotAt == 0L -> "iPhone 端 App 未執行"
+            s.weatherText.isBlank() && s.eventText.isBlank() -> "尚未收到天氣與行程"
+            else -> listOf(s.weatherText, s.eventText).filter { it.isNotBlank() }.joinToString("\n")
         }
         media.text = when {
             s.trackTitle.isBlank() -> "沒有正在播放的媒體"

@@ -29,6 +29,8 @@ import io.github.chunyen627afk.watch7bridge.ancs.Ancs
 import io.github.chunyen627afk.watch7bridge.ancs.AncsAttributes
 import io.github.chunyen627afk.watch7bridge.ancs.AncsEvent
 import io.github.chunyen627afk.watch7bridge.ancs.AttributeAssembler
+import io.github.chunyen627afk.watch7bridge.ancs.Framing
+import io.github.chunyen627afk.watch7bridge.ancs.Reassembler
 import java.util.ArrayDeque
 import java.util.UUID
 
@@ -41,6 +43,10 @@ interface LinkListener {
     fun onSessionReset()
     fun onBattery(percent: Int)
     fun onMedia(update: AmsUpdate)
+    /** iPhone 端 App 回覆的資料（JSON）。 */
+    fun onSnapshot(json: String)
+    /** iPhone 端 App 的服務是否存在。 */
+    fun onCompanion(available: Boolean)
 }
 
 /**
@@ -72,6 +78,8 @@ class LinkManager(private val ctx: Context, private val listener: LinkListener) 
 
     private var controlPoint: BluetoothGattCharacteristic? = null
     private var amsRemote: BluetoothGattCharacteristic? = null
+    private var companionRx: BluetoothGattCharacteristic? = null
+    private val companionIn = Reassembler()
     private val assembler = AttributeAssembler()
     private val pendingEvents = HashMap<Long, AncsEvent>()
 
@@ -98,6 +106,7 @@ class LinkManager(private val ctx: Context, private val listener: LinkListener) 
             },
         )
         main.postDelayed(watchdog, WATCHDOG_INTERVAL_MS)
+        main.postDelayed(periodicSync, SYNC_INTERVAL_MS)
         reconnect(resetBackoff = true)
     }
 
@@ -172,6 +181,19 @@ class LinkManager(private val ctx: Context, private val listener: LinkListener) 
     fun performAction(uid: Long, positive: Boolean) {
         val cp = controlPoint ?: return
         enqueue(Op.Write(cp, Ancs.buildPerformAction(uid, positive)))
+    }
+
+    /** 向 iPhone 端 App 要一次最新資料。App 沒在執行時不做事。 */
+    fun requestSync() {
+        val rx = companionRx ?: return
+        for (chunk in Framing.split(SYNC_REQUEST, COMPANION_CHUNK)) enqueue(Op.Write(rx, chunk))
+    }
+
+    private val periodicSync = object : Runnable {
+        override fun run() {
+            if (state == LinkState.READY) requestSync()
+            if (started) main.postDelayed(this, SYNC_INTERVAL_MS)
+        }
     }
 
     fun mediaCommand(command: Int) {
@@ -289,6 +311,8 @@ class LinkManager(private val ctx: Context, private val listener: LinkListener) 
         gatt = null
         controlPoint = null
         amsRemote = null
+        companionRx = null
+        companionIn.reset()
         ops.clear()
         opBusy = false
         assembler.reset()
@@ -455,8 +479,14 @@ class LinkManager(private val ctx: Context, private val listener: LinkListener) 
                 enqueue(Op.Write(eu, Ams.buildSubscribe(Ams.ENTITY_PLAYER, Ams.PLAYER_PLAYBACK_INFO, Ams.PLAYER_VOLUME)))
             }
         }
+        val companion = g.getService(COMPANION_SERVICE)
+        companionRx = companion?.getCharacteristic(COMPANION_RX)
+        companionIn.reset()
+        companion?.getCharacteristic(COMPANION_TX)?.let { enqueue(Op.Notify(it)) }
+        listener.onCompanion(companionRx != null)
         directAttempts = 0
         setState(LinkState.READY, "已連線")
+        requestSync()
     }
 
     private fun onValue(uuid: UUID, value: ByteArray) {
@@ -484,6 +514,7 @@ class LinkManager(private val ctx: Context, private val listener: LinkListener) 
             }
             BATTERY_LEVEL -> if (value.isNotEmpty()) listener.onBattery(value[0].toInt() and 0xFF)
             AMS_ENTITY_UPDATE -> Ams.parseUpdate(value)?.let { listener.onMedia(it) }
+            COMPANION_TX -> companionIn.feed(value)?.let { listener.onSnapshot(String(it, Charsets.UTF_8)) }
         }
     }
 
@@ -540,6 +571,9 @@ class LinkManager(private val ctx: Context, private val listener: LinkListener) 
         private const val WAITING_LIMIT_MS = 120_000L
         private const val SETUP_LIMIT_MS = 90_000L
         private const val OP_TIMEOUT_MS = 5_000L
+        private const val SYNC_INTERVAL_MS = 30 * 60_000L
+        private const val COMPANION_CHUNK = 20
+        private val SYNC_REQUEST = "{\"t\":\"sync\"}".toByteArray()
 
         val ANCS_SERVICE: UUID = UUID.fromString("7905F431-B5CE-4E99-A40F-4B1E122D00D0")
         val ANCS_NOTIFICATION_SOURCE: UUID = UUID.fromString("9FBF120D-6301-42D9-8C58-25E699A21DBD")
@@ -548,6 +582,9 @@ class LinkManager(private val ctx: Context, private val listener: LinkListener) 
         val AMS_SERVICE: UUID = UUID.fromString("89D3502B-0F36-433A-8EF4-C502AD55F8DC")
         val AMS_REMOTE_COMMAND: UUID = UUID.fromString("9B3C81D8-57B1-4A8A-B8DF-0E56F7CA51C2")
         val AMS_ENTITY_UPDATE: UUID = UUID.fromString("2F7CABCE-808D-411F-9A0C-BB92BA96C102")
+        val COMPANION_SERVICE: UUID = UUID.fromString("5F2A0001-8C1D-4B6E-9A37-D4E1C0B2A6F3")
+        val COMPANION_RX: UUID = UUID.fromString("5F2A0002-8C1D-4B6E-9A37-D4E1C0B2A6F3")
+        val COMPANION_TX: UUID = UUID.fromString("5F2A0003-8C1D-4B6E-9A37-D4E1C0B2A6F3")
         val BATTERY_SERVICE: UUID = UUID.fromString("0000180F-0000-1000-8000-00805F9B34FB")
         val BATTERY_LEVEL: UUID = UUID.fromString("00002A19-0000-1000-8000-00805F9B34FB")
         val CCCD: UUID = UUID.fromString("00002902-0000-1000-8000-00805F9B34FB")

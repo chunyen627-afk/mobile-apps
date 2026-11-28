@@ -40,6 +40,14 @@ class BridgeService : Service(), LinkListener {
         private set
     var playing = false
         private set
+    var companionAvailable = false
+        private set
+    var weatherText = ""
+        private set
+    var eventText = ""
+        private set
+    var lastSnapshotAt = 0L
+        private set
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -89,6 +97,7 @@ class BridgeService : Service(), LinkListener {
         // 斷線後 iPhone 會在重連時重送仍存在的通知，舊的先清掉
         nm.activeNotifications.filter { it.tag == TAG_ANCS }.forEach { nm.cancel(TAG_ANCS, it.id) }
         battery = -1
+        companionAvailable = false
         trackTitle = ""
         trackArtist = ""
         playing = false
@@ -168,6 +177,36 @@ class BridgeService : Service(), LinkListener {
         }
         media.setTrack(trackTitle, trackArtist)
         media.setPlaying(playing)
+        onChanged?.invoke()
+    }
+
+    override fun onCompanion(available: Boolean) {
+        companionAvailable = available
+        onChanged?.invoke()
+    }
+
+    override fun onSnapshot(json: String) {
+        runCatching {
+            val o = org.json.JSONObject(json)
+            val w = o.optJSONObject("weather")
+            weatherText = if (w == null) "" else
+                "%s %s %.0f°C\n高 %.0f° 低 %.0f° 降雨 %d%%".format(
+                    w.optString("place"), w.optString("text"), w.optDouble("tempC"),
+                    w.optDouble("highC"), w.optDouble("lowC"), w.optInt("rainPercent"),
+                )
+            val events = o.optJSONArray("events")
+            val first = if (events != null && events.length() > 0) events.getJSONObject(0) else null
+            eventText = if (first == null) "" else {
+                val start = java.util.Date(first.optLong("startMs"))
+                val time = if (first.optBoolean("allDay")) {
+                    java.text.SimpleDateFormat("M/d", java.util.Locale.TAIWAN).format(start) + " 整天"
+                } else {
+                    java.text.SimpleDateFormat("M/d HH:mm", java.util.Locale.TAIWAN).format(start)
+                }
+                time + " " + first.optString("title")
+            }
+            lastSnapshotAt = System.currentTimeMillis()
+        }
         onChanged?.invoke()
     }
 

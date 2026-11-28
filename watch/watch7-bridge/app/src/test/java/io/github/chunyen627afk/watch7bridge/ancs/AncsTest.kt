@@ -92,6 +92,24 @@ class AncsTest {
         assertEquals(3L, asm.feed(response(3))!!.uid)
     }
 
+    @Test fun framingMatchesPhoneSide() {
+        assertArrayEquals(bytes(3, 1, 2, 3), Framing.split(bytes(1, 2, 3), 20).single())
+        assertArrayEquals(bytes(3), Framing.split(ByteArray(0), 20).single())
+        val message = ByteArray(1000) { (it % 251).toByte() }
+        val chunks = Framing.split(message, 20)
+        assertTrue(chunks.all { it.size <= 20 })
+        val r = Reassembler()
+        var result: ByteArray? = null
+        for (c in chunks) result = r.feed(c)
+        assertArrayEquals(message, result)
+    }
+
+    @Test fun reassemblerIgnoresChunkWithoutStart() {
+        val r = Reassembler()
+        assertNull(r.feed(bytes(Framing.FLAG_END, 9)))
+        assertArrayEquals(bytes(7), r.feed(bytes(3, 7)))
+    }
+
     @Test fun amsRoundTrip() {
         assertArrayEquals(bytes(2, 0, 2), Ams.buildSubscribe(Ams.ENTITY_TRACK, Ams.TRACK_ARTIST, Ams.TRACK_TITLE))
         val u = Ams.parseUpdate(bytes(2, 2, 0) + "歌名".toByteArray())!!
