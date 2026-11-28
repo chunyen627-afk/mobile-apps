@@ -1,6 +1,6 @@
 # 工具箱（toolbox-ios）
 
-把相簿、礦機狀態、桌面遙控和溫濕度放進同一個 App（iPhone 與 iPad 共用一個），用分頁切換（iPhone 在底部，iPad 在上方），以後的新工具也加在這裡。
+把相簿、礦機狀態、桌面遙控、溫濕度和手錶連結放進同一個 App（iPhone 與 iPad 共用一個），用分頁切換（iPhone 在底部，iPad 在上方），以後的新工具也加在這裡。
 
 免費 Apple 帳號每台手機同時只能有 3 個側載 App（SideStore 自己佔 1 個），每 7 天也只能建立 10 個 App ID。把工具合在一起，就只佔 1 個名額、只要續簽一次。
 
@@ -12,12 +12,17 @@
 | 礦機狀態 | [apps/miner-status-ios](../miner-status-ios) | 燈號、收益與電費、今日電價、開挖建議、遠端控制，功能同礦機狀態 0.6.4（被 iOS 關掉後重開會自動接回來源；挖另一種幣的機器，例如 FPGA 挖 QTC，用它自己的幣價算收益；累計收益估算與約當 BTC；礦池錢包餘額） |
 | 桌面遙控 | [apps/desk-remote-ios](../desk-remote-ios) | 在手機上看 Claude／Codex 桌面版的對話、傳訊息（文字、語音、照片）、回答選項問題、按電腦上跳出的視窗、核准需要系統管理員權限的指令、看電腦畫面，功能同桌面遙控 0.6.2；電腦端要裝 `apps/desk-remote-ios/pc-helper` 的小幫手 0.5.29 以上 |
 | 溫濕度 | [apps/thermo-ios](../thermo-ios) | 同時看多顆藍牙溫濕度計的溫度、濕度、電量與更新時間，點進去看 24 小時／7 天／30 天紀錄曲線，可改名與隱藏；經 ZeroTier 讀溫濕度計旁的閘道（`apps/thermo-ios/pc-gateway`），可同時設多個閘道。沒有單獨的 App |
+| 手錶連結 | [apps/watch-link-ios](../watch-link-ios) | 透過藍牙傳送天氣、行程與 Google 逐向導航到 Galaxy Watch7 |
 
 - **程式只有一份**：工具箱直接編譯各工具資料夾裡的原始碼（溫濕度只有工具箱版，沒有啟動檔），只排除它們各自的啟動檔（`LightboxApp.swift`、`MinerStatusApp.swift`、`DeskRemoteApp.swift`）與 Info.plist。單獨的相簿、礦機與桌面遙控 App 仍可從同一份原始碼建置。
 - **桌面遙控的通知連結**：小幫手的手機通知帶 `deskremote://` 連結，工具箱也接這個連結，點通知會切到桌面遙控分頁、直接開那個對話（分頁列先收到連結，再交給分頁）。單獨的桌面遙控 App 還裝著時，iOS 會挑其中一個開；停用單獨版後就固定開工具箱。
 - **記住上次的工具**：下次打開時回到上次用的分頁。
 - **各分頁保留自己的畫面**：切到另一個工具再切回來，畫面停在原處。
 - **iPad**：同一個 App 也是 iPad 原生版面（`TARGETED_DEVICE_FAMILY` "1,2"；其實 0.6.1 以前的 IPA 就已經是 iPhone＋iPad，`project.yml` 專案層寫的 "1" 被 XcodeGen 的 target 預設蓋掉，現在兩層都明寫 "1,2"）。iPadOS 18 起分頁在畫面上方。為 iPad 調過的地方：礦機左右分欄（左邊清單設最少 300 點（iPad mini 直向實測約 310 點，原本約 288，狀態文字仍會折行）、機器排在最上面、右邊預設顯示第一台、開停的確認框指著按鈕）；相簿資料夾、溫濕度列表與詳情、桌面遙控的電腦清單、電腦頁與對話列表在寬螢幕（橫向）維持約 720 點寬置中，不拉滿；溫濕度詳情在 iPad 橫向時兩排選項並成一排、曲線改矮，不用捲就看得到；桌面遙控對話在打字時，上方的跳出視窗卡片縮成一行（名稱＋按鈕）。iPhone 版面不變。
+
+## 手錶連結（0.7.0 build 31）
+
+用原本簽署工具箱的帳號與識別碼覆蓋更新。第一次點「手錶連結」才啟動藍牙；需要行程時才開放行事曆權限。從「手錶連結 → 導航」設定自己的 Google Navigation SDK 金鑰並開始導航，手錶透過原有橋接顯示下一個轉彎與距離。切換分頁時會保留連線與導航。若金鑰限制 iOS App，請填入工具箱簽署後的 Bundle ID。實際道路導航須用自己的金鑰及配對手錶驗證。
 
 ## 安裝與資料
 
@@ -58,7 +63,7 @@ bash scripts/build.sh
    | 相簿 UI 測試 | 6 | 相簿自己的測試，原封不動，在工具箱裡執行，順便確認底部分頁列沒有擋到相簿畫面 |
    | 桌面遙控 UI 測試 | 41 | 桌面遙控自己的測試，原封不動，在工具箱裡執行（`DESK_UI_TEST=1` 會從桌面遙控分頁開始） |
 
-4. 封裝 Release，檢查五個內嵌框架（AMSMB2、MobileVLCKit、MinerStatusCore、DeskRemoteCore、ThermoCore）、Bundle ID、在地網路權限、桌面遙控的四個權限說明與 `deskremote://` 連結、沒有背景模式、沒有測試資料或小幫手檔案被包進去
+4. 封裝 Release，檢查五個內嵌框架（AMSMB2、MobileVLCKit、MinerStatusCore、DeskRemoteCore、ThermoCore）、Bundle ID、在地網路權限、桌面遙控的四個權限說明與 `deskremote://` 連結、手錶連結的背景藍牙與定位模式、沒有測試資料或小幫手檔案被包進去
 5. 產出 `build/Toolbox-unsigned.ipa` 與 SHA256
 
 截圖推到 `ci-screenshots-toolbox-ios` 分支（含桌面遙控自己那 70 多張，上限 10 MB），不必登入就能看。只有 commit 訊息帶 `[release-ipa]`（使用者同意發布後才加）時，才把 IPA 和閃退分析符號檔發布成公開 prerelease `toolbox-<版本>-build<N>`：iPhone job 把測過的 IPA 和符號檔交給另一個 `release` job（暫存 1 天），`release` job 要等 iPhone job 和 iPad job 都通過才發布（2026-11-09 起，使用者要求；之前發布步驟在 iPhone job 裡，0.6.2 build 17 就在 iPad 還有 2 項失敗時發出去了；2026-11-10 0.6.5 build 20 連續幾輪只被 iPad 上的計時偶發擋住，曾提議 iPad 只回報不擋，使用者裁示「維持兩邊都綠」，改以下面的重跑一次處理偶發）。

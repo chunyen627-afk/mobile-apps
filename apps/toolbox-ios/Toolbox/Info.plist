@@ -23,6 +23,11 @@
 <key>NSAppTransportSecurity</key><dict>
 <key>NSAllowsLocalNetworking</key><true/>
 </dict>
+<key>NSBluetoothAlwaysUsageDescription</key><string>用藍牙把導航、天氣與行事曆送到已配對的手錶。</string>
+<key>NSCalendarsFullAccessUsageDescription</key><string>讀取接下來的行程，顯示在手錶上。</string>
+<key>NSLocationWhenInUseUsageDescription</key><string>從目前位置開始導航，將下一個轉彎和剩餘距離送到手錶。</string>
+<key>NSMotionUsageDescription</key><string>導航時協助判定移動狀態。</string>
+<key>UIBackgroundModes</key><array><string>bluetooth-peripheral</string><string>location</string></array>
 <key>UILaunchScreen</key><dict/>
 <key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
 <key>UIApplicationSupportsIndirectInputEvents</key><true/>

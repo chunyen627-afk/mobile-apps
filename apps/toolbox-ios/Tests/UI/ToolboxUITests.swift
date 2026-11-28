@@ -66,9 +66,22 @@ final class ToolboxUITests: XCTestCase {
     func test01OpensOnTheAlbumWithBothTools() throws {
         app.launch()
         XCTAssertTrue(albumStart.waitForExistence(timeout: 60), "album did not open first")
-        XCTAssertTrue(albumTab.exists && minerTab.exists && deskTab.exists && thermoTab.exists, "tab bar does not list all four tools")
+        XCTAssertTrue(albumTab.exists && minerTab.exists && deskTab.exists && thermoTab.exists && tab("手錶連結").exists, "missing toolbox tab")
         XCTAssertTrue(albumTab.isSelected, "album tab not selected")
         snapshot("01-toolbox-album")
+    }
+
+    func testWatchLinkOpensNavigationAndReturnsToAlbum() {
+        app.launchArguments.append("-uiTestDemo")
+        app.launch()
+        XCTAssertTrue(albumStart.waitForExistence(timeout: 60))
+        tab("手錶連結").tap()
+        let navigation = app.buttons["導航"]
+        XCTAssertTrue(navigation.waitForExistence(timeout: 10))
+        navigation.tap()
+        XCTAssertTrue(app.secureTextFields.firstMatch.waitForExistence(timeout: 10))
+        albumTab.tap()
+        XCTAssertTrue(albumStart.waitForExistence(timeout: 10))
     }
 
     func test02SwitchingKeepsEachToolsScreen() throws {

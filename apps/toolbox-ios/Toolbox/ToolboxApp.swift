@@ -7,19 +7,39 @@ import SwiftUI
 /// copied here.
 @main
 struct ToolboxApp: App {
+    @StateObject private var watch = ToolboxWatchSession()
+
     var body: some Scene {
         WindowGroup {
-            ToolboxRoot()
+            ToolboxRoot(watch: watch)
                 .albumDiagnosticsLifecycle()
         }
     }
 }
 
 enum ToolboxTool: String, CaseIterable {
-    case album, miner, desk, thermo
+    case album, miner, desk, thermo, watch
+}
+
+@MainActor
+final class ToolboxWatchSession: ObservableObject {
+    @Published private(set) var model: WatchLinkModel?
+    private let enabledKey = "toolbox.watchLink.enabled"
+
+    init() {
+        if UserDefaults.standard.bool(forKey: enabledKey) { model = WatchLinkModel() }
+    }
+
+    func activate() {
+        guard model == nil else { return }
+        let link = WatchLinkModel()
+        model = link
+        if !link.isDemo { UserDefaults.standard.set(true, forKey: enabledKey) }
+    }
 }
 
 struct ToolboxRoot: View {
+    @ObservedObject var watch: ToolboxWatchSession
     /// The last tool used, opened again on the next launch.
     @AppStorage("toolbox.tool") private var tool = ToolboxTool.album.rawValue
     /// A `deskremote://` link (the desk remote's notifications) on its way to the desk remote tab.
@@ -39,10 +59,20 @@ struct ToolboxRoot: View {
             ThermoRootView()
                 .tabItem { Label("溫濕度", systemImage: "thermometer.medium") }
                 .tag(ToolboxTool.thermo.rawValue)
+            Group {
+                if let model = watch.model {
+                    WatchLinkContentView(model: model, service: model.service)
+                } else {
+                    ProgressView()
+                }
+            }
+            .tabItem { Label("手錶連結", systemImage: "applewatch") }
+            .tag(ToolboxTool.watch.rawValue)
         }
         .onAppear { tool = Self.startTool(stored: tool) }
         // Logged with the album's diagnostics, so an unexpected end shows which tab was in use.
         .onChange(of: tool, initial: true) { _, value in
+            if value == ToolboxTool.watch.rawValue { watch.activate() }
             AppDiagnostics.shared.showTool(ToolboxTool.allCases.firstIndex { $0.rawValue == value } ?? -1)
         }
         // The desk remote's tab may not exist yet while another tab is showing, so its link is

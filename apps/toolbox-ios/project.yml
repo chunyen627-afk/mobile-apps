@@ -12,6 +12,12 @@ options:
   deploymentTarget:
     iOS: "17.0"
 packages:
+  GoogleNavigation:
+    url: https://github.com/googlemaps/ios-navigation-sdk.git
+    exactVersion: 10.2.0
+  GoogleMaps:
+    url: https://github.com/googlemaps/ios-maps-sdk.git
+    exactVersion: 10.2.0
   AMSMB2:
     url: https://github.com/amosavian/AMSMB2.git
     exactVersion: 4.0.3
@@ -30,8 +36,8 @@ settings:
     # 0.6: the thermometers joined as the fourth tab. 0.6.2: the shared clipboard in the desk remote tab.
     # 0.6.3: clipboard rows open a picture or a web address; only the copy button copies.
     # 0.6.4: the PC's webcam, live only while its page is open (helper 0.5.41). 0.6.5: data saver by default, 清晰 switch.
-    MARKETING_VERSION: "0.6.15"
-    CURRENT_PROJECT_VERSION: "30"
+    MARKETING_VERSION: "0.7.0"
+    CURRENT_PROJECT_VERSION: "31"
 targets:
   # Named Lightbox, as the album app it replaces: the same bundle identifier, executable and
   # Swift module, so the album's unit tests (`@testable import Lightbox`) run here unchanged.
@@ -49,11 +55,16 @@ targets:
         buildPhase: resources
       - path: ../desk-remote-ios/iOSApp
         excludes: [DeskRemoteApp.swift, Info.plist, zh-Hant.lproj]
+      - path: ../watch-link-ios/iOSApp
+        excludes: [WatchLinkApp.swift, Info.plist, zh-Hant.lproj]
       - path: ../thermo-ios/iOSApp
     dependencies:
       - target: MinerStatusCore
       - target: DeskRemoteCore
       - target: ThermoCore
+      - target: WatchLinkCore
+      - package: GoogleNavigation
+      - package: GoogleMaps
       - sdk: Charts.framework
       - package: AMSMB2
         embed: true
@@ -92,6 +103,7 @@ targets:
         - MinerStatusCoreTests
         - DeskRemoteCoreTests
         - ThermoCoreTests
+        - WatchLinkCoreTests
         - ToolboxUITests
         - LightboxUITests
         - DeskRemoteUITests
@@ -116,6 +128,26 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         PRODUCT_BUNDLE_IDENTIFIER: org.personal.lightbox.deskremotecore
   # The thermometers' UI-free core (gateway JSON, history, names), the same way.
+  WatchLinkCore:
+    type: framework
+    platform: iOS
+    sources:
+      - ../watch-link-ios/Sources/WatchLinkCore
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: org.personal.lightbox.watchlinkcore
+  WatchLinkCoreTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - ../watch-link-ios/Tests/WatchLinkCoreTests
+    dependencies:
+      - target: WatchLinkCore
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: org.personal.lightbox.watchlinktests
   ThermoCore:
     type: framework
     platform: iOS

@@ -19,6 +19,7 @@ on:
       - 'apps/desk-remote-ios/Tests/**'
       - 'apps/desk-remote-ios/fixtures/**'
       - 'apps/desk-remote-ios/pc-helper/**'
+      - 'apps/watch-link-ios/**'
       - 'apps/thermo-ios/**'
       - '.github/workflows/toolbox-ios.yml'
 # Write access is used only to publish an approved release and to force-push simulator
@@ -96,6 +97,17 @@ jobs:
           path: ${{ env.APP_DIR }}/build/release
           if-no-files-found: error
           retention-days: 1
+      - name: Save requested IPA for local signing
+        if: success() && contains(github.event.head_commit.message, '[ipa-artifact]')
+        uses: actions/upload-artifact@v4
+        with:
+          name: Toolbox-unsigned
+          path: |
+            ${{ env.APP_DIR }}/build/Toolbox-unsigned.ipa
+            ${{ env.APP_DIR }}/build/Toolbox-unsigned.ipa.sha256
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
       - name: Collect small reports (1 MB limit)
         id: collect
         if: always()

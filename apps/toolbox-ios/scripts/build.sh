@@ -12,8 +12,8 @@ EXPECTED_DESK_TESTS="${EXPECTED_DESK_TESTS:-49}"
 EXPECTED_THERMO_TESTS="${EXPECTED_THERMO_TESTS:-32}"
 EXPECTED_THERMO_GATEWAY_TESTS="${EXPECTED_THERMO_GATEWAY_TESTS:-38}"
 # Plus the 5 iPad layout shots on an iPad (SIM_MATCH).
-if [[ -n "${SIM_MATCH:-}" ]]; then EXPECTED_TOOLBOX_UI_TESTS="${EXPECTED_TOOLBOX_UI_TESTS:-12}"; fi
-EXPECTED_TOOLBOX_UI_TESTS="${EXPECTED_TOOLBOX_UI_TESTS:-7}"
+if [[ -n "${SIM_MATCH:-}" ]]; then EXPECTED_TOOLBOX_UI_TESTS="${EXPECTED_TOOLBOX_UI_TESTS:-13}"; fi
+EXPECTED_TOOLBOX_UI_TESTS="${EXPECTED_TOOLBOX_UI_TESTS:-8}"
 EXPECTED_ALBUM_UI_TESTS="${EXPECTED_ALBUM_UI_TESTS:-6}"
 EXPECTED_DESK_UI_TESTS="${EXPECTED_DESK_UI_TESTS:-43}"
 # Includes 3 Windows-only tests, skipped (and counted) on macOS.
@@ -209,10 +209,11 @@ PHASE=test
   MINER_RESULT=$(bundle_result MinerStatusCoreTests "$EXPECTED_MINER_TESTS")
   DESK_RESULT=$(bundle_result DeskRemoteCoreTests "$EXPECTED_DESK_TESTS")
   THERMO_RESULT=$(bundle_result ThermoCoreTests "$EXPECTED_THERMO_TESTS")
+  WATCH_RESULT=$(bundle_result WatchLinkCoreTests 9)
   TOOLBOX_UI_RESULT=$(bundle_result ToolboxUITests "$EXPECTED_TOOLBOX_UI_TESTS")
   ALBUM_UI_RESULT=$(bundle_result LightboxUITests "$EXPECTED_ALBUM_UI_TESTS")
   DESK_UI_RESULT=$(bundle_result DeskRemoteUITests "$EXPECTED_DESK_UI_TESTS")
-  if [[ -z "$ALBUM_RESULT" || -z "$MINER_RESULT" || -z "$DESK_RESULT" || -z "$THERMO_RESULT" || -z "$TOOLBOX_UI_RESULT" || -z "$ALBUM_UI_RESULT" || -z "$DESK_UI_RESULT" ]]; then
+  if [[ -z "$ALBUM_RESULT" || -z "$MINER_RESULT" || -z "$DESK_RESULT" || -z "$THERMO_RESULT" || -z "$WATCH_RESULT" || -z "$TOOLBOX_UI_RESULT" || -z "$ALBUM_UI_RESULT" || -z "$DESK_UI_RESULT" ]]; then
     echo "Expected ${EXPECTED_ALBUM_TESTS} album, ${EXPECTED_MINER_TESTS} miner, ${EXPECTED_DESK_TESTS} desk remote, ${EXPECTED_THERMO_TESTS} thermometer, ${EXPECTED_TOOLBOX_UI_TESTS} toolbox UI, ${EXPECTED_ALBUM_UI_TESTS} album UI and ${EXPECTED_DESK_UI_TESTS} desk remote UI tests with 0 failures; see build/test-summary.txt."
     exit 1
   fi
@@ -223,6 +224,7 @@ PHASE=test
     echo "::notice title=XCTest desk remote unit::${DESK_RESULT}"
     echo "::notice title=Thermometer gateway unittest::${THERMO_GATEWAY_RESULT} OK"
     echo "::notice title=XCTest thermometer unit::${THERMO_RESULT}"
+    echo "::notice title=XCTest watch link unit::${WATCH_RESULT}"
     echo "::notice title=XCTest toolbox UI::${TOOLBOX_UI_RESULT}"
     echo "::notice title=XCTest album UI::${ALBUM_UI_RESULT}"
     echo "::notice title=XCTest desk remote UI::${DESK_UI_RESULT}"
@@ -274,10 +276,19 @@ if /usr/libexec/PlistBuddy -c 'Print :NSAppTransportSecurity:NSAllowsArbitraryLo
   echo 'NSAllowsArbitraryLoads must not be set'
   exit 1
 fi
-if /usr/libexec/PlistBuddy -c 'Print :UIBackgroundModes' "$PLIST" >/dev/null 2>&1; then
-  echo 'UIBackgroundModes must not be set: the tools read in the foreground only'
-  exit 1
-fi
+python3 - "$APP" <<'PY'
+from pathlib import Path
+import plistlib, sys
+app = Path(sys.argv[1])
+info = plistlib.loads((app / "Info.plist").read_bytes())
+assert sorted(info["UIBackgroundModes"]) == ["bluetooth-peripheral", "location"]
+for key in ("NSBluetoothAlwaysUsageDescription", "NSCalendarsFullAccessUsageDescription",
+            "NSLocationWhenInUseUsageDescription", "NSMotionUsageDescription"):
+    assert info[key], key
+for resource in ("GoogleMaps.bundle", "GoogleNavigation.bundle"):
+    assert any(app.rglob(resource)), resource
+assert (app / "Frameworks/WatchLinkCore.framework/WatchLinkCore").is_file()
+PY
 # SideStore uses CFBundleDisplayName as the Apple App ID name, which must be ASCII; the Chinese
 # home-screen name comes from zh-Hant.lproj/InfoPlist.strings.
 DISPLAY_NAME=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$PLIST")
