@@ -120,8 +120,17 @@ class LinkManager(private val ctx: Context, private val listener: LinkListener) 
             setState(LinkState.IDLE, "藍牙未開啟")
             return
         }
+        // 系統裡已經有配對好的 iPhone 時不必廣播，直接連過去
+        val known = bondedAddress != null ||
+            a.bondedDevices?.any { (it.name ?: "").contains("iPhone", ignoreCase = true) } == true
+        if (known) {
+            reconnect(resetBackoff = true)
+            return
+        }
         closeGatt()
         main.removeCallbacks(reconnectTask)
+        stopAdvertising()
+        runCatching { a.bluetoothLeAdvertiser?.stopAdvertising(advertiseCallback) }
         if (server == null) server = btManager.openGattServer(ctx, serverCallback)
         val advertiser = a.bluetoothLeAdvertiser
         if (advertiser == null) {
@@ -203,7 +212,14 @@ class LinkManager(private val ctx: Context, private val listener: LinkListener) 
 
     private fun connectBonded() {
         val a = adapter
-        val address = bondedAddress
+        var address = bondedAddress
+        if (address == null && a != null && a.isEnabled) {
+            // 手錶若已在系統藍牙設定與 iPhone 配對過，直接沿用那個綁定
+            address = a.bondedDevices
+                ?.firstOrNull { (it.name ?: "").contains("iPhone", ignoreCase = true) }
+                ?.address
+            if (address != null) prefs.edit().putString(KEY_ADDRESS, address).apply()
+        }
         if (a == null || !a.isEnabled) {
             setState(LinkState.WAITING, "藍牙未開啟")
             return
@@ -346,7 +362,9 @@ class LinkManager(private val ctx: Context, private val listener: LinkListener) 
         val g = gatt ?: return
         discoverRetries = 0
         setState(LinkState.DISCOVERING, "探索服務")
-        if (!g.requestMtu(REQUESTED_MTU)) g.discoverServices()
+        // iPhone 會自己發起 MTU 協商；由手錶要求時連線會逾時，所以直接探索服務
+        g.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
+        if (!g.discoverServices()) scheduleReconnect()
     }
 
     private val gattCallback = object : BluetoothGattCallback() {
