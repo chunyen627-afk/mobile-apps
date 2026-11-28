@@ -32,6 +32,8 @@
             </intent-filter>
         </activity>
 
+        <activity android:name=".AppsActivity" android:exported="false" />
+
         <service
             android:name=".BridgeService"
             android:exported="false"

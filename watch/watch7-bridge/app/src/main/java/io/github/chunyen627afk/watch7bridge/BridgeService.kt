@@ -25,6 +25,10 @@ class BridgeService : Service(), LinkListener {
     lateinit var link: LinkManager
         private set
     private lateinit var nm: NotificationManager
+    private lateinit var rules: AppRules
+    private lateinit var media: MediaBridge
+
+    private val navUids = HashSet<Long>()
 
     var stateText = "啟動中"
         private set
@@ -48,7 +52,9 @@ class BridgeService : Service(), LinkListener {
             linkNotification("啟動中"),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
         )
+        rules = AppRules(this)
         link = LinkManager(this, this)
+        media = MediaBridge(this) { link.mediaCommand(it) }
         instance = this
         link.start()
     }
@@ -66,6 +72,7 @@ class BridgeService : Service(), LinkListener {
 
     override fun onDestroy() {
         link.stop()
+        media.release()
         instance = null
         super.onDestroy()
     }
@@ -82,20 +89,29 @@ class BridgeService : Service(), LinkListener {
         // 斷線後 iPhone 會在重連時重送仍存在的通知，舊的先清掉
         nm.activeNotifications.filter { it.tag == TAG_ANCS }.forEach { nm.cancel(TAG_ANCS, it.id) }
         battery = -1
+        trackTitle = ""
+        trackArtist = ""
+        playing = false
+        media.clear()
         onChanged?.invoke()
     }
 
     override fun onNotificationRemoved(uid: Long) {
         nm.cancel(TAG_ANCS, uid.toInt())
+        if (navUids.remove(uid) && navUids.isEmpty()) nm.cancel(TAG_NAV, ID_NAV)
     }
 
     override fun onNotification(event: AncsEvent, attrs: AncsAttributes) {
         val isCall = event.category == Ancs.CATEGORY_INCOMING_CALL
         // 連線時 iPhone 會把通知中心裡的舊通知全部重送一次；那些不顯示，只顯示連線後新來的
+        rules.remember(attrs.appId)
         if (event.preExisting && !isCall) return
+        if (!rules.isAllowed(attrs.appId)) return
+        val isNav = attrs.appId in NAV_APPS
         val quiet = event.silent || event.eventId == Ancs.EVENT_MODIFIED
         val channel = when {
             isCall -> CH_CALL
+            isNav -> CH_NAV
             quiet -> CH_QUIET
             else -> CH_MESSAGE
         }
@@ -123,6 +139,14 @@ class BridgeService : Service(), LinkListener {
             // 在手錶上滑掉通知時，同步清掉 iPhone 上的；來電不這樣做，以免誤掛
             if (!isCall) b.setDeleteIntent(actionIntent(event.uid, false))
         }
+        if (isNav) {
+            // 導航提示只留最新一則，並讓螢幕亮起
+            b.setGroup(null).setCategory(NotificationCompat.CATEGORY_NAVIGATION)
+                .setPriority(NotificationCompat.PRIORITY_MAX).setOnlyAlertOnce(false)
+            nm.notify(TAG_NAV, ID_NAV, b.build())
+            navUids.add(event.uid)
+            return
+        }
         nm.notify(TAG_ANCS, event.uid.toInt(), b.build())
     }
 
@@ -137,8 +161,13 @@ class BridgeService : Service(), LinkListener {
                 Ams.TRACK_TITLE -> trackTitle = update.value
                 Ams.TRACK_ARTIST -> trackArtist = update.value
             }
-            Ams.ENTITY_PLAYER -> if (update.attribute == Ams.PLAYER_PLAYBACK_INFO) playing = Ams.isPlaying(update.value)
+            Ams.ENTITY_PLAYER -> when (update.attribute) {
+                Ams.PLAYER_PLAYBACK_INFO -> playing = Ams.isPlaying(update.value)
+                Ams.PLAYER_VOLUME -> update.value.toFloatOrNull()?.let { media.setVolume(it) }
+            }
         }
+        media.setTrack(trackTitle, trackArtist)
+        media.setPlaying(playing)
         onChanged?.invoke()
     }
 
@@ -173,6 +202,7 @@ class BridgeService : Service(), LinkListener {
         ch(CH_MESSAGE, "iPhone 通知", NotificationManager.IMPORTANCE_DEFAULT)
         ch(CH_QUIET, "iPhone 通知（靜音）", NotificationManager.IMPORTANCE_LOW)
         ch(CH_CALL, "來電", NotificationManager.IMPORTANCE_HIGH)
+        ch(CH_NAV, "導航提示", NotificationManager.IMPORTANCE_HIGH)
     }
 
     companion object {
@@ -187,6 +217,10 @@ class BridgeService : Service(), LinkListener {
         private const val CH_MESSAGE = "message"
         private const val CH_QUIET = "quiet"
         private const val CH_CALL = "call"
+        private const val CH_NAV = "nav"
+        private const val TAG_NAV = "nav"
+        private const val ID_NAV = 3
+        private val NAV_APPS = setOf("com.google.Maps", "com.apple.Maps")
 
         @Volatile
         var instance: BridgeService? = null
@@ -217,6 +251,7 @@ class BridgeService : Service(), LinkListener {
             "com.apple.mobilemail" -> "郵件"
             "com.apple.mobilecal" -> "行事曆"
             "com.google.Maps" -> "Google 地圖"
+            "com.apple.Maps" -> "地圖"
             "com.google.Gmail" -> "Gmail"
             "net.whatsapp.WhatsApp" -> "WhatsApp"
             "com.facebook.Messenger" -> "Messenger"

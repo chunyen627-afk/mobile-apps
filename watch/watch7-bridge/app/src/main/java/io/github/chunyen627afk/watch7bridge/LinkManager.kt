@@ -452,7 +452,7 @@ class LinkManager(private val ctx: Context, private val listener: LinkListener) 
             ams.getCharacteristic(AMS_ENTITY_UPDATE)?.let { eu ->
                 enqueue(Op.Notify(eu))
                 enqueue(Op.Write(eu, Ams.buildSubscribe(Ams.ENTITY_TRACK, Ams.TRACK_ARTIST, Ams.TRACK_TITLE)))
-                enqueue(Op.Write(eu, Ams.buildSubscribe(Ams.ENTITY_PLAYER, Ams.PLAYER_PLAYBACK_INFO)))
+                enqueue(Op.Write(eu, Ams.buildSubscribe(Ams.ENTITY_PLAYER, Ams.PLAYER_PLAYBACK_INFO, Ams.PLAYER_VOLUME)))
             }
         }
         directAttempts = 0

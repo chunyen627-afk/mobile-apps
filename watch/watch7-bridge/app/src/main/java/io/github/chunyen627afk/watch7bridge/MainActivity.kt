@@ -1,6 +1,7 @@
 package io.github.chunyen627afk.watch7bridge
 
 import android.app.Activity
+import android.content.Intent
 import android.os.Bundle
 import android.view.Gravity
 import android.widget.Button
@@ -37,6 +38,7 @@ class MainActivity : Activity() {
         button(row, "⏭") { svc()?.link?.mediaCommand(Ams.CMD_NEXT) }
         col.addView(row)
 
+        button(col, "通知開關") { startActivity(Intent(this, AppsActivity::class.java)) }
         button(col, "重新連線") { svc()?.link?.kick() }
         button(col, "配對 iPhone") { svc()?.link?.startPairing() }
         button(col, "清除配對") { svc()?.link?.forget() }

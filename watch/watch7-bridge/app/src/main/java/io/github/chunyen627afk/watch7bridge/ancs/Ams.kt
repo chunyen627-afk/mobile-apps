@@ -14,6 +14,7 @@ object Ams {
     const val ENTITY_TRACK = 2
 
     const val PLAYER_PLAYBACK_INFO = 1
+    const val PLAYER_VOLUME = 2
     const val TRACK_ARTIST = 0
     const val TRACK_TITLE = 2
 
