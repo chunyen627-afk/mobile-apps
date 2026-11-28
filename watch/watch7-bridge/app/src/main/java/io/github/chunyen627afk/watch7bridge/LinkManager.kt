@@ -463,6 +463,7 @@ class LinkManager(private val ctx: Context, private val listener: LinkListener) 
         when (uuid) {
             ANCS_NOTIFICATION_SOURCE -> {
                 val e = Ancs.parseEvent(value) ?: return
+                Log.i(TAG, "ancs event=${e.eventId} cat=${e.category} flags=${e.flags} uid=${e.uid}")
                 if (e.eventId == Ancs.EVENT_REMOVED) {
                     pendingEvents.remove(e.uid)
                     listener.onNotificationRemoved(e.uid)
@@ -475,6 +476,8 @@ class LinkManager(private val ctx: Context, private val listener: LinkListener) 
             ANCS_DATA_SOURCE -> {
                 var attrs = assembler.feed(value)
                 while (attrs != null) {
+                    // 日誌只記來源 App 與長度，不記內文
+                    Log.i(TAG, "ancs attrs uid=${attrs.uid} app=${attrs.appId} titleLen=${attrs.title.length} msgLen=${attrs.message.length}")
                     pendingEvents.remove(attrs.uid)?.let { listener.onNotification(it, attrs!!) }
                     attrs = assembler.feed(ByteArray(0))
                 }

@@ -91,7 +91,9 @@ class BridgeService : Service(), LinkListener {
 
     override fun onNotification(event: AncsEvent, attrs: AncsAttributes) {
         val isCall = event.category == Ancs.CATEGORY_INCOMING_CALL
-        val quiet = event.silent || event.preExisting || event.eventId == Ancs.EVENT_MODIFIED
+        // 連線時 iPhone 會把通知中心裡的舊通知全部重送一次；那些不顯示，只顯示連線後新來的
+        if (event.preExisting && !isCall) return
+        val quiet = event.silent || event.eventId == Ancs.EVENT_MODIFIED
         val channel = when {
             isCall -> CH_CALL
             quiet -> CH_QUIET
