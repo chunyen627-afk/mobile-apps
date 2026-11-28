@@ -10,8 +10,15 @@ settings:
     SWIFT_VERSION: "5.0"
     SWIFT_STRICT_CONCURRENCY: minimal
     TARGETED_DEVICE_FAMILY: "1"
-    MARKETING_VERSION: "0.1.0"
-    CURRENT_PROJECT_VERSION: "1"
+    MARKETING_VERSION: "0.2.0"
+    CURRENT_PROJECT_VERSION: "2"
+packages:
+  GoogleNavigation:
+    url: https://github.com/googlemaps/ios-navigation-sdk.git
+    exactVersion: 10.2.0
+  GoogleMaps:
+    url: https://github.com/googlemaps/ios-maps-sdk.git
+    exactVersion: 10.2.0
 targets:
   WatchLink:
     type: application
@@ -21,6 +28,8 @@ targets:
         excludes: [Info.plist]
     dependencies:
       - target: WatchLinkCore
+      - package: GoogleNavigation
+      - package: GoogleMaps
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: org.personal.watchlink.app

@@ -74,6 +74,7 @@ struct ContentView: View {
                 }
             }
             .navigationTitle("手錶連結")
+            .toolbar { NavigationLink("導航") { TripView(trip: model.trip, service: service) } }
             .onChange(of: model.calendarEnabled) { _, _ in
                 if !model.isDemo { model.refreshEvents() }
             }

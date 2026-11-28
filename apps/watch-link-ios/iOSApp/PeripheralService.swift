@@ -23,6 +23,15 @@ final class PeripheralService: NSObject, ObservableObject, CBPeripheralManagerDe
     private var reassembler = Reassembler()
     private var pending: [Data] = []
     private var chunkSize = 20
+    private var latestTrip: Data?
+    private var queuedTrip: Data?
+
+    func publishTrip(_ data: Data) {
+        latestTrip = data
+        guard subscribers > 0 else { return }
+        queuedTrip = data
+        flush()
+    }
 
     func start() {
         guard manager == nil else { return }
@@ -79,6 +88,9 @@ final class PeripheralService: NSObject, ObservableObject, CBPeripheralManagerDe
             stateText = "服務發佈失敗：\(error.localizedDescription)"
             return
         }
+        pending.removeAll()
+        queuedTrip = nil
+        subscribers = 0
         stateText = "等待手錶連線"
         // 保持廣播：App 被系統終止後，這是能再被喚醒的條件之一。
         if !peripheral.isAdvertising {
@@ -90,11 +102,18 @@ final class PeripheralService: NSObject, ObservableObject, CBPeripheralManagerDe
         chunkSize = max(20, central.maximumUpdateValueLength)
         subscribers += 1
         stateText = "手錶已連線"
+        queuedTrip = latestTrip
+        flush()
     }
 
     func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral, didUnsubscribeFrom characteristic: CBCharacteristic) {
         subscribers = max(0, subscribers - 1)
-        if subscribers == 0 { stateText = "等待手錶連線" }
+        if subscribers == 0 {
+            pending.removeAll()
+            queuedTrip = nil
+            reassembler = Reassembler()
+            stateText = "等待手錶連線"
+        }
     }
 
     func peripheralManager(_ peripheral: CBPeripheralManager, didReceiveWrite requests: [CBATTRequest]) {
@@ -120,6 +139,7 @@ final class PeripheralService: NSObject, ObservableObject, CBPeripheralManagerDe
               request.t == "sync", let provider = snapshotProvider else { return }
         Task { @MainActor in
             let snapshot = await provider()
+            guard self.subscribers > 0 else { return }
             self.pending.append(contentsOf: Framing.split(snapshot.encoded(), maxChunk: self.chunkSize))
             self.flush()
             self.lastSync = Date()
@@ -129,7 +149,12 @@ final class PeripheralService: NSObject, ObservableObject, CBPeripheralManagerDe
 
     private func flush() {
         guard let manager, let tx else { return }
-        while let next = pending.first {
+        while true {
+            if pending.isEmpty, let data = queuedTrip {
+                queuedTrip = nil
+                pending = Framing.split(data, maxChunk: chunkSize)
+            }
+            guard let next = pending.first else { return }
             if manager.updateValue(next, for: tx, onSubscribedCentrals: nil) {
                 pending.removeFirst()
             } else {

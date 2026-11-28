@@ -28,6 +28,7 @@ struct Place: Identifiable, Equatable {
 @MainActor
 final class AppModel: ObservableObject {
     let service = PeripheralService()
+    lazy var trip = TripController(service: service)
     private let store = EKEventStore()
     private let defaults = UserDefaults.standard
 

@@ -31,17 +31,25 @@ jobs:
         env:
           RUN_SIM_SMOKE: "1"
         run: bash scripts/build.sh
-      # The IPA stays on the runner: only its size and SHA256 are recorded.
-      - name: Record IPA size and SHA256
+      - name: Save unsigned iPhone installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: WatchLink-unsigned-ipa
+          path: |
+            apps/watch-link-ios/build/WatchLink-unsigned.ipa
+            apps/watch-link-ios/build/WatchLink-unsigned.ipa.sha256
+          if-no-files-found: error
+          retention-days: 7
+      - name: Record installer size and SHA256
         working-directory: ${{ env.APP_DIR }}/build
         run: |
           size=$(stat -f %z WatchLink-unsigned.ipa)
           sha=$(cut -d' ' -f1 WatchLink-unsigned.ipa.sha256)
           echo "IPA size: $size bytes"
           echo "IPA SHA256: $sha"
-          echo "::notice title=IPA (not uploaded)::size ${size} bytes, SHA256 ${sha}"
+          echo "::notice title=Unsigned IPA::size ${size} bytes, SHA256 ${sha}"
           {
-            echo "### WatchLink-unsigned.ipa (not uploaded)"
+            echo "### WatchLink-unsigned.ipa"
             echo "- size: $size bytes"
             echo "- SHA256: \`$sha\`"
             grep -E "Executed [0-9]+ tests?, with [0-9]+ failures" test-summary.txt | tail -1 | sed 's/^/- XCTest: /'
