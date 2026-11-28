@@ -25,7 +25,9 @@ final class WatchLinkUITests: XCTestCase {
         let app = launch()
         XCTAssertTrue(app.navigationBars["手錶連結"].waitForExistence(timeout: 15))
         shot("01-main")
-        XCTAssertTrue(app.staticTexts["陣雨 22°C"].exists, "畫面文字：\(visibleTexts(app))")
+        // LabeledContent 會把標籤與內容合併成「現在、陣雨 22°C」，所以用包含比對
+        let weather = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "陣雨 22°C")).firstMatch
+        XCTAssertTrue(weather.exists, "畫面文字：\(visibleTexts(app))")
         XCTAssertTrue(app.staticTexts["示範行程：週會"].exists, "畫面文字：\(visibleTexts(app))")
     }
 
