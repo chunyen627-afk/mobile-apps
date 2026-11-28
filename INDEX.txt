@@ -1,0 +1,2 @@
+01-main.jpg	WatchLinkUITests/testMainScreenShowsDemoWeatherAndEvents()
+02-bottom.jpg	WatchLinkUITests/testScrollToHelpSection()
