@@ -7,7 +7,7 @@
 | 項目 | 狀態 |
 | --- | --- |
 | 實作 | 第一版完成 |
-| 編譯與模擬器測試 | 見本分支最新的 [Build Watch Link iOS](https://github.com/chunyen627-afk/mobile-apps/actions/workflows/watch-link-ios.yml) 執行結果；尚未有通過紀錄時視為未驗證 |
+| 編譯與模擬器測試 | **通過**。[run 46132486827](https://github.com/chunyen627-afk/mobile-apps/actions/runs/46132486827)：9 項單元測試、2 項模擬器 UI 測試皆 0 失敗，Xcode 16.4、iPhone 16 Pro 模擬器；截圖已人工檢視。未簽署 IPA 72,023 bytes（未上傳） |
 | 實機測試 | **未進行**。藍牙服務、手錶端探索、背景喚醒都還沒在 iPhone 上跑過 |
 
 模擬器沒有藍牙，所以模擬器測試只涵蓋資料解析與畫面，測不到與手錶的連線。
