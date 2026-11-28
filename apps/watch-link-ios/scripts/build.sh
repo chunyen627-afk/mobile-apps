@@ -5,7 +5,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 EXPECTED_TESTS="${EXPECTED_TESTS:-9}"
-EXPECTED_UI_TESTS="${EXPECTED_UI_TESTS:-2}"
+EXPECTED_UI_TESTS="${EXPECTED_UI_TESTS:-3}"
 BUNDLE_ID=org.personal.watchlink.app
 mkdir -p build
 
@@ -148,8 +148,9 @@ if /usr/libexec/PlistBuddy -c 'Print :NSAppTransportSecurity:NSAllowsArbitraryLo
   echo 'NSAllowsArbitraryLoads must not be set'
   exit 1
 fi
-# The watch wakes the app over Bluetooth, so exactly this background mode must be present.
+# The watch wakes the app over Bluetooth; active guidance also uses background location.
 test "$(/usr/libexec/PlistBuddy -c 'Print :UIBackgroundModes:0' "$PLIST")" = bluetooth-peripheral
+test "$(/usr/libexec/PlistBuddy -c 'Print :UIBackgroundModes:1' "$PLIST")" = location
 # SideStore uses CFBundleDisplayName as the Apple App ID name, which must be ASCII; the Chinese
 # home-screen name comes from zh-Hant.lproj/InfoPlist.strings.
 DISPLAY_NAME=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$PLIST")

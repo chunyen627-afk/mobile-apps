@@ -31,6 +31,15 @@ final class WatchLinkUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["示範行程：週會"].exists, "畫面文字：\(visibleTexts(app))")
     }
 
+    func testNavigationCanBeOpenedWithoutAKey() {
+        let app = launch()
+        let navigation = app.buttons["導航"]
+        XCTAssertTrue(navigation.waitForExistence(timeout: 10))
+        navigation.tap()
+        XCTAssertTrue(app.secureTextFields.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["儲存金鑰"].isEnabled)
+    }
+
     func testScrollToHelpSection() {
         let app = launch()
         XCTAssertTrue(app.navigationBars["手錶連結"].waitForExistence(timeout: 15))

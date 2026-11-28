@@ -6,7 +6,7 @@
 
 在右上角選「導航」。首次使用時輸入自己的 Google Maps Platform 金鑰，開啟 Maps SDK for iOS 和 Navigation SDK for iOS，並依實際簽署後的 Bundle ID 限制金鑰。導航服務需要啟用計費。金鑰只存在本機鑰匙圈。允許定位並接受 Google 條款後，長按地圖指定目的地，選步行或開車，再按「開始導航」。每個新步驟或重新規劃事件都透過現有加密藍牙服務送到手錶，距離為沿路到下一步的公尺數。手動結束或抵達會清除手錶導航。需要支援導航的新版 Watch7 橋接。純通知鏡射無須此 App。
 
-此版已加入原始碼；真正的定位、動態改道與跨裝置連動須用使用者自己的金鑰實機驗證。CI 通過後可以從該次建置的 `WatchLink-unsigned-ipa` artifact 下載未簽署安裝檔，自行簽署後安裝。不要提交金鑰。
+[首個導航建置](https://github.com/chunyen627-afk/mobile-apps/actions/runs/46142606573) 已通過 Xcode 16.4 編譯、9 項單元測試、2 項模擬器 UI 測試、啟動檢查與實體裝置 IPA 封裝。真正的定位、動態改道與跨裝置連動須用使用者自己的金鑰實機驗證。CI 通過後可以從該次建置的 `WatchLink-unsigned-ipa` artifact 下載未簽署安裝檔，自行簽署後安裝。不要提交金鑰。
 
 ## 先前版本狀態（0.1.0）
 
@@ -41,7 +41,7 @@
 
 ## 建置
 
-沿用倉庫的雲端流程：推到 `claude/watch7-bridge` 分支且改到 `apps/watch-link-ios/**` 時自動執行。步驟為產生專案、在 iPhone 模擬器跑 9 項單元測試與 2 項 UI 測試、啟動檢查、封裝未簽署 IPA。IPA 預設不上傳，只記錄大小與 SHA256。
+沿用倉庫的雲端流程：推到 `claude/watch7-bridge` 分支且改到 `apps/watch-link-ios/**` 時自動執行。步驟為產生專案、在 iPhone 模擬器跑 9 項單元測試與 3 項 UI 測試、啟動檢查、封裝未簽署 IPA。通過後儲存可下載的 IPA 與 SHA256，保留 7 天。
 
 本機（需要 Mac、Xcode 與 XcodeGen）：
 
